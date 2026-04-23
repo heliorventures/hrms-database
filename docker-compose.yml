@@ -1,0 +1,40 @@
+# Local PostgreSQL (and optional pgAdmin) for Liquibase migrations and app development.
+# Run from this directory: `docker compose up -d postgres`
+# Compose project name is fixed so the default network stays `kabipay_default`
+# (scripts and Liquibase examples attach to that network).
+
+name: kabipay
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kabipay_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kabipay_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-kabipay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - kabipay_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kabipay} -d ${POSTGRES_DB:-kabipay_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: kabipay_pgadmin
+    profiles: ["tools"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@localhost.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-changeme}
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  kabipay_pgdata:

@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0008 — DOCUMENT SYSTEM. file_storage_id & workflow_instance_id: UUID only until domains 0029/0025 add FKs. -->
+
+    <changeSet id="0008-001-create-document-type" author="kabipay-dev">
+        <createTable tableName="document_type" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="category" type="VARCHAR(100)"/>
+            <column name="is_required" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="expiry_alert_days" type="INT"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="document_type" schemaName="${schema}" indexName="idx_document_type_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="document_type" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_document_type_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_document_type_updated_at BEFORE UPDATE ON "${schema}".document_type FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_document_type_updated_at ON "${schema}".document_type;</sql>
+            <dropTable tableName="document_type" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0008-002-create-employee-document" author="kabipay-dev">
+        <createTable tableName="employee_document" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="document_type_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="expiry_date" type="DATE"/>
+            <column name="workflow_instance_id" type="UUID"/>
+            <column name="uploaded_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="verified_by" type="UUID"/>
+            <column name="verified_at" type="TIMESTAMPTZ"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="employee_document" schemaName="${schema}" indexName="idx_employee_document_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="employee_document" schemaName="${schema}" indexName="idx_employee_document_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_document" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_document_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_document" baseColumnNames="document_type_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="document_type" referencedColumnNames="id"
+                                 constraintName="fk_employee_document_type" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_document" baseColumnNames="verified_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_document_verified_by" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_document" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_document_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_employee_document_updated_at BEFORE UPDATE ON "${schema}".employee_document FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_document_updated_at ON "${schema}".employee_document;</sql>
+            <dropTable tableName="employee_document" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0008-003-create-document-field-definition" author="kabipay-dev">
+        <createTable tableName="document_field_definition" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="document_type_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="field_name" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="field_type" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="is_required" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="display_order" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="document_field_definition" schemaName="${schema}" indexName="idx_doc_field_def_type">
+            <column name="document_type_id"/>
+        </createIndex>
+        <createIndex tableName="document_field_definition" schemaName="${schema}" indexName="idx_doc_field_def_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="document_field_definition" baseColumnNames="document_type_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="document_type" referencedColumnNames="id"
+                                 constraintName="fk_doc_field_def_document_type" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_document_field_definition_updated_at BEFORE UPDATE ON "${schema}".document_field_definition FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_document_field_definition_updated_at ON "${schema}".document_field_definition;</sql>
+            <dropTable tableName="document_field_definition" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0008-004-create-employee-document-field" author="kabipay-dev">
+        <createTable tableName="employee_document_field" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="document_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="field_definition_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="field_value" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="employee_document_field" schemaName="${schema}" indexName="idx_emp_doc_field_document">
+            <column name="document_id"/>
+        </createIndex>
+        <createIndex tableName="employee_document_field" schemaName="${schema}" indexName="idx_emp_doc_field_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_document_field" baseColumnNames="document_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee_document" referencedColumnNames="id"
+                                 constraintName="fk_emp_doc_field_document" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_document_field" baseColumnNames="field_definition_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="document_field_definition" referencedColumnNames="id"
+                                 constraintName="fk_emp_doc_field_definition" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_employee_document_field_updated_at BEFORE UPDATE ON "${schema}".employee_document_field FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_document_field_updated_at ON "${schema}".employee_document_field;</sql>
+            <dropTable tableName="employee_document_field" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

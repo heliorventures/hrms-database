@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      OPS PLANE — global integration connector catalog (ERD §26).
+      Referenced from tenant.tenant_integration.integration_connector_id (cross-schema FK).
+    -->
+
+    <changeSet id="ops-0005-001-create-integration-connector" author="kabipay-dev">
+        <createTable tableName="integration_connector" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="code" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="category" type="VARCHAR(100)"/>
+            <column name="auth_type" type="VARCHAR(50)"/>
+            <column name="config_schema_json" type="TEXT"/>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="integration_connector" schemaName="kabipay_ops"
+                             columnNames="code"
+                             constraintName="uq_integration_connector_code"/>
+        <sql>CREATE TRIGGER trg_integration_connector_updated_at BEFORE UPDATE ON kabipay_ops.integration_connector FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_integration_connector_updated_at ON kabipay_ops.integration_connector;</sql>
+            <dropTable tableName="integration_connector" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

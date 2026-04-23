@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0024 — WORKFORCE ANALYTICS (ERD §24). JSON columns as JSONB. -->
+
+    <changeSet id="0024-001-create-report-definition" author="kabipay-dev">
+        <createTable tableName="report_definition" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="entity_type" type="VARCHAR(100)"/>
+            <column name="filters_json" type="JSONB"/>
+            <column name="columns_json" type="JSONB"/>
+            <column name="groupby_json" type="JSONB"/>
+            <column name="chart_type" type="VARCHAR(50)"/>
+            <column name="is_public" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="report_definition" schemaName="${schema}" indexName="idx_report_definition_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="report_definition" baseColumnNames="created_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_report_definition_created_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_report_definition_updated_at BEFORE UPDATE ON "${schema}".report_definition FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_report_definition_updated_at ON "${schema}".report_definition;</sql>
+            <dropTable tableName="report_definition" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0024-002-create-report-schedule" author="kabipay-dev">
+        <createTable tableName="report_schedule" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="report_definition_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="frequency" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="recipients_json" type="JSONB"/>
+            <column name="delivery_format" type="VARCHAR(50)"/>
+            <column name="last_sent_at" type="TIMESTAMPTZ"/>
+            <column name="next_run_at" type="TIMESTAMPTZ"/>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="report_schedule" schemaName="${schema}" indexName="idx_report_schedule_definition">
+            <column name="report_definition_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="report_schedule" baseColumnNames="report_definition_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="report_definition" referencedColumnNames="id"
+                                 constraintName="fk_report_schedule_definition" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_report_schedule_updated_at BEFORE UPDATE ON "${schema}".report_schedule FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_report_schedule_updated_at ON "${schema}".report_schedule;</sql>
+            <dropTable tableName="report_schedule" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0024-003-create-dashboard" author="kabipay-dev">
+        <createTable tableName="dashboard" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="is_default" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="dashboard" schemaName="${schema}" indexName="idx_dashboard_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="dashboard" baseColumnNames="created_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_dashboard_created_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_dashboard_updated_at BEFORE UPDATE ON "${schema}".dashboard FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_dashboard_updated_at ON "${schema}".dashboard;</sql>
+            <dropTable tableName="dashboard" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0024-004-create-dashboard-widget" author="kabipay-dev">
+        <createTable tableName="dashboard_widget" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="dashboard_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="report_definition_id" type="UUID"/>
+            <column name="widget_type" type="VARCHAR(50)"/>
+            <column name="title" type="VARCHAR(255)"/>
+            <column name="grid_col" type="INT"/>
+            <column name="grid_row" type="INT"/>
+            <column name="col_span" type="INT"/>
+            <column name="row_span" type="INT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="dashboard_widget" schemaName="${schema}" indexName="idx_dashboard_widget_dashboard">
+            <column name="dashboard_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="dashboard_widget" baseColumnNames="dashboard_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="dashboard" referencedColumnNames="id"
+                                 constraintName="fk_dashboard_widget_dashboard" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="dashboard_widget" baseColumnNames="report_definition_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="report_definition" referencedColumnNames="id"
+                                 constraintName="fk_dashboard_widget_report" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_dashboard_widget_updated_at BEFORE UPDATE ON "${schema}".dashboard_widget FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_dashboard_widget_updated_at ON "${schema}".dashboard_widget;</sql>
+            <dropTable tableName="dashboard_widget" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0024-005-create-workforce-snapshot" author="kabipay-dev">
+        <createTable tableName="workforce_snapshot" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="snapshot_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="total_headcount" type="INT"/>
+            <column name="active_employees" type="INT"/>
+            <column name="new_joiners" type="INT"/>
+            <column name="separations" type="INT"/>
+            <column name="open_positions" type="INT"/>
+            <column name="average_tenure_months" type="NUMERIC(15,4)"/>
+            <column name="attrition_rate" type="NUMERIC(15,4)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="workforce_snapshot" schemaName="${schema}"
+                             columnNames="tenant_id,snapshot_date"
+                             constraintName="uq_workforce_snapshot_tenant_date"/>
+        <sql>CREATE TRIGGER trg_workforce_snapshot_updated_at BEFORE UPDATE ON "${schema}".workforce_snapshot FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_workforce_snapshot_updated_at ON "${schema}".workforce_snapshot;</sql>
+            <dropTable tableName="workforce_snapshot" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

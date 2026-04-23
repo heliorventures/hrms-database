@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      MASTER CHANGELOG - PER-TENANT CLIENT PLANE
+      Run ONCE PER TENANT when the tenant is provisioned, against the tenant's schema.
+
+      Usage (per tenant): liquibase update with liquibase-tenant.properties,
+      setting schema to tenant_[short id] and the per-tenant DATABASECHANGELOG table name.
+
+      CRITICAL: schemaName is parameterised via Java system property schema so each tenant migration
+      writes into its own schema. The DATABASECHANGELOG tracking table is
+      created inside the tenant schema automatically.
+    -->
+
+    <!-- 0005 - Auth & RBAC: user, role, permission, sessions -->
+    <include file="migrations/0005_auth_rbac/auth_rbac.xml" relativeToChangelogFile="true"/>
+
+    <include file="migrations/0006_org_hierarchy/org_hierarchy.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0007_employee_core/employee_core.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0008_document_system/document_system.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0009_custom_fields/custom_fields.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0010_time_shift_roster/time_shift_roster.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0011_leave/leave.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0012_payroll/payroll.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0013_tax_statutory/tax_statutory.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0014_benefits/benefits.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0015_expense/expense.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0016_recruitment/recruitment.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0017_onboarding_offboarding/onboarding_offboarding.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0018_performance/performance.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0019_lms/lms.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0020_succession/succession.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0021_compensation/compensation.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0022_assets/assets.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0023_grievance/grievance.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0024_analytics/analytics.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0025_workflow/workflow.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0026_integrations/integrations.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0027_communication_audit/communication_audit.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0028_master_data/master_data.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0029_file_storage/file_storage.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0030_outbox_events/outbox_events.xml" relativeToChangelogFile="true"/>
+
+</databaseChangeLog>

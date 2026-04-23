@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0015 — EXPENSE -->
+
+    <changeSet id="0015-001-create-expense-category" author="kabipay-dev">
+        <createTable tableName="expense_category" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="code" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="max_amount_per_claim" type="NUMERIC(15,4)"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="expense_category" schemaName="${schema}"
+                             columnNames="tenant_id,code"
+                             constraintName="uq_expense_category_tenant_code"/>
+        <createIndex tableName="expense_category" schemaName="${schema}" indexName="idx_expense_category_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_category" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_expense_category_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_expense_category_updated_at BEFORE UPDATE ON "${schema}".expense_category FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_expense_category_updated_at ON "${schema}".expense_category;</sql>
+            <dropTable tableName="expense_category" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0015-002-create-expense-policy" author="kabipay-dev">
+        <createTable tableName="expense_policy" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="expense_category_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="limit_per_day" type="NUMERIC(15,4)"/>
+            <column name="limit_per_month" type="NUMERIC(15,4)"/>
+            <column name="receipt_required" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="approval_required" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="expense_policy" schemaName="${schema}" indexName="idx_expense_policy_category">
+            <column name="expense_category_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_policy" baseColumnNames="expense_category_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="expense_category" referencedColumnNames="id"
+                                 constraintName="fk_expense_policy_category" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_expense_policy_updated_at BEFORE UPDATE ON "${schema}".expense_policy FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_expense_policy_updated_at ON "${schema}".expense_policy;</sql>
+            <dropTable tableName="expense_policy" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0015-003-create-expense" author="kabipay-dev">
+        <createTable tableName="expense" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="expense_category_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="amount" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="currency" type="VARCHAR(10)"><constraints nullable="false"/></column>
+            <column name="expense_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="title" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="rejection_reason" type="VARCHAR(1000)"/>
+            <column name="approved_by" type="UUID"/>
+            <column name="workflow_instance_id" type="UUID"/>
+            <column name="submitted_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="expense" schemaName="${schema}" indexName="idx_expense_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="expense" schemaName="${schema}" indexName="idx_expense_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_expense_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense" baseColumnNames="expense_category_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="expense_category" referencedColumnNames="id"
+                                 constraintName="fk_expense_category" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense" baseColumnNames="approved_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_expense_approved_by" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_expense_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_expense_updated_at BEFORE UPDATE ON "${schema}".expense FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_expense_updated_at ON "${schema}".expense;</sql>
+            <dropTable tableName="expense" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0015-004-create-expense-item" author="kabipay-dev">
+        <createTable tableName="expense_item" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="expense_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="description" type="VARCHAR(500)"/>
+            <column name="amount" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="vendor_name" type="VARCHAR(255)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="expense_item" schemaName="${schema}" indexName="idx_expense_item_expense">
+            <column name="expense_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_item" baseColumnNames="expense_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="expense" referencedColumnNames="id"
+                                 constraintName="fk_expense_item_expense" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_expense_item_updated_at BEFORE UPDATE ON "${schema}".expense_item FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_expense_item_updated_at ON "${schema}".expense_item;</sql>
+            <dropTable tableName="expense_item" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

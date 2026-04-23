@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0007 — EMPLOYEE CORE (CLIENT PLANE). Depends on 0005 (user), 0006 (org). -->
+
+    <changeSet id="0007-001-create-employee" author="kabipay-dev">
+        <comment>Canonical EMPLOYEE.id (Gap A). reporting_manager_id is self-FK.</comment>
+        <createTable tableName="employee" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="user_id" type="UUID"/>
+            <column name="department_id" type="UUID"/>
+            <column name="designation_id" type="UUID"/>
+            <column name="cost_center_id" type="UUID"/>
+            <column name="location_id" type="UUID"/>
+            <column name="reporting_manager_id" type="UUID"/>
+            <column name="employee_code" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="first_name" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="last_name" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="date_of_birth" type="DATE"/>
+            <column name="gender" type="VARCHAR(50)"/>
+            <column name="blood_group" type="VARCHAR(20)"/>
+            <column name="nationality" type="VARCHAR(100)"/>
+            <column name="employment_type" type="VARCHAR(50)"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="date_of_joining" type="DATE"><constraints nullable="false"/></column>
+            <column name="probation_end_date" type="DATE"/>
+            <column name="notice_period_days" type="INT"/>
+            <column name="emergency_contact_name" type="VARCHAR(255)"/>
+            <column name="emergency_contact_phone" type="VARCHAR(50)"/>
+            <column name="emergency_contact_relation" type="VARCHAR(100)"/>
+            <column name="uan_number" type="VARCHAR(50)"/>
+            <column name="esic_number" type="VARCHAR(50)"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="employee" schemaName="${schema}"
+                             columnNames="tenant_id,employee_code"
+                             constraintName="uq_employee_tenant_code"/>
+        <createIndex tableName="employee" schemaName="${schema}" indexName="idx_employee_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="employee" schemaName="${schema}" indexName="idx_employee_user">
+            <column name="user_id"/>
+        </createIndex>
+        <createIndex tableName="employee" schemaName="${schema}" indexName="idx_employee_department">
+            <column name="department_id"/>
+        </createIndex>
+        <createIndex tableName="employee" schemaName="${schema}" indexName="idx_employee_manager">
+            <column name="reporting_manager_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee" baseColumnNames="user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_user" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee" baseColumnNames="department_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id"
+                                 constraintName="fk_employee_department" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee" baseColumnNames="designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_employee_designation" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee" baseColumnNames="cost_center_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="cost_center" referencedColumnNames="id"
+                                 constraintName="fk_employee_cost_center" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee" baseColumnNames="location_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="id"
+                                 constraintName="fk_employee_location" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee" baseColumnNames="reporting_manager_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_reporting_manager" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_employee_updated_at BEFORE UPDATE ON "${schema}".employee FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_updated_at ON "${schema}".employee;</sql>
+            <dropTable tableName="employee" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0007-002-fk-department-head-employee" author="kabipay-dev">
+        <comment>Link department.head_employee_id → employee (deferred from 0006).</comment>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="department" baseColumnNames="head_employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_department_head_employee" onDelete="SET NULL"/>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="department"
+                                      constraintName="fk_department_head_employee"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0007-003-create-employment-history" author="kabipay-dev">
+        <comment>Historical job rows for an employee. Salary NUMERIC(15,4).</comment>
+        <createTable tableName="employment_history" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="department_id" type="UUID"/>
+            <column name="designation_id" type="UUID"/>
+            <column name="cost_center_id" type="UUID"/>
+            <column name="salary" type="NUMERIC(15,4)"/>
+            <column name="effective_from" type="DATE"><constraints nullable="false"/></column>
+            <column name="effective_to" type="DATE"/>
+            <column name="change_reason" type="VARCHAR(500)"/>
+            <column name="changed_by" type="UUID"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="employment_history" schemaName="${schema}" indexName="idx_employment_history_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="employment_history" schemaName="${schema}" indexName="idx_employment_history_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employment_history" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employment_history_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employment_history" baseColumnNames="department_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id"
+                                 constraintName="fk_employment_history_department" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employment_history" baseColumnNames="designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_employment_history_designation" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employment_history" baseColumnNames="cost_center_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="cost_center" referencedColumnNames="id"
+                                 constraintName="fk_employment_history_cost_center" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employment_history" baseColumnNames="changed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employment_history_changed_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_employment_history_updated_at BEFORE UPDATE ON "${schema}".employment_history FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employment_history_updated_at ON "${schema}".employment_history;</sql>
+            <dropTable tableName="employment_history" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0007-004-create-employee-pan" author="kabipay-dev">
+        <createTable tableName="employee_pan" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="pan_number" type="VARCHAR(20)"><constraints nullable="false"/></column>
+            <column name="is_primary" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="is_verified" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="verified_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="employee_pan" schemaName="${schema}" indexName="idx_employee_pan_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="employee_pan" schemaName="${schema}" indexName="idx_employee_pan_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_pan" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_pan_employee" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_employee_pan_updated_at BEFORE UPDATE ON "${schema}".employee_pan FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_pan_updated_at ON "${schema}".employee_pan;</sql>
+            <dropTable tableName="employee_pan" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0007-005-create-employee-aadhaar" author="kabipay-dev">
+        <createTable tableName="employee_aadhaar" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="aadhaar_last4" type="VARCHAR(4)"><constraints nullable="false"/></column>
+            <column name="is_primary" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="is_verified" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="verified_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="employee_aadhaar" schemaName="${schema}" indexName="idx_employee_aadhaar_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="employee_aadhaar" schemaName="${schema}" indexName="idx_employee_aadhaar_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_aadhaar" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_aadhaar_employee" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_employee_aadhaar_updated_at BEFORE UPDATE ON "${schema}".employee_aadhaar FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_aadhaar_updated_at ON "${schema}".employee_aadhaar;</sql>
+            <dropTable tableName="employee_aadhaar" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0007-006-create-employee-bank" author="kabipay-dev">
+        <createTable tableName="employee_bank" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="account_number" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="ifsc_code" type="VARCHAR(20)"><constraints nullable="false"/></column>
+            <column name="bank_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="account_type" type="VARCHAR(50)"/>
+            <column name="is_primary" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="is_verified" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="employee_bank" schemaName="${schema}" indexName="idx_employee_bank_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="employee_bank" schemaName="${schema}" indexName="idx_employee_bank_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_bank" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_bank_employee" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_employee_bank_updated_at BEFORE UPDATE ON "${schema}".employee_bank FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_bank_updated_at ON "${schema}".employee_bank;</sql>
+            <dropTable tableName="employee_bank" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0007-007-create-dependent" author="kabipay-dev">
+        <createTable tableName="dependent" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="relationship" type="VARCHAR(100)"/>
+            <column name="date_of_birth" type="DATE"/>
+            <column name="gender" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="dependent" schemaName="${schema}" indexName="idx_dependent_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="dependent" schemaName="${schema}" indexName="idx_dependent_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="dependent" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_dependent_employee" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_dependent_updated_at BEFORE UPDATE ON "${schema}".dependent FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_dependent_updated_at ON "${schema}".dependent;</sql>
+            <dropTable tableName="dependent" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

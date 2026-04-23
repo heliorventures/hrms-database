@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0023 — GRIEVANCE (ERD §23). CASE_ACTION.file_url → file_storage_id (defer FK to 0029). -->
+
+    <changeSet id="0023-001-create-grievance-category" author="kabipay-dev">
+        <createTable tableName="grievance_category" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="code" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="is_posh" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="resolution_sla_days" type="INT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="grievance_category" schemaName="${schema}"
+                             columnNames="tenant_id,code"
+                             constraintName="uq_grievance_category_tenant_code"/>
+        <sql>CREATE TRIGGER trg_grievance_category_updated_at BEFORE UPDATE ON "${schema}".grievance_category FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_grievance_category_updated_at ON "${schema}".grievance_category;</sql>
+            <dropTable tableName="grievance_category" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0023-002-create-grievance-case" author="kabipay-dev">
+        <createTable tableName="grievance_case" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="grievance_category_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="subject" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="priority" type="VARCHAR(50)"/>
+            <column name="confidentiality_level" type="VARCHAR(50)"/>
+            <column name="assigned_to" type="UUID"/>
+            <column name="filed_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="resolved_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="grievance_case" schemaName="${schema}" indexName="idx_grievance_case_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="grievance_case" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_grievance_case_employee" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="grievance_case" baseColumnNames="grievance_category_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="grievance_category" referencedColumnNames="id"
+                                 constraintName="fk_grievance_case_category" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="grievance_case" baseColumnNames="assigned_to"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_grievance_case_assigned_to" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_grievance_case_updated_at BEFORE UPDATE ON "${schema}".grievance_case FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_grievance_case_updated_at ON "${schema}".grievance_case;</sql>
+            <dropTable tableName="grievance_case" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0023-003-create-case-participant" author="kabipay-dev">
+        <createTable tableName="case_participant" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="grievance_case_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="role" type="VARCHAR(100)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="case_participant" schemaName="${schema}" indexName="idx_case_participant_case">
+            <column name="grievance_case_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="case_participant" baseColumnNames="grievance_case_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="grievance_case" referencedColumnNames="id"
+                                 constraintName="fk_case_participant_case" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="case_participant" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_case_participant_employee" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_case_participant_updated_at BEFORE UPDATE ON "${schema}".case_participant FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_case_participant_updated_at ON "${schema}".case_participant;</sql>
+            <dropTable tableName="case_participant" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0023-004-create-case-action" author="kabipay-dev">
+        <createTable tableName="case_action" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="grievance_case_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="performed_by" type="UUID"/>
+            <column name="action_type" type="VARCHAR(100)"/>
+            <column name="description" type="TEXT"/>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="performed_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="case_action" schemaName="${schema}" indexName="idx_case_action_case">
+            <column name="grievance_case_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="case_action" baseColumnNames="grievance_case_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="grievance_case" referencedColumnNames="id"
+                                 constraintName="fk_case_action_case" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="case_action" baseColumnNames="performed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_case_action_performed_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_case_action_updated_at BEFORE UPDATE ON "${schema}".case_action FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_case_action_updated_at ON "${schema}".case_action;</sql>
+            <dropTable tableName="case_action" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0023-005-create-disciplinary-action" author="kabipay-dev">
+        <createTable tableName="disciplinary_action" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="grievance_case_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="action_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="effective_date" type="DATE"/>
+            <column name="expiry_date" type="DATE"/>
+            <column name="issued_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="disciplinary_action" baseColumnNames="grievance_case_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="grievance_case" referencedColumnNames="id"
+                                 constraintName="fk_disciplinary_action_case" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="disciplinary_action" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_disciplinary_action_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="disciplinary_action" baseColumnNames="issued_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_disciplinary_action_issued_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_disciplinary_action_updated_at BEFORE UPDATE ON "${schema}".disciplinary_action FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_disciplinary_action_updated_at ON "${schema}".disciplinary_action;</sql>
+            <dropTable tableName="disciplinary_action" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

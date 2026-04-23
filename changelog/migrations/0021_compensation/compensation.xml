@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0021 — COMPENSATION (ERD §21). compensation_review_cycle is distinct from performance.review_cycle. -->
+
+    <changeSet id="0021-001-create-salary-band" author="kabipay-dev">
+        <createTable tableName="salary_band" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="designation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="grade" type="INT"/>
+            <column name="min_salary" type="NUMERIC(15,4)"/>
+            <column name="mid_salary" type="NUMERIC(15,4)"/>
+            <column name="max_salary" type="NUMERIC(15,4)"/>
+            <column name="currency" type="VARCHAR(10)"/>
+            <column name="effective_year" type="INT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="salary_band" schemaName="${schema}" indexName="idx_salary_band_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="salary_band" baseColumnNames="designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_salary_band_designation" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_salary_band_updated_at BEFORE UPDATE ON "${schema}".salary_band FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_salary_band_updated_at ON "${schema}".salary_band;</sql>
+            <dropTable tableName="salary_band" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0021-002-create-compensation-review-cycle" author="kabipay-dev">
+        <createTable tableName="compensation_review_cycle" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="year" type="INT"><constraints nullable="false"/></column>
+            <column name="start_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="end_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="budget_percentage" type="NUMERIC(15,4)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="compensation_review_cycle" schemaName="${schema}" indexName="idx_compensation_review_cycle_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_compensation_review_cycle_updated_at BEFORE UPDATE ON "${schema}".compensation_review_cycle FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_compensation_review_cycle_updated_at ON "${schema}".compensation_review_cycle;</sql>
+            <dropTable tableName="compensation_review_cycle" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0021-003-create-compensation-review-item" author="kabipay-dev">
+        <createTable tableName="compensation_review_item" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="review_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="current_ctc" type="NUMERIC(15,4)"/>
+            <column name="recommended_ctc" type="NUMERIC(15,4)"/>
+            <column name="increment_percentage" type="NUMERIC(15,4)"/>
+            <column name="increment_type" type="VARCHAR(50)"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="approved_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="compensation_review_item" schemaName="${schema}"
+                             columnNames="review_cycle_id,employee_id"
+                             constraintName="uq_compensation_review_item_cycle_emp"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="compensation_review_item" baseColumnNames="review_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="compensation_review_cycle" referencedColumnNames="id"
+                                 constraintName="fk_comp_review_item_cycle" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="compensation_review_item" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_comp_review_item_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="compensation_review_item" baseColumnNames="approved_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_comp_review_item_approved_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_compensation_review_item_updated_at BEFORE UPDATE ON "${schema}".compensation_review_item FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_compensation_review_item_updated_at ON "${schema}".compensation_review_item;</sql>
+            <dropTable tableName="compensation_review_item" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0021-004-create-bonus-plan" author="kabipay-dev">
+        <createTable tableName="bonus_plan" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="calculation_basis" type="VARCHAR(100)"/>
+            <column name="target_percentage" type="NUMERIC(15,4)"/>
+            <column name="review_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="bonus_plan" schemaName="${schema}" indexName="idx_bonus_plan_cycle">
+            <column name="review_cycle_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="bonus_plan" baseColumnNames="review_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="compensation_review_cycle" referencedColumnNames="id"
+                                 constraintName="fk_bonus_plan_review_cycle" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_bonus_plan_updated_at BEFORE UPDATE ON "${schema}".bonus_plan FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_bonus_plan_updated_at ON "${schema}".bonus_plan;</sql>
+            <dropTable tableName="bonus_plan" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0021-005-create-bonus-payout" author="kabipay-dev">
+        <createTable tableName="bonus_payout" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="bonus_plan_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="target_amount" type="NUMERIC(15,4)"/>
+            <column name="actual_amount" type="NUMERIC(15,4)"/>
+            <column name="performance_multiplier" type="NUMERIC(15,4)"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="approved_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="bonus_payout" schemaName="${schema}"
+                             columnNames="bonus_plan_id,employee_id"
+                             constraintName="uq_bonus_payout_plan_emp"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="bonus_payout" baseColumnNames="bonus_plan_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="bonus_plan" referencedColumnNames="id"
+                                 constraintName="fk_bonus_payout_plan" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="bonus_payout" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_bonus_payout_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="bonus_payout" baseColumnNames="approved_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_bonus_payout_approved_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_bonus_payout_updated_at BEFORE UPDATE ON "${schema}".bonus_payout FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_bonus_payout_updated_at ON "${schema}".bonus_payout;</sql>
+            <dropTable tableName="bonus_payout" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0021-006-create-equity-grant" author="kabipay-dev">
+        <createTable tableName="equity_grant" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="grant_type" type="VARCHAR(50)"/>
+            <column name="units_granted" type="INT"/>
+            <column name="strike_price" type="NUMERIC(15,4)"/>
+            <column name="grant_date" type="DATE"/>
+            <column name="vesting_start_date" type="DATE"/>
+            <column name="vesting_schedule" type="TEXT"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="equity_grant" schemaName="${schema}" indexName="idx_equity_grant_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="equity_grant" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_equity_grant_employee" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_equity_grant_updated_at BEFORE UPDATE ON "${schema}".equity_grant FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_equity_grant_updated_at ON "${schema}".equity_grant;</sql>
+            <dropTable tableName="equity_grant" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

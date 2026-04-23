@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0026 — INTEGRATIONS (ERD §26). Connector catalog lives in kabipay_ops.integration_connector (ops migration 0005). -->
+
+    <changeSet id="0026-001-create-tenant-integration" author="kabipay-dev">
+        <createTable tableName="tenant_integration" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="integration_connector_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="credentials_encrypted" type="TEXT"/>
+            <column name="config_json" type="JSONB"/>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="connected_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="tenant_integration" schemaName="${schema}"
+                             columnNames="tenant_id,integration_connector_id"
+                             constraintName="uq_tenant_integration_tenant_connector"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="tenant_integration" baseColumnNames="integration_connector_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="integration_connector" referencedColumnNames="id"
+                                 constraintName="fk_tenant_integration_connector" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_tenant_integration_updated_at BEFORE UPDATE ON "${schema}".tenant_integration FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_tenant_integration_updated_at ON "${schema}".tenant_integration;</sql>
+            <dropTable tableName="tenant_integration" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0026-002-create-webhook-subscription" author="kabipay-dev">
+        <createTable tableName="webhook_subscription" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="event_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="endpoint_url" type="TEXT"><constraints nullable="false"/></column>
+            <column name="secret_hash" type="VARCHAR(255)"/>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="webhook_subscription" schemaName="${schema}" indexName="idx_webhook_subscription_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_webhook_subscription_updated_at BEFORE UPDATE ON "${schema}".webhook_subscription FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_webhook_subscription_updated_at ON "${schema}".webhook_subscription;</sql>
+            <dropTable tableName="webhook_subscription" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0026-003-create-webhook-delivery-log" author="kabipay-dev">
+        <createTable tableName="webhook_delivery_log" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="webhook_subscription_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="event_name" type="VARCHAR(255)"/>
+            <column name="payload_json" type="JSONB"/>
+            <column name="http_status" type="INT"/>
+            <column name="response_body" type="TEXT"/>
+            <column name="is_success" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="attempt_number" type="INT" defaultValueNumeric="1"><constraints nullable="false"/></column>
+            <column name="delivered_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="webhook_delivery_log" schemaName="${schema}" indexName="idx_webhook_delivery_log_subscription">
+            <column name="webhook_subscription_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="webhook_delivery_log" baseColumnNames="webhook_subscription_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="webhook_subscription" referencedColumnNames="id"
+                                 constraintName="fk_webhook_delivery_log_subscription" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_webhook_delivery_log_updated_at BEFORE UPDATE ON "${schema}".webhook_delivery_log FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_webhook_delivery_log_updated_at ON "${schema}".webhook_delivery_log;</sql>
+            <dropTable tableName="webhook_delivery_log" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

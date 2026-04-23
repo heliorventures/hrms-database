@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0013 — TAX & STATUTORY. statutory_body_id references ops-plane data logically (no cross-schema FK). file_storage_id → 0029. -->
+
+    <changeSet id="0013-001-create-tax-configuration-version" author="kabipay-dev">
+        <createTable tableName="tax_configuration_version" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="fiscal_year" type="INT"><constraints nullable="false"/></column>
+            <column name="regime" type="VARCHAR(50)"/>
+            <column name="country_code" type="VARCHAR(10)"><constraints nullable="false"/></column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="tax_configuration_version" schemaName="${schema}" indexName="idx_tax_cfg_tenant_year">
+            <column name="tenant_id"/>
+            <column name="fiscal_year"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_tax_configuration_version_updated_at BEFORE UPDATE ON "${schema}".tax_configuration_version FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_tax_configuration_version_updated_at ON "${schema}".tax_configuration_version;</sql>
+            <dropTable tableName="tax_configuration_version" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0013-002-create-tax-slab" author="kabipay-dev">
+        <createTable tableName="tax_slab" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="tax_config_version_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="income_from" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="income_to" type="NUMERIC(15,4)"/>
+            <column name="tax_rate" type="NUMERIC(15,4)"/>
+            <column name="surcharge_rate" type="NUMERIC(15,4)"/>
+            <column name="cess_rate" type="NUMERIC(15,4)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="tax_slab" schemaName="${schema}" indexName="idx_tax_slab_config">
+            <column name="tax_config_version_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="tax_slab" baseColumnNames="tax_config_version_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="tax_configuration_version" referencedColumnNames="id"
+                                 constraintName="fk_tax_slab_config_version" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_tax_slab_updated_at BEFORE UPDATE ON "${schema}".tax_slab FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_tax_slab_updated_at ON "${schema}".tax_slab;</sql>
+            <dropTable tableName="tax_slab" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0013-003-create-tax-computation" author="kabipay-dev">
+        <createTable tableName="tax_computation" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="tax_config_version_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="fiscal_year" type="INT"><constraints nullable="false"/></column>
+            <column name="tax_regime_chosen" type="VARCHAR(50)"/>
+            <column name="gross_income" type="NUMERIC(15,4)"/>
+            <column name="total_deductions" type="NUMERIC(15,4)"/>
+            <column name="taxable_income" type="NUMERIC(15,4)"/>
+            <column name="final_tax" type="NUMERIC(15,4)"/>
+            <column name="tds_per_month" type="NUMERIC(15,4)"/>
+            <column name="computed_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="tax_computation" schemaName="${schema}" indexName="idx_tax_comp_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="tax_computation" schemaName="${schema}" indexName="idx_tax_comp_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="tax_computation" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_tax_comp_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="tax_computation" baseColumnNames="tax_config_version_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="tax_configuration_version" referencedColumnNames="id"
+                                 constraintName="fk_tax_comp_config_version" onDelete="RESTRICT"/>
+        <rollback>
+            <dropTable tableName="tax_computation" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0013-004-create-statutory-filing" author="kabipay-dev">
+        <createTable tableName="statutory_filing" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="statutory_body_id" type="UUID"/>
+            <column name="filing_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="month" type="INT"/>
+            <column name="year" type="INT"><constraints nullable="false"/></column>
+            <column name="amount" type="NUMERIC(15,4)"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="reference_number" type="VARCHAR(100)"/>
+            <column name="filed_on" type="DATE"/>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="statutory_filing" schemaName="${schema}" indexName="idx_statutory_filing_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_statutory_filing_updated_at BEFORE UPDATE ON "${schema}".statutory_filing FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_statutory_filing_updated_at ON "${schema}".statutory_filing;</sql>
+            <dropTable tableName="statutory_filing" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0013-005-create-form-16" author="kabipay-dev">
+        <createTable tableName="form_16" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="payroll_cycle_id" type="UUID"/>
+            <column name="fiscal_year" type="INT"><constraints nullable="false"/></column>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="generated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="is_sent_to_employee" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="form_16" schemaName="${schema}" indexName="idx_form_16_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="form_16" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_form_16_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="form_16" baseColumnNames="payroll_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="payroll_cycle" referencedColumnNames="id"
+                                 constraintName="fk_form_16_payroll_cycle" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_form_16_updated_at BEFORE UPDATE ON "${schema}".form_16 FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_form_16_updated_at ON "${schema}".form_16;</sql>
+            <dropTable tableName="form_16" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0013-006-create-labour-law-register" author="kabipay-dev">
+        <createTable tableName="labour_law_register" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="register_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="register_type" type="VARCHAR(100)"/>
+            <column name="year" type="INT"><constraints nullable="false"/></column>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="generated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="labour_law_register" schemaName="${schema}" indexName="idx_labour_register_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_labour_law_register_updated_at BEFORE UPDATE ON "${schema}".labour_law_register FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_labour_law_register_updated_at ON "${schema}".labour_law_register;</sql>
+            <dropTable tableName="labour_law_register" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

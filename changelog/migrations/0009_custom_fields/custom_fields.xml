@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0009 — CUSTOM FIELDS (EAV). entity_id + entity_type identify the target row in a polymorphic way. -->
+
+    <changeSet id="0009-001-create-custom-field-definition" author="kabipay-dev">
+        <createTable tableName="custom_field_definition" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="entity_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="field_name" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="field_label" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="field_type" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="options_json" type="JSONB"/>
+            <column name="is_required" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="display_order" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="custom_field_definition" schemaName="${schema}" indexName="idx_cust_field_def_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="custom_field_definition" schemaName="${schema}" indexName="idx_cust_field_def_entity">
+            <column name="tenant_id"/>
+            <column name="entity_type"/>
+        </createIndex>
+        <addUniqueConstraint tableName="custom_field_definition" schemaName="${schema}"
+                             columnNames="tenant_id,entity_type,field_name"
+                             constraintName="uq_cust_field_def_tenant_entity_name"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="custom_field_definition" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_cust_field_def_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_custom_field_definition_updated_at BEFORE UPDATE ON "${schema}".custom_field_definition FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_custom_field_definition_updated_at ON "${schema}".custom_field_definition;</sql>
+            <dropTable tableName="custom_field_definition" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0009-002-create-custom-field-value" author="kabipay-dev">
+        <createTable tableName="custom_field_value" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="field_definition_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="entity_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="entity_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="field_value" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="custom_field_value" schemaName="${schema}" indexName="idx_cust_field_val_def">
+            <column name="field_definition_id"/>
+        </createIndex>
+        <createIndex tableName="custom_field_value" schemaName="${schema}" indexName="idx_cust_field_val_entity">
+            <column name="tenant_id"/>
+            <column name="entity_type"/>
+            <column name="entity_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="custom_field_value" baseColumnNames="field_definition_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="custom_field_definition" referencedColumnNames="id"
+                                 constraintName="fk_cust_field_val_definition" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_custom_field_value_updated_at BEFORE UPDATE ON "${schema}".custom_field_value FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_custom_field_value_updated_at ON "${schema}".custom_field_value;</sql>
+            <dropTable tableName="custom_field_value" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

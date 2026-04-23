@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      MASTER CHANGELOG - OPS / CONTROL PLANE
+      Run ONCE against the kabipay_dev database. Writes to schema kabipay_ops.
+      Usage: liquibase update with defaults file liquibase.properties
+    -->
+
+    <!-- Foundation: schema, extensions, updated_at trigger function -->
+    <include file="migrations/0000_foundation/foundation.xml" relativeToChangelogFile="true"/>
+
+    <!-- Operator plane (KabiPay internal staff) -->
+    <include file="migrations/0001_operator_plane/operator_plane.xml" relativeToChangelogFile="true"/>
+
+    <!-- Control plane (tenant management) -->
+    <include file="migrations/0002_control_plane/control_plane.xml" relativeToChangelogFile="true"/>
+
+    <!-- Module catalog & subscription -->
+    <include file="migrations/0003_module_catalog/module_catalog.xml" relativeToChangelogFile="true"/>
+
+    <!-- Billing & payments -->
+    <include file="migrations/0004_billing/billing.xml" relativeToChangelogFile="true"/>
+
+    <!-- Global integration connector catalog (tenant FKs via cross-schema reference) -->
+    <include file="migrations/0005_integration_connector_catalog/integration_connector_catalog.xml" relativeToChangelogFile="true"/>
+
+</databaseChangeLog>

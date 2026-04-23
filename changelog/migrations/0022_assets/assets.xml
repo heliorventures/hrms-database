@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0022 — ASSET MANAGEMENT (ERD §22) -->
+
+    <changeSet id="0022-001-create-asset-category" author="kabipay-dev">
+        <createTable tableName="asset_category" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="code" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="asset_category" schemaName="${schema}"
+                             columnNames="tenant_id,code"
+                             constraintName="uq_asset_category_tenant_code"/>
+        <sql>CREATE TRIGGER trg_asset_category_updated_at BEFORE UPDATE ON "${schema}".asset_category FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_asset_category_updated_at ON "${schema}".asset_category;</sql>
+            <dropTable tableName="asset_category" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0022-002-create-asset" author="kabipay-dev">
+        <createTable tableName="asset" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="asset_category_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="serial_number" type="VARCHAR(255)"/>
+            <column name="asset_tag" type="VARCHAR(100)"/>
+            <column name="purchase_value" type="NUMERIC(15,4)"/>
+            <column name="purchase_date" type="DATE"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="location_id" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="asset" schemaName="${schema}" indexName="idx_asset_category">
+            <column name="asset_category_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset" baseColumnNames="asset_category_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="asset_category" referencedColumnNames="id"
+                                 constraintName="fk_asset_category" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset" baseColumnNames="location_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="id"
+                                 constraintName="fk_asset_location" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_asset_updated_at BEFORE UPDATE ON "${schema}".asset FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_asset_updated_at ON "${schema}".asset;</sql>
+            <dropTable tableName="asset" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0022-003-create-asset-allocation" author="kabipay-dev">
+        <createTable tableName="asset_allocation" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="asset_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="allocated_on" type="DATE"><constraints nullable="false"/></column>
+            <column name="expected_return_on" type="DATE"/>
+            <column name="condition_at_allocation" type="TEXT"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="asset_allocation" schemaName="${schema}" indexName="idx_asset_allocation_asset">
+            <column name="asset_id"/>
+        </createIndex>
+        <createIndex tableName="asset_allocation" schemaName="${schema}" indexName="idx_asset_allocation_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset_allocation" baseColumnNames="asset_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="asset" referencedColumnNames="id"
+                                 constraintName="fk_asset_allocation_asset" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset_allocation" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_asset_allocation_employee" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_asset_allocation_updated_at BEFORE UPDATE ON "${schema}".asset_allocation FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_asset_allocation_updated_at ON "${schema}".asset_allocation;</sql>
+            <dropTable tableName="asset_allocation" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0022-004-create-asset-return-log" author="kabipay-dev">
+        <createTable tableName="asset_return_log" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="asset_allocation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="returned_on" type="DATE"><constraints nullable="false"/></column>
+            <column name="condition_at_return" type="TEXT"/>
+            <column name="remarks" type="TEXT"/>
+            <column name="received_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset_return_log" baseColumnNames="asset_allocation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="asset_allocation" referencedColumnNames="id"
+                                 constraintName="fk_asset_return_log_allocation" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset_return_log" baseColumnNames="received_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_asset_return_log_received_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_asset_return_log_updated_at BEFORE UPDATE ON "${schema}".asset_return_log FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_asset_return_log_updated_at ON "${schema}".asset_return_log;</sql>
+            <dropTable tableName="asset_return_log" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

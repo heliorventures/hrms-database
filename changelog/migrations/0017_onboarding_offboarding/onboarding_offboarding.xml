@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0017 — ONBOARDING & OFFBOARDING -->
+
+    <changeSet id="0017-001-create-onboarding-checklist" author="kabipay-dev">
+        <createTable tableName="onboarding_checklist" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="task_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="task_category" type="VARCHAR(100)"/>
+            <column name="assigned_to" type="UUID"/>
+            <column name="is_completed" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="due_date" type="DATE"/>
+            <column name="completed_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="onboarding_checklist" schemaName="${schema}" indexName="idx_onboarding_checklist_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="onboarding_checklist" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_onboarding_checklist_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="onboarding_checklist" baseColumnNames="assigned_to"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_onboarding_checklist_assigned" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_onboarding_checklist_updated_at BEFORE UPDATE ON "${schema}".onboarding_checklist FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_onboarding_checklist_updated_at ON "${schema}".onboarding_checklist;</sql>
+            <dropTable tableName="onboarding_checklist" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0017-002-create-separation" author="kabipay-dev">
+        <createTable tableName="separation" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="separation_type" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="resignation_date" type="DATE"/>
+            <column name="last_working_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="reason" type="TEXT"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="approved_by" type="UUID"/>
+            <column name="workflow_instance_id" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="separation" schemaName="${schema}" indexName="idx_separation_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="separation" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_separation_employee" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="separation" baseColumnNames="approved_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_separation_approved_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_separation_updated_at BEFORE UPDATE ON "${schema}".separation FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_separation_updated_at ON "${schema}".separation;</sql>
+            <dropTable tableName="separation" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0017-003-create-exit-interview" author="kabipay-dev">
+        <createTable tableName="exit_interview" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="separation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="conducted_by" type="UUID"/>
+            <column name="reason_for_leaving" type="TEXT"/>
+            <column name="feedback" type="TEXT"/>
+            <column name="satisfaction_score" type="INT"/>
+            <column name="conducted_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="exit_interview" schemaName="${schema}"
+                             columnNames="separation_id"
+                             constraintName="uq_exit_interview_separation"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="exit_interview" baseColumnNames="separation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="separation" referencedColumnNames="id"
+                                 constraintName="fk_exit_interview_separation" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="exit_interview" baseColumnNames="conducted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_exit_interview_conducted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_exit_interview_updated_at BEFORE UPDATE ON "${schema}".exit_interview FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_exit_interview_updated_at ON "${schema}".exit_interview;</sql>
+            <dropTable tableName="exit_interview" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0017-004-create-fnf-settlement" author="kabipay-dev">
+        <createTable tableName="fnf_settlement" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="separation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="leave_encashment" type="NUMERIC(15,4)"/>
+            <column name="gratuity_amount" type="NUMERIC(15,4)"/>
+            <column name="bonus_payable" type="NUMERIC(15,4)"/>
+            <column name="recovery_amount" type="NUMERIC(15,4)"/>
+            <column name="net_payable" type="NUMERIC(15,4)"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="processed_at" type="TIMESTAMPTZ"/>
+            <column name="processed_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="fnf_settlement" schemaName="${schema}"
+                             columnNames="separation_id"
+                             constraintName="uq_fnf_settlement_separation"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="fnf_settlement" baseColumnNames="separation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="separation" referencedColumnNames="id"
+                                 constraintName="fk_fnf_settlement_separation" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="fnf_settlement" baseColumnNames="processed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_fnf_settlement_processed_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_fnf_settlement_updated_at BEFORE UPDATE ON "${schema}".fnf_settlement FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_fnf_settlement_updated_at ON "${schema}".fnf_settlement;</sql>
+            <dropTable tableName="fnf_settlement" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0017-005-create-clearance-checklist" author="kabipay-dev">
+        <createTable tableName="clearance_checklist" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="separation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="department" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="task_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="is_cleared" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="cleared_by" type="UUID"/>
+            <column name="cleared_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="clearance_checklist" schemaName="${schema}" indexName="idx_clearance_checklist_separation">
+            <column name="separation_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="clearance_checklist" baseColumnNames="separation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="separation" referencedColumnNames="id"
+                                 constraintName="fk_clearance_checklist_separation" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="clearance_checklist" baseColumnNames="cleared_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_clearance_checklist_cleared_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_clearance_checklist_updated_at BEFORE UPDATE ON "${schema}".clearance_checklist FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_clearance_checklist_updated_at ON "${schema}".clearance_checklist;</sql>
+            <dropTable tableName="clearance_checklist" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

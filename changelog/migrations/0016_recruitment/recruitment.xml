@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0016 — RECRUITMENT. resume_url replaced with resume_file_storage_id (Gap F). workflow_instance_id deferred to 0025. -->
+
+    <changeSet id="0016-001-create-hiring-stage" author="kabipay-dev">
+        <createTable tableName="hiring_stage" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="sequence_order" type="INT"><constraints nullable="false"/></column>
+            <column name="stage_type" type="VARCHAR(50)"/>
+            <column name="is_system_stage" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="hiring_stage" schemaName="${schema}" indexName="idx_hiring_stage_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_hiring_stage_updated_at BEFORE UPDATE ON "${schema}".hiring_stage FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_hiring_stage_updated_at ON "${schema}".hiring_stage;</sql>
+            <dropTable tableName="hiring_stage" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0016-002-create-job-posting" author="kabipay-dev">
+        <createTable tableName="job_posting" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="department_id" type="UUID"/>
+            <column name="designation_id" type="UUID"/>
+            <column name="location_id" type="UUID"/>
+            <column name="title" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="employment_type" type="VARCHAR(50)"/>
+            <column name="vacancies" type="INT" defaultValueNumeric="1"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="open_date" type="DATE"/>
+            <column name="close_date" type="DATE"/>
+            <column name="created_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="job_posting" schemaName="${schema}" indexName="idx_job_posting_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="job_posting" baseColumnNames="department_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id"
+                                 constraintName="fk_job_posting_department" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="job_posting" baseColumnNames="designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_job_posting_designation" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="job_posting" baseColumnNames="location_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="id"
+                                 constraintName="fk_job_posting_location" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="job_posting" baseColumnNames="created_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_job_posting_created_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_job_posting_updated_at BEFORE UPDATE ON "${schema}".job_posting FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_job_posting_updated_at ON "${schema}".job_posting;</sql>
+            <dropTable tableName="job_posting" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0016-003-create-application" author="kabipay-dev">
+        <createTable tableName="application" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="job_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="candidate_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="candidate_email" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="candidate_phone" type="VARCHAR(50)"/>
+            <column name="resume_file_storage_id" type="UUID"/>
+            <column name="source" type="VARCHAR(100)"/>
+            <column name="current_stage_id" type="UUID"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="workflow_instance_id" type="UUID"/>
+            <column name="applied_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="application" schemaName="${schema}" indexName="idx_application_job">
+            <column name="job_id"/>
+        </createIndex>
+        <createIndex tableName="application" schemaName="${schema}" indexName="idx_application_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="application" baseColumnNames="job_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="job_posting" referencedColumnNames="id"
+                                 constraintName="fk_application_job" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="application" baseColumnNames="current_stage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="hiring_stage" referencedColumnNames="id"
+                                 constraintName="fk_application_stage" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="application" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_application_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_application_updated_at BEFORE UPDATE ON "${schema}".application FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_application_updated_at ON "${schema}".application;</sql>
+            <dropTable tableName="application" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0016-004-create-application-stage-log" author="kabipay-dev">
+        <createTable tableName="application_stage_log" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="application_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="hiring_stage_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="moved_by" type="UUID"/>
+            <column name="notes" type="TEXT"/>
+            <column name="moved_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="application_stage_log" schemaName="${schema}" indexName="idx_app_stage_log_app">
+            <column name="application_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="application_stage_log" baseColumnNames="application_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="application" referencedColumnNames="id"
+                                 constraintName="fk_app_stage_log_application" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="application_stage_log" baseColumnNames="hiring_stage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="hiring_stage" referencedColumnNames="id"
+                                 constraintName="fk_app_stage_log_stage" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="application_stage_log" baseColumnNames="moved_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_app_stage_log_moved_by" onDelete="SET NULL"/>
+        <rollback>
+            <dropTable tableName="application_stage_log" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0016-005-create-interview" author="kabipay-dev">
+        <createTable tableName="interview" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="application_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="interviewer_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="hiring_stage_id" type="UUID"/>
+            <column name="scheduled_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+            <column name="duration_minutes" type="INT"/>
+            <column name="mode" type="VARCHAR(50)"/>
+            <column name="meeting_link" type="VARCHAR(500)"/>
+            <column name="outcome" type="VARCHAR(100)"/>
+            <column name="feedback" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="interview" schemaName="${schema}" indexName="idx_interview_application">
+            <column name="application_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="interview" baseColumnNames="application_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="application" referencedColumnNames="id"
+                                 constraintName="fk_interview_application" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="interview" baseColumnNames="interviewer_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_interview_interviewer" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="interview" baseColumnNames="hiring_stage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="hiring_stage" referencedColumnNames="id"
+                                 constraintName="fk_interview_stage" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_interview_updated_at BEFORE UPDATE ON "${schema}".interview FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_interview_updated_at ON "${schema}".interview;</sql>
+            <dropTable tableName="interview" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0016-006-create-interview-scorecard" author="kabipay-dev">
+        <createTable tableName="interview_scorecard" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="interview_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="evaluator_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="criterion" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="score" type="INT"/>
+            <column name="comments" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="interview_scorecard" schemaName="${schema}" indexName="idx_interview_scorecard_interview">
+            <column name="interview_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="interview_scorecard" baseColumnNames="interview_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="interview" referencedColumnNames="id"
+                                 constraintName="fk_interview_scorecard_interview" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="interview_scorecard" baseColumnNames="evaluator_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_interview_scorecard_evaluator" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_interview_scorecard_updated_at BEFORE UPDATE ON "${schema}".interview_scorecard FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_interview_scorecard_updated_at ON "${schema}".interview_scorecard;</sql>
+            <dropTable tableName="interview_scorecard" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0016-007-create-referral" author="kabipay-dev">
+        <createTable tableName="referral" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="application_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="referred_by" type="UUID"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="bonus_amount" type="NUMERIC(15,4)"/>
+            <column name="bonus_status" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="referral" schemaName="${schema}"
+                             columnNames="application_id"
+                             constraintName="uq_referral_application"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="referral" baseColumnNames="application_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="application" referencedColumnNames="id"
+                                 constraintName="fk_referral_application" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="referral" baseColumnNames="referred_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_referral_referred_by" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_referral_updated_at BEFORE UPDATE ON "${schema}".referral FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_referral_updated_at ON "${schema}".referral;</sql>
+            <dropTable tableName="referral" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0016-008-create-offer-letter" author="kabipay-dev">
+        <createTable tableName="offer_letter" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="application_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"/>
+            <column name="offered_ctc" type="NUMERIC(15,4)"/>
+            <column name="joining_date" type="DATE"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="sent_at" type="TIMESTAMPTZ"/>
+            <column name="accepted_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="offer_letter" schemaName="${schema}"
+                             columnNames="application_id"
+                             constraintName="uq_offer_letter_application"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="offer_letter" baseColumnNames="application_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="application" referencedColumnNames="id"
+                                 constraintName="fk_offer_letter_application" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="offer_letter" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_offer_letter_employee" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_offer_letter_updated_at BEFORE UPDATE ON "${schema}".offer_letter FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_offer_letter_updated_at ON "${schema}".offer_letter;</sql>
+            <dropTable tableName="offer_letter" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0016-009-create-job-board-sync" author="kabipay-dev">
+        <createTable tableName="job_board_sync" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="job_posting_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="board_name" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="external_job_id" type="VARCHAR(255)"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="synced_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="job_board_sync" schemaName="${schema}" indexName="idx_job_board_sync_posting">
+            <column name="job_posting_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="job_board_sync" baseColumnNames="job_posting_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="job_posting" referencedColumnNames="id"
+                                 constraintName="fk_job_board_sync_posting" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_job_board_sync_updated_at BEFORE UPDATE ON "${schema}".job_board_sync FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_job_board_sync_updated_at ON "${schema}".job_board_sync;</sql>
+            <dropTable tableName="job_board_sync" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

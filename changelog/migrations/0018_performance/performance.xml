@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0018 — PERFORMANCE & GOALS -->
+
+    <changeSet id="0018-001-create-review-cycle" author="kabipay-dev">
+        <createTable tableName="review_cycle" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="start_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="end_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="review_type" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="review_cycle" schemaName="${schema}" indexName="idx_review_cycle_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_review_cycle_updated_at BEFORE UPDATE ON "${schema}".review_cycle FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_review_cycle_updated_at ON "${schema}".review_cycle;</sql>
+            <dropTable tableName="review_cycle" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0018-002-create-goal" author="kabipay-dev">
+        <createTable tableName="goal" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="review_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="parent_goal_id" type="UUID"/>
+            <column name="title" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="weightage" type="NUMERIC(15,4)"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="visibility" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="goal" schemaName="${schema}" indexName="idx_goal_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="goal" schemaName="${schema}" indexName="idx_goal_cycle">
+            <column name="review_cycle_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="goal" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_goal_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="goal" baseColumnNames="review_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="review_cycle" referencedColumnNames="id"
+                                 constraintName="fk_goal_review_cycle" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="goal" baseColumnNames="parent_goal_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="goal" referencedColumnNames="id"
+                                 constraintName="fk_goal_parent" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_goal_updated_at BEFORE UPDATE ON "${schema}".goal FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_goal_updated_at ON "${schema}".goal;</sql>
+            <dropTable tableName="goal" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0018-003-create-kpi" author="kabipay-dev">
+        <createTable tableName="kpi" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="goal_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="metric_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="target_value" type="NUMERIC(15,4)"/>
+            <column name="actual_value" type="NUMERIC(15,4)"/>
+            <column name="unit" type="VARCHAR(50)"/>
+            <column name="measurement_date" type="DATE"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="kpi" schemaName="${schema}" indexName="idx_kpi_goal">
+            <column name="goal_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="kpi" baseColumnNames="goal_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="goal" referencedColumnNames="id"
+                                 constraintName="fk_kpi_goal" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_kpi_updated_at BEFORE UPDATE ON "${schema}".kpi FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_kpi_updated_at ON "${schema}".kpi;</sql>
+            <dropTable tableName="kpi" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0018-004-create-feedback-response" author="kabipay-dev">
+        <createTable tableName="feedback_response" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="review_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="reviewer_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="reviewee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="relationship" type="VARCHAR(100)"/>
+            <column name="rating" type="NUMERIC(15,4)"/>
+            <column name="comments" type="TEXT"/>
+            <column name="is_anonymous" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="submitted_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="feedback_response" schemaName="${schema}" indexName="idx_feedback_response_cycle">
+            <column name="review_cycle_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="feedback_response" baseColumnNames="review_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="review_cycle" referencedColumnNames="id"
+                                 constraintName="fk_feedback_response_cycle" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="feedback_response" baseColumnNames="reviewer_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_feedback_response_reviewer" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="feedback_response" baseColumnNames="reviewee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_feedback_response_reviewee" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_feedback_response_updated_at BEFORE UPDATE ON "${schema}".feedback_response FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_feedback_response_updated_at ON "${schema}".feedback_response;</sql>
+            <dropTable tableName="feedback_response" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0018-005-create-performance-rating" author="kabipay-dev">
+        <createTable tableName="performance_rating" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="review_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="self_rating" type="NUMERIC(15,4)"/>
+            <column name="manager_rating" type="NUMERIC(15,4)"/>
+            <column name="final_rating" type="NUMERIC(15,4)"/>
+            <column name="performance_band" type="VARCHAR(50)"/>
+            <column name="comments" type="TEXT"/>
+            <column name="rated_by" type="UUID"/>
+            <column name="rated_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="performance_rating" schemaName="${schema}"
+                             columnNames="employee_id,review_cycle_id"
+                             constraintName="uq_performance_rating_emp_cycle"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_rating" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_performance_rating_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_rating" baseColumnNames="review_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="review_cycle" referencedColumnNames="id"
+                                 constraintName="fk_performance_rating_cycle" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_rating" baseColumnNames="rated_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_performance_rating_rated_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_performance_rating_updated_at BEFORE UPDATE ON "${schema}".performance_rating FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_performance_rating_updated_at ON "${schema}".performance_rating;</sql>
+            <dropTable tableName="performance_rating" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

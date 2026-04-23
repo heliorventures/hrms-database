@@ -1,0 +1,9 @@
+.generated-tenant-*.properties
+.env
+
+# Excluded from org repos if copied from workspace parent
+STATUS.md
+ROADMAP.md
+KABIPAY_AI_PROMPT.md
+hrms_erd_complete.md
+kabipay.code-workspace

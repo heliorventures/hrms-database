@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      DOMAIN 0005 - AUTH & RBAC (CLIENT PLANE)
+      Lives inside each tenant schema. ${schema} is substituted at runtime via -Dschema=tenant_<id>.
+      Triggers reference kabipay_ops.set_updated_at() (cross-schema reference, no per-tenant copy needed).
+      Every table is implicitly tenant-scoped via its parent schema.
+    -->
+
+    <!-- ================== USER ================== -->
+    <changeSet id="0005-001-create-user" author="kabipay-dev">
+        <comment>Client plane user. tenant_id column is redundant with schema isolation but kept for
+                 cross-service FK consistency (USER.id is the canonical user identifier).</comment>
+        <createTable tableName="user" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="email" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="password_hash" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="mfa_enabled" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="mfa_secret" type="VARCHAR(255)"/>
+            <column name="last_login_at" type="TIMESTAMPTZ"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="user" schemaName="${schema}"
+                             columnNames="tenant_id,email"
+                             constraintName="uq_user_tenant_email"/>
+        <createIndex tableName="user" schemaName="${schema}" indexName="idx_user_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="user" schemaName="${schema}" indexName="idx_user_email">
+            <column name="email"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_user_updated_at BEFORE UPDATE ON "${schema}"."user" FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_user_updated_at ON "${schema}"."user";</sql>
+            <dropTable tableName="user" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== ROLE ================== -->
+    <changeSet id="0005-002-create-role" author="kabipay-dev">
+        <comment>Tenant-scoped role. is_system_role = true for system-seeded roles which cannot be deleted.</comment>
+        <createTable tableName="role" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="VARCHAR(500)"/>
+            <column name="is_system_role" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="role" schemaName="${schema}"
+                             columnNames="tenant_id,name"
+                             constraintName="uq_role_tenant_name"/>
+        <createIndex tableName="role" schemaName="${schema}" indexName="idx_role_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_role_updated_at BEFORE UPDATE ON "${schema}".role FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_role_updated_at ON "${schema}".role;</sql>
+            <dropTable tableName="role" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== PERMISSION ================== -->
+    <changeSet id="0005-003-create-permission" author="kabipay-dev">
+        <comment>Permission catalog. module_id is a logical reference to kabipay_ops.module.id
+                 (NOT a DB FK because permissions may pre-exist module row at seed time).
+                 Permissions are only seeded for subscribed modules.</comment>
+        <createTable tableName="permission" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="resource" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="action" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="module_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="description" type="VARCHAR(500)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="permission" schemaName="${schema}"
+                             columnNames="resource,action,module_id"
+                             constraintName="uq_permission_resource_action_module"/>
+        <createIndex tableName="permission" schemaName="${schema}" indexName="idx_permission_module">
+            <column name="module_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_permission_updated_at BEFORE UPDATE ON "${schema}".permission FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_permission_updated_at ON "${schema}".permission;</sql>
+            <dropTable tableName="permission" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== ROLE_PERMISSION ================== -->
+    <changeSet id="0005-004-create-role-permission" author="kabipay-dev">
+        <comment>Junction. Cascading delete when role or permission is removed.</comment>
+        <createTable tableName="role_permission" schemaName="${schema}">
+            <column name="role_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="permission_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="role_permission" schemaName="${schema}"
+                       columnNames="role_id,permission_id"
+                       constraintName="pk_role_permission"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="role_permission" baseColumnNames="role_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="role" referencedColumnNames="id"
+                                 constraintName="fk_role_permission_role" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="role_permission" baseColumnNames="permission_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="permission" referencedColumnNames="id"
+                                 constraintName="fk_role_permission_permission" onDelete="CASCADE"/>
+        <rollback>
+            <dropTable tableName="role_permission" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== USER_ROLE ================== -->
+    <changeSet id="0005-005-create-user-role" author="kabipay-dev">
+        <comment>Junction mapping users to roles.</comment>
+        <createTable tableName="user_role" schemaName="${schema}">
+            <column name="user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="role_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="assigned_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="user_role" schemaName="${schema}"
+                       columnNames="user_id,role_id"
+                       constraintName="pk_user_role"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="user_role" baseColumnNames="user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_user_role_user" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="user_role" baseColumnNames="role_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="role" referencedColumnNames="id"
+                                 constraintName="fk_user_role_role" onDelete="CASCADE"/>
+        <rollback>
+            <dropTable tableName="user_role" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== USER_SESSION ================== -->
+    <changeSet id="0005-006-create-user-session" author="kabipay-dev">
+        <comment>Active sessions per user for refresh-token rotation and logout.
+                 token_hash stores argon2 hash of the refresh token, never the raw token.</comment>
+        <createTable tableName="user_session" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="token_hash" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="ip_address" type="VARCHAR(45)"/>
+            <column name="user_agent" type="VARCHAR(1000)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="expires_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="user_session" baseColumnNames="user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_user_session_user" onDelete="CASCADE"/>
+        <createIndex tableName="user_session" schemaName="${schema}" indexName="idx_user_session_user">
+            <column name="user_id"/>
+        </createIndex>
+        <createIndex tableName="user_session" schemaName="${schema}" indexName="idx_user_session_expires_at">
+            <column name="expires_at"/>
+        </createIndex>
+        <rollback>
+            <dropTable tableName="user_session" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

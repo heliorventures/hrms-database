@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      DOMAIN 0002 - CONTROL PLANE
+      Tenant management. Each tenant maps to an isolated PostgreSQL schema (tenant_database).
+      White-label via subdomain + branding fields (logo_url, primary_color).
+    -->
+
+    <!-- ================== TENANT ================== -->
+    <changeSet id="0002-001-create-tenant" author="kabipay-dev">
+        <comment>Top-level tenant (customer company) record.</comment>
+        <createTable tableName="tenant" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)" defaultValue="PROVISIONING"><constraints nullable="false"/></column>
+            <column name="plan" type="VARCHAR(50)"/>
+            <column name="country" type="VARCHAR(10)"/>
+            <column name="timezone" type="VARCHAR(100)"/>
+            <column name="currency" type="VARCHAR(10)"/>
+            <column name="gstin" type="VARCHAR(50)"/>
+            <column name="pan" type="VARCHAR(50)"/>
+            <column name="registered_address" type="VARCHAR(1000)"/>
+            <column name="logo_url" type="VARCHAR(1000)"/>
+            <column name="primary_color" type="VARCHAR(20)"/>
+            <column name="subdomain" type="VARCHAR(100)"><constraints unique="true" uniqueConstraintName="uq_tenant_subdomain"/></column>
+            <column name="account_manager_id" type="UUID"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.tenant ADD CONSTRAINT chk_tenant_status CHECK (status IN ('PROVISIONING','ACTIVE','SUSPENDED','TERMINATED'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="tenant" baseColumnNames="account_manager_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_user" referencedColumnNames="id"
+                                 constraintName="fk_tenant_account_manager" onDelete="SET NULL"/>
+        <createIndex tableName="tenant" schemaName="kabipay_ops" indexName="idx_tenant_status">
+            <column name="status"/>
+        </createIndex>
+        <createIndex tableName="tenant" schemaName="kabipay_ops" indexName="idx_tenant_account_manager">
+            <column name="account_manager_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_tenant_updated_at BEFORE UPDATE ON kabipay_ops.tenant FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_tenant_updated_at ON kabipay_ops.tenant;</sql>
+            <dropTable tableName="tenant" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- Deferred FKs from domain 0001 now that tenant exists -->
+    <changeSet id="0002-002-add-tenant-fks-to-operator-tables" author="kabipay-dev">
+        <comment>Adds tenant FKs on operator_tenant_access and operator_support_ticket.</comment>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_tenant_access" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_operator_tenant_access_tenant" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_support_ticket" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_support_ticket_tenant" onDelete="CASCADE"/>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_tenant_access" constraintName="fk_operator_tenant_access_tenant"/>
+            <dropForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_support_ticket" constraintName="fk_support_ticket_tenant"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== TENANT_DATABASE ================== -->
+    <changeSet id="0002-003-create-tenant-database" author="kabipay-dev">
+        <comment>Per-tenant schema descriptor. resolve_tenant_db() uses this to build the connection.</comment>
+        <createTable tableName="tenant_database" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="db_type" type="VARCHAR(50)" defaultValue="POSTGRES"><constraints nullable="false"/></column>
+            <column name="db_host" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="db_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="schema_name" type="VARCHAR(255)"><constraints nullable="false" unique="true" uniqueConstraintName="uq_tenant_database_schema"/></column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="tenant_database" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_tenant_database_tenant" onDelete="CASCADE"/>
+        <createIndex tableName="tenant_database" schemaName="kabipay_ops" indexName="idx_tenant_database_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_tenant_database_updated_at BEFORE UPDATE ON kabipay_ops.tenant_database FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_tenant_database_updated_at ON kabipay_ops.tenant_database;</sql>
+            <dropTable tableName="tenant_database" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== FEATURE_FLAG ================== -->
+    <changeSet id="0002-004-create-feature-flag" author="kabipay-dev">
+        <comment>Per-tenant feature toggles (beyond module subscription).</comment>
+        <createTable tableName="feature_flag" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="feature_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="is_enabled" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="feature_flag" schemaName="kabipay_ops"
+                             columnNames="tenant_id,feature_name"
+                             constraintName="uq_feature_flag_tenant_feature"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="feature_flag" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_feature_flag_tenant" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_feature_flag_updated_at BEFORE UPDATE ON kabipay_ops.feature_flag FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_feature_flag_updated_at ON kabipay_ops.feature_flag;</sql>
+            <dropTable tableName="feature_flag" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== COUNTRY_CONFIG ================== -->
+    <changeSet id="0002-005-create-country-config" author="kabipay-dev">
+        <comment>Global country settings (not tenant-scoped) used for localisation &amp; statutory bodies.</comment>
+        <createTable tableName="country_config" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="country_code" type="VARCHAR(10)"><constraints nullable="false" unique="true" uniqueConstraintName="uq_country_config_code"/></column>
+            <column name="country_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="default_currency" type="VARCHAR(10)"><constraints nullable="false"/></column>
+            <column name="date_format" type="VARCHAR(50)" defaultValue="DD/MM/YYYY"><constraints nullable="false"/></column>
+            <column name="fiscal_year_start" type="VARCHAR(10)"/>
+            <column name="tax_regime_type" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>CREATE TRIGGER trg_country_config_updated_at BEFORE UPDATE ON kabipay_ops.country_config FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_country_config_updated_at ON kabipay_ops.country_config;</sql>
+            <dropTable tableName="country_config" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== LOCALIZATION_SETTING ================== -->
+    <changeSet id="0002-006-create-localization-setting" author="kabipay-dev">
+        <comment>Per-tenant localisation overrides of country defaults.</comment>
+        <createTable tableName="localization_setting" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="country_code" type="VARCHAR(10)"><constraints nullable="false"/></column>
+            <column name="language" type="VARCHAR(10)" defaultValue="en"><constraints nullable="false"/></column>
+            <column name="date_format" type="VARCHAR(50)"/>
+            <column name="number_format" type="VARCHAR(50)"/>
+            <column name="currency_symbol" type="VARCHAR(10)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="localization_setting" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_localization_setting_tenant" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="localization_setting" baseColumnNames="country_code"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="country_config" referencedColumnNames="country_code"
+                                 constraintName="fk_localization_setting_country" onDelete="RESTRICT"/>
+        <createIndex tableName="localization_setting" schemaName="kabipay_ops" indexName="idx_localization_setting_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_localization_setting_updated_at BEFORE UPDATE ON kabipay_ops.localization_setting FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_localization_setting_updated_at ON kabipay_ops.localization_setting;</sql>
+            <dropTable tableName="localization_setting" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== STATUTORY_BODY ================== -->
+    <changeSet id="0002-007-create-statutory-body" author="kabipay-dev">
+        <comment>Statutory bodies (PF, ESI, Income Tax) per country.</comment>
+        <createTable tableName="statutory_body" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="country_config_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="code" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="filing_type" type="VARCHAR(100)"/>
+            <column name="frequency" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="statutory_body" baseColumnNames="country_config_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="country_config" referencedColumnNames="id"
+                                 constraintName="fk_statutory_body_country" onDelete="CASCADE"/>
+        <addUniqueConstraint tableName="statutory_body" schemaName="kabipay_ops"
+                             columnNames="country_config_id,code"
+                             constraintName="uq_statutory_body_country_code"/>
+        <sql>CREATE TRIGGER trg_statutory_body_updated_at BEFORE UPDATE ON kabipay_ops.statutory_body FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_statutory_body_updated_at ON kabipay_ops.statutory_body;</sql>
+            <dropTable tableName="statutory_body" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

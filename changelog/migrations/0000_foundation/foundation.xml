@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      FOUNDATION
+      Reusable helpers that every downstream domain depends on:
+        - kabipay_ops schema (operator/control plane lives here)
+        - pgcrypto for gen_random_uuid() (defense in depth; app layer still generates UUIDs)
+        - set_updated_at() trigger function applied to every table with an updated_at column
+    -->
+
+    <changeSet id="0000-001-create-ops-schema" author="kabipay-dev">
+        <comment>Creates the kabipay_ops schema that hosts operator plane and control plane tables.</comment>
+        <sql>CREATE SCHEMA IF NOT EXISTS kabipay_ops;</sql>
+        <rollback>
+            <sql>DROP SCHEMA IF EXISTS kabipay_ops CASCADE;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0000-002-enable-pgcrypto" author="kabipay-dev">
+        <comment>Enables pgcrypto for gen_random_uuid(). Application layer still generates UUIDs;
+                 this is defense-in-depth for any raw SQL seed paths.</comment>
+        <sql>CREATE EXTENSION IF NOT EXISTS pgcrypto;</sql>
+        <rollback>
+            <sql>DROP EXTENSION IF EXISTS pgcrypto;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0000-003-create-updated-at-trigger-fn" author="kabipay-dev">
+        <comment>Reusable trigger function: maintains updated_at on any row touched by an UPDATE.
+                 Every table with an updated_at column MUST attach a BEFORE UPDATE trigger calling this.</comment>
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION kabipay_ops.set_updated_at()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = NOW();
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        ]]></sql>
+        <rollback>
+            <sql>DROP FUNCTION IF EXISTS kabipay_ops.set_updated_at();</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

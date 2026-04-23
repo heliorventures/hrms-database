@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      DOMAIN 0006 — ORGANISATION HIERARCHY (CLIENT PLANE)
+      Tables: department, designation, cost_center, location (see hrms_erd_complete.md §6).
+      head_employee_id is created here as nullable UUID; FK to employee is added in domain 0007.
+    -->
+
+    <!-- ================== DEPARTMENT ================== -->
+    <changeSet id="0006-001-create-department" author="kabipay-dev">
+        <comment>Self-referencing department tree. head_employee_id references employee.id once 0007 exists.</comment>
+        <createTable tableName="department" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="parent_department_id" type="UUID"/>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="code" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="head_employee_id" type="UUID"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="department" schemaName="${schema}"
+                             columnNames="tenant_id,code"
+                             constraintName="uq_department_tenant_code"/>
+        <createIndex tableName="department" schemaName="${schema}" indexName="idx_department_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="department" schemaName="${schema}" indexName="idx_department_parent">
+            <column name="parent_department_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="department" baseColumnNames="parent_department_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id"
+                                 constraintName="fk_department_parent" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_department_updated_at BEFORE UPDATE ON "${schema}".department FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_department_updated_at ON "${schema}".department;</sql>
+            <dropTable tableName="department" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== COST_CENTER ================== -->
+    <changeSet id="0006-002-create-cost-center" author="kabipay-dev">
+        <comment>Payroll / GL cost allocation bucket.</comment>
+        <createTable tableName="cost_center" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="code" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="type" type="VARCHAR(50)"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="cost_center" schemaName="${schema}"
+                             columnNames="tenant_id,code"
+                             constraintName="uq_cost_center_tenant_code"/>
+        <createIndex tableName="cost_center" schemaName="${schema}" indexName="idx_cost_center_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_cost_center_updated_at BEFORE UPDATE ON "${schema}".cost_center FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_cost_center_updated_at ON "${schema}".cost_center;</sql>
+            <dropTable tableName="cost_center" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== LOCATION ================== -->
+    <changeSet id="0006-003-create-location" author="kabipay-dev">
+        <comment>Physical site / geofence anchor for attendance.</comment>
+        <createTable tableName="location" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="address" type="VARCHAR(500)"/>
+            <column name="city" type="VARCHAR(100)"/>
+            <column name="state" type="VARCHAR(100)"/>
+            <column name="country" type="VARCHAR(100)"/>
+            <column name="geo_lat" type="NUMERIC(10,7)"/>
+            <column name="geo_lng" type="NUMERIC(10,7)"/>
+            <column name="geo_fence_radius_meters" type="NUMERIC(12,2)"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="location" schemaName="${schema}" indexName="idx_location_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_location_updated_at BEFORE UPDATE ON "${schema}"."location" FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_location_updated_at ON "${schema}"."location";</sql>
+            <dropTable tableName="location" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== DESIGNATION ================== -->
+    <changeSet id="0006-004-create-designation" author="kabipay-dev">
+        <comment>Job title / level within a department.</comment>
+        <createTable tableName="designation" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="department_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="title" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="level" type="VARCHAR(50)"/>
+            <column name="grade" type="INT"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="designation" schemaName="${schema}" indexName="idx_designation_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="designation" schemaName="${schema}" indexName="idx_designation_department">
+            <column name="department_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="designation" baseColumnNames="department_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id"
+                                 constraintName="fk_designation_department" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_designation_updated_at BEFORE UPDATE ON "${schema}".designation FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_designation_updated_at ON "${schema}".designation;</sql>
+            <dropTable tableName="designation" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

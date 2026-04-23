@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0025 — WORKFLOW & APPROVAL (ERD §25). Enables workflow_instance_id FKs on other domains in follow-up changesets. -->
+
+    <changeSet id="0025-001-create-workflow" author="kabipay-dev">
+        <createTable tableName="workflow" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="entity_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="workflow" schemaName="${schema}" indexName="idx_workflow_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_workflow_updated_at BEFORE UPDATE ON "${schema}".workflow FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_workflow_updated_at ON "${schema}".workflow;</sql>
+            <dropTable tableName="workflow" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0025-002-create-workflow-step" author="kabipay-dev">
+        <createTable tableName="workflow_step" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="workflow_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="sequence_order" type="INT"><constraints nullable="false"/></column>
+            <column name="step_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="approver_type" type="VARCHAR(50)"/>
+            <column name="approver_role_id" type="UUID"/>
+            <column name="can_skip" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="sla_hours" type="INT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="workflow_step" schemaName="${schema}"
+                             columnNames="workflow_id,sequence_order"
+                             constraintName="uq_workflow_step_workflow_seq"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="workflow_step" baseColumnNames="workflow_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="workflow" referencedColumnNames="id"
+                                 constraintName="fk_workflow_step_workflow" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="workflow_step" baseColumnNames="approver_role_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="role" referencedColumnNames="id"
+                                 constraintName="fk_workflow_step_approver_role" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_workflow_step_updated_at BEFORE UPDATE ON "${schema}".workflow_step FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_workflow_step_updated_at ON "${schema}".workflow_step;</sql>
+            <dropTable tableName="workflow_step" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0025-003-create-workflow-instance" author="kabipay-dev">
+        <createTable tableName="workflow_instance" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="workflow_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="entity_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="entity_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="current_step_id" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="completed_at" type="TIMESTAMPTZ"/>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="workflow_instance" schemaName="${schema}" indexName="idx_workflow_instance_entity">
+            <column name="entity_type"/>
+            <column name="entity_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="workflow_instance" baseColumnNames="workflow_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="workflow" referencedColumnNames="id"
+                                 constraintName="fk_workflow_instance_workflow" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="workflow_instance" baseColumnNames="current_step_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="workflow_step" referencedColumnNames="id"
+                                 constraintName="fk_workflow_instance_current_step" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_workflow_instance_updated_at BEFORE UPDATE ON "${schema}".workflow_instance FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_workflow_instance_updated_at ON "${schema}".workflow_instance;</sql>
+            <dropTable tableName="workflow_instance" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0025-004-create-workflow-action" author="kabipay-dev">
+        <createTable tableName="workflow_action" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="instance_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="workflow_step_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="performed_by" type="UUID"/>
+            <column name="action" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="remarks" type="TEXT"/>
+            <column name="acted_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="workflow_action" schemaName="${schema}" indexName="idx_workflow_action_instance">
+            <column name="instance_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="workflow_action" baseColumnNames="instance_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="workflow_instance" referencedColumnNames="id"
+                                 constraintName="fk_workflow_action_instance" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="workflow_action" baseColumnNames="workflow_step_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="workflow_step" referencedColumnNames="id"
+                                 constraintName="fk_workflow_action_step" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="workflow_action" baseColumnNames="performed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_workflow_action_performed_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_workflow_action_updated_at BEFORE UPDATE ON "${schema}".workflow_action FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_workflow_action_updated_at ON "${schema}".workflow_action;</sql>
+            <dropTable tableName="workflow_action" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0025-005-create-approval-matrix" author="kabipay-dev">
+        <createTable tableName="approval_matrix" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="entity_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="approval_matrix" schemaName="${schema}" indexName="idx_approval_matrix_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_approval_matrix_updated_at BEFORE UPDATE ON "${schema}".approval_matrix FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_approval_matrix_updated_at ON "${schema}".approval_matrix;</sql>
+            <dropTable tableName="approval_matrix" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0025-006-create-approval-rule" author="kabipay-dev">
+        <createTable tableName="approval_rule" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="approval_matrix_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="sequence_order" type="INT"><constraints nullable="false"/></column>
+            <column name="approver_type" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="approver_role_id" type="UUID"/>
+            <column name="approver_employee_id" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="approval_rule" schemaName="${schema}"
+                             columnNames="approval_matrix_id,sequence_order"
+                             constraintName="uq_approval_rule_matrix_seq"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="approval_rule" baseColumnNames="approval_matrix_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="approval_matrix" referencedColumnNames="id"
+                                 constraintName="fk_approval_rule_matrix" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="approval_rule" baseColumnNames="approver_role_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="role" referencedColumnNames="id"
+                                 constraintName="fk_approval_rule_role" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="approval_rule" baseColumnNames="approver_employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_approval_rule_employee" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_approval_rule_updated_at BEFORE UPDATE ON "${schema}".approval_rule FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_approval_rule_updated_at ON "${schema}".approval_rule;</sql>
+            <dropTable tableName="approval_rule" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0025-007-create-approval-condition" author="kabipay-dev">
+        <createTable tableName="approval_condition" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="approval_rule_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="field_name" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="operator" type="VARCHAR(20)"><constraints nullable="false"/></column>
+            <column name="value" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="approval_condition" schemaName="${schema}" indexName="idx_approval_condition_rule">
+            <column name="approval_rule_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="approval_condition" baseColumnNames="approval_rule_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="approval_rule" referencedColumnNames="id"
+                                 constraintName="fk_approval_condition_rule" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_approval_condition_updated_at BEFORE UPDATE ON "${schema}".approval_condition FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_approval_condition_updated_at ON "${schema}".approval_condition;</sql>
+            <dropTable tableName="approval_condition" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

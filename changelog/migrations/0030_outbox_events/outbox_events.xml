@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0030 — OUTBOX (ERD §30, Gap G). Status transitions update processed_at; no updated_at column per ERD. -->
+
+    <changeSet id="0030-001-create-outbox-event" author="kabipay-dev">
+        <createTable tableName="outbox_event" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="aggregate_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="aggregate_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="event_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="payload" type="JSONB"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="retry_count" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="last_error" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="processed_at" type="TIMESTAMPTZ"/>
+        </createTable>
+        <createIndex tableName="outbox_event" schemaName="${schema}" indexName="idx_outbox_event_status_created">
+            <column name="status"/>
+            <column name="created_at"/>
+        </createIndex>
+        <createIndex tableName="outbox_event" schemaName="${schema}" indexName="idx_outbox_event_aggregate">
+            <column name="aggregate_type"/>
+            <column name="aggregate_id"/>
+        </createIndex>
+        <rollback>
+            <dropTable tableName="outbox_event" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

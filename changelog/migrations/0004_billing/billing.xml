@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      DOMAIN 0004 - BILLING & PAYMENTS
+      Cron-driven monthly billing_cycle creates invoices with line items.
+      invoice_line_item.discount_source records which override was applied (audit).
+    -->
+
+    <!-- ================== BILLING_CYCLE ================== -->
+    <changeSet id="0004-001-create-billing-cycle" author="kabipay-dev">
+        <comment>One row per tenant per billing period. Cron creates next cycle on current close.</comment>
+        <createTable tableName="billing_cycle" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="period_start" type="DATE"><constraints nullable="false"/></column>
+            <column name="period_end" type="DATE"><constraints nullable="false"/></column>
+            <column name="frequency" type="VARCHAR(50)" defaultValue="MONTHLY"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)" defaultValue="PENDING"><constraints nullable="false"/></column>
+            <column name="auto_generated_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.billing_cycle ADD CONSTRAINT chk_billing_cycle_status CHECK (status IN ('PENDING','INVOICED','CLOSED','SKIPPED'));</sql>
+        <sql>ALTER TABLE kabipay_ops.billing_cycle ADD CONSTRAINT chk_billing_cycle_frequency CHECK (frequency IN ('MONTHLY','QUARTERLY','ANNUAL'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="billing_cycle" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_billing_cycle_tenant" onDelete="CASCADE"/>
+        <addUniqueConstraint tableName="billing_cycle" schemaName="kabipay_ops"
+                             columnNames="tenant_id,period_start,period_end"
+                             constraintName="uq_billing_cycle_period"/>
+        <createIndex tableName="billing_cycle" schemaName="kabipay_ops" indexName="idx_billing_cycle_tenant_status">
+            <column name="tenant_id"/><column name="status"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_billing_cycle_updated_at BEFORE UPDATE ON kabipay_ops.billing_cycle FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_billing_cycle_updated_at ON kabipay_ops.billing_cycle;</sql>
+            <dropTable tableName="billing_cycle" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== INVOICE ================== -->
+    <changeSet id="0004-002-create-invoice" author="kabipay-dev">
+        <comment>Header record for a generated invoice.</comment>
+        <createTable tableName="invoice" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="billing_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="invoice_number" type="VARCHAR(100)"><constraints nullable="false" unique="true" uniqueConstraintName="uq_invoice_number"/></column>
+            <column name="subtotal" type="NUMERIC(15,4)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="discount_total" type="NUMERIC(15,4)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="tax_amount" type="NUMERIC(15,4)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="total_amount" type="NUMERIC(15,4)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="currency" type="VARCHAR(10)" defaultValue="INR"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)" defaultValue="PENDING"><constraints nullable="false"/></column>
+            <column name="due_date" type="DATE"/>
+            <column name="sent_at" type="TIMESTAMPTZ"/>
+            <column name="paid_at" type="TIMESTAMPTZ"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.invoice ADD CONSTRAINT chk_invoice_status CHECK (status IN ('DRAFT','PENDING','SENT','PAID','OVERDUE','CANCELLED','DISPUTED'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="invoice" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_invoice_tenant" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="invoice" baseColumnNames="billing_cycle_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="billing_cycle" referencedColumnNames="id"
+                                 constraintName="fk_invoice_billing_cycle" onDelete="RESTRICT"/>
+        <createIndex tableName="invoice" schemaName="kabipay_ops" indexName="idx_invoice_tenant_status">
+            <column name="tenant_id"/><column name="status"/>
+        </createIndex>
+        <createIndex tableName="invoice" schemaName="kabipay_ops" indexName="idx_invoice_due_date">
+            <column name="due_date"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_invoice_updated_at BEFORE UPDATE ON kabipay_ops.invoice FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_invoice_updated_at ON kabipay_ops.invoice;</sql>
+            <dropTable tableName="invoice" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== INVOICE_LINE_ITEM ================== -->
+    <changeSet id="0004-003-create-invoice-line-item" author="kabipay-dev">
+        <comment>One line per subscription per invoice. Records applied discount for audit.</comment>
+        <createTable tableName="invoice_line_item" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="invoice_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="subscription_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="module_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="description" type="VARCHAR(500)"/>
+            <column name="units_consumed" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="unit_price" type="NUMERIC(15,4)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="gross_amount" type="NUMERIC(15,4)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="discount_applied" type="NUMERIC(15,4)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="discount_source" type="VARCHAR(255)"/>
+            <column name="line_total" type="NUMERIC(15,4)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="invoice_line_item" baseColumnNames="invoice_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="invoice" referencedColumnNames="id"
+                                 constraintName="fk_invoice_line_item_invoice" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="invoice_line_item" baseColumnNames="subscription_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant_subscription" referencedColumnNames="id"
+                                 constraintName="fk_invoice_line_item_subscription" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="invoice_line_item" baseColumnNames="module_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="module" referencedColumnNames="id"
+                                 constraintName="fk_invoice_line_item_module" onDelete="RESTRICT"/>
+        <createIndex tableName="invoice_line_item" schemaName="kabipay_ops" indexName="idx_invoice_line_item_invoice">
+            <column name="invoice_id"/>
+        </createIndex>
+        <rollback>
+            <dropTable tableName="invoice_line_item" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== PAYMENT ================== -->
+    <changeSet id="0004-004-create-payment" author="kabipay-dev">
+        <comment>Payment received against an invoice via gateway.</comment>
+        <createTable tableName="payment" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="invoice_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="amount" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="payment_method" type="VARCHAR(50)"/>
+            <column name="status" type="VARCHAR(50)" defaultValue="PENDING"><constraints nullable="false"/></column>
+            <column name="paid_at" type="TIMESTAMPTZ"/>
+            <column name="gateway_ref" type="VARCHAR(255)"/>
+            <column name="failure_reason" type="VARCHAR(500)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.payment ADD CONSTRAINT chk_payment_status CHECK (status IN ('PENDING','PROCESSING','SUCCEEDED','FAILED','REFUNDED'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="payment" baseColumnNames="invoice_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="invoice" referencedColumnNames="id"
+                                 constraintName="fk_payment_invoice" onDelete="RESTRICT"/>
+        <createIndex tableName="payment" schemaName="kabipay_ops" indexName="idx_payment_invoice">
+            <column name="invoice_id"/>
+        </createIndex>
+        <createIndex tableName="payment" schemaName="kabipay_ops" indexName="idx_payment_gateway_ref">
+            <column name="gateway_ref"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_payment_updated_at BEFORE UPDATE ON kabipay_ops.payment FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_payment_updated_at ON kabipay_ops.payment;</sql>
+            <dropTable tableName="payment" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== CREDIT_NOTE ================== -->
+    <changeSet id="0004-005-create-credit-note" author="kabipay-dev">
+        <comment>Credit note against an invoice (refund, adjustment).</comment>
+        <createTable tableName="credit_note" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="invoice_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="amount" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="reason" type="VARCHAR(500)"/>
+            <column name="status" type="VARCHAR(50)" defaultValue="ISSUED"><constraints nullable="false"/></column>
+            <column name="issued_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.credit_note ADD CONSTRAINT chk_credit_note_status CHECK (status IN ('ISSUED','APPLIED','VOIDED'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="credit_note" baseColumnNames="invoice_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="invoice" referencedColumnNames="id"
+                                 constraintName="fk_credit_note_invoice" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="credit_note" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_credit_note_tenant" onDelete="RESTRICT"/>
+        <createIndex tableName="credit_note" schemaName="kabipay_ops" indexName="idx_credit_note_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_credit_note_updated_at BEFORE UPDATE ON kabipay_ops.credit_note FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_credit_note_updated_at ON kabipay_ops.credit_note;</sql>
+            <dropTable tableName="credit_note" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

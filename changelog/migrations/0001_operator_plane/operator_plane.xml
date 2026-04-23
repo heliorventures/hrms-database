@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      DOMAIN 0001 - OPERATOR PLANE
+      KabiPay's internal staff portal. Fully isolated from client USER/ROLE tables.
+      Account managers receive scoped tenant access via operator_tenant_access.
+    -->
+
+    <!-- ================== OPERATOR_USER ================== -->
+    <changeSet id="0001-001-create-operator-user" author="kabipay-dev">
+        <comment>KabiPay internal staff login record. Separate JWT issuer from client plane.</comment>
+        <createTable tableName="operator_user" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="email" type="VARCHAR(255)"><constraints nullable="false" unique="true" uniqueConstraintName="uq_operator_user_email"/></column>
+            <column name="password_hash" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="full_name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="phone" type="VARCHAR(50)"/>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="last_login_at" type="TIMESTAMPTZ"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>CREATE TRIGGER trg_operator_user_updated_at BEFORE UPDATE ON kabipay_ops.operator_user FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_operator_user_updated_at ON kabipay_ops.operator_user;</sql>
+            <dropTable tableName="operator_user" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== OPERATOR_ROLE ================== -->
+    <changeSet id="0001-002-create-operator-role" author="kabipay-dev">
+        <comment>Roles available in the operator plane (e.g. super_admin, account_manager, billing_ops).</comment>
+        <createTable tableName="operator_role" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="code" type="VARCHAR(100)"><constraints nullable="false" unique="true" uniqueConstraintName="uq_operator_role_code"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="VARCHAR(500)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>CREATE TRIGGER trg_operator_role_updated_at BEFORE UPDATE ON kabipay_ops.operator_role FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_operator_role_updated_at ON kabipay_ops.operator_role;</sql>
+            <dropTable tableName="operator_role" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== OPERATOR_PERMISSION ================== -->
+    <changeSet id="0001-003-create-operator-permission" author="kabipay-dev">
+        <comment>Permissions in the operator plane. resource + action uniquely identifies a permission.</comment>
+        <createTable tableName="operator_permission" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="resource" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="action" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="description" type="VARCHAR(500)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="operator_permission" schemaName="kabipay_ops"
+                             columnNames="resource,action"
+                             constraintName="uq_operator_permission_resource_action"/>
+        <sql>CREATE TRIGGER trg_operator_permission_updated_at BEFORE UPDATE ON kabipay_ops.operator_permission FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_operator_permission_updated_at ON kabipay_ops.operator_permission;</sql>
+            <dropTable tableName="operator_permission" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== OPERATOR_USER_ROLE ================== -->
+    <changeSet id="0001-004-create-operator-user-role" author="kabipay-dev">
+        <comment>Junction table mapping operator users to roles.</comment>
+        <createTable tableName="operator_user_role" schemaName="kabipay_ops">
+            <column name="operator_user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="operator_role_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="assigned_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="operator_user_role" schemaName="kabipay_ops"
+                       columnNames="operator_user_id,operator_role_id"
+                       constraintName="pk_operator_user_role"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_user_role" baseColumnNames="operator_user_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_user" referencedColumnNames="id"
+                                 constraintName="fk_operator_user_role_user" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_user_role" baseColumnNames="operator_role_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_role" referencedColumnNames="id"
+                                 constraintName="fk_operator_user_role_role" onDelete="CASCADE"/>
+        <rollback>
+            <dropTable tableName="operator_user_role" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== OPERATOR_ROLE_PERMISSION ================== -->
+    <changeSet id="0001-005-create-operator-role-permission" author="kabipay-dev">
+        <comment>Junction table mapping operator roles to permissions.</comment>
+        <createTable tableName="operator_role_permission" schemaName="kabipay_ops">
+            <column name="operator_role_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="operator_permission_id" type="UUID"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="operator_role_permission" schemaName="kabipay_ops"
+                       columnNames="operator_role_id,operator_permission_id"
+                       constraintName="pk_operator_role_permission"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_role_permission" baseColumnNames="operator_role_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_role" referencedColumnNames="id"
+                                 constraintName="fk_operator_role_permission_role" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_role_permission" baseColumnNames="operator_permission_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_permission" referencedColumnNames="id"
+                                 constraintName="fk_operator_role_permission_perm" onDelete="CASCADE"/>
+        <rollback>
+            <dropTable tableName="operator_role_permission" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== OPERATOR_TENANT_ACCESS ================== -->
+    <!-- NB: tenant FK is added in 0002 after the tenant table exists. -->
+    <changeSet id="0001-006-create-operator-tenant-access" author="kabipay-dev">
+        <comment>Scopes an operator user to a set of tenants. Account managers only see their tenants.
+                 access_level values: VIEW, MANAGE, FULL.</comment>
+        <createTable tableName="operator_tenant_access" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="operator_user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="access_level" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="granted_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="expires_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.operator_tenant_access ADD CONSTRAINT chk_operator_tenant_access_level CHECK (access_level IN ('VIEW','MANAGE','FULL'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_tenant_access" baseColumnNames="operator_user_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_user" referencedColumnNames="id"
+                                 constraintName="fk_operator_tenant_access_user" onDelete="CASCADE"/>
+        <addUniqueConstraint tableName="operator_tenant_access" schemaName="kabipay_ops"
+                             columnNames="operator_user_id,tenant_id"
+                             constraintName="uq_operator_tenant_access"/>
+        <createIndex tableName="operator_tenant_access" schemaName="kabipay_ops" indexName="idx_operator_tenant_access_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_operator_tenant_access_updated_at BEFORE UPDATE ON kabipay_ops.operator_tenant_access FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_operator_tenant_access_updated_at ON kabipay_ops.operator_tenant_access;</sql>
+            <dropTable tableName="operator_tenant_access" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== OPERATOR_AUDIT_LOG ================== -->
+    <changeSet id="0001-007-create-operator-audit-log" author="kabipay-dev">
+        <comment>Append-only audit trail of all operator actions.</comment>
+        <createTable tableName="operator_audit_log" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="operator_user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="tenant_id" type="UUID"/>
+            <column name="entity_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="entity_id" type="UUID"/>
+            <column name="action" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="before_state" type="JSONB"/>
+            <column name="after_state" type="JSONB"/>
+            <column name="ip_address" type="VARCHAR(45)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_audit_log" baseColumnNames="operator_user_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_user" referencedColumnNames="id"
+                                 constraintName="fk_operator_audit_log_user" onDelete="RESTRICT"/>
+        <createIndex tableName="operator_audit_log" schemaName="kabipay_ops" indexName="idx_operator_audit_log_user">
+            <column name="operator_user_id"/>
+        </createIndex>
+        <createIndex tableName="operator_audit_log" schemaName="kabipay_ops" indexName="idx_operator_audit_log_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="operator_audit_log" schemaName="kabipay_ops" indexName="idx_operator_audit_log_entity">
+            <column name="entity_type"/><column name="entity_id"/>
+        </createIndex>
+        <rollback>
+            <dropTable tableName="operator_audit_log" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== OPERATOR_SUPPORT_TICKET ================== -->
+    <!-- tenant FK added in 0002 after tenant table exists -->
+    <changeSet id="0001-008-create-operator-support-ticket" author="kabipay-dev">
+        <comment>Support tickets raised by tenants and handled by operator staff.</comment>
+        <createTable tableName="operator_support_ticket" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="assigned_to" type="UUID"/>
+            <column name="subject" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)" defaultValue="OPEN"><constraints nullable="false"/></column>
+            <column name="priority" type="VARCHAR(50)" defaultValue="NORMAL"><constraints nullable="false"/></column>
+            <column name="opened_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="resolved_at" type="TIMESTAMPTZ"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.operator_support_ticket ADD CONSTRAINT chk_ticket_status CHECK (status IN ('OPEN','IN_PROGRESS','WAITING','RESOLVED','CLOSED'));</sql>
+        <sql>ALTER TABLE kabipay_ops.operator_support_ticket ADD CONSTRAINT chk_ticket_priority CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_support_ticket" baseColumnNames="assigned_to"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_user" referencedColumnNames="id"
+                                 constraintName="fk_support_ticket_assigned_to" onDelete="SET NULL"/>
+        <createIndex tableName="operator_support_ticket" schemaName="kabipay_ops" indexName="idx_operator_support_ticket_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="operator_support_ticket" schemaName="kabipay_ops" indexName="idx_operator_support_ticket_status">
+            <column name="status"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_operator_support_ticket_updated_at BEFORE UPDATE ON kabipay_ops.operator_support_ticket FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_operator_support_ticket_updated_at ON kabipay_ops.operator_support_ticket;</sql>
+            <dropTable tableName="operator_support_ticket" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== OPERATOR_SESSION ================== -->
+    <changeSet id="0001-009-create-operator-session" author="kabipay-dev">
+        <comment>Active refresh-token sessions for the operator plane. One row per
+                 issued refresh token; rotated on every /auth/ops/refresh call.
+                 `token_hash` stores a SHA-256 of the raw refresh token — the raw
+                 value never touches the database.</comment>
+        <createTable tableName="operator_session" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="operator_user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="token_hash" type="VARCHAR(128)"><constraints nullable="false" unique="true" uniqueConstraintName="uq_operator_session_token_hash"/></column>
+            <column name="ip_address" type="VARCHAR(45)"/>
+            <column name="user_agent" type="VARCHAR(500)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="expires_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="operator_session" baseColumnNames="operator_user_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_user" referencedColumnNames="id"
+                                 constraintName="fk_operator_session_user" onDelete="CASCADE"/>
+        <createIndex tableName="operator_session" schemaName="kabipay_ops" indexName="idx_operator_session_user">
+            <column name="operator_user_id"/>
+        </createIndex>
+        <createIndex tableName="operator_session" schemaName="kabipay_ops" indexName="idx_operator_session_expires_at">
+            <column name="expires_at"/>
+        </createIndex>
+        <rollback>
+            <dropTable tableName="operator_session" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

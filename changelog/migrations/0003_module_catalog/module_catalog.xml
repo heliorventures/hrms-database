@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      DOMAIN 0003 - MODULE CATALOG & SUBSCRIPTION
+      Product catalog of modules (Leave, Payroll, etc.) with flexible pricing models.
+      Best-deal-wins override logic is applied at invoice generation time.
+      tenant_subscription.current_seat_usage is hard-blocked at contracted_seats.
+    -->
+
+    <!-- ================== MODULE ================== -->
+    <changeSet id="0003-001-create-module" author="kabipay-dev">
+        <comment>Catalog of subscribable modules (Leave, Payroll, Recruitment, etc.).</comment>
+        <createTable tableName="module" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="code" type="VARCHAR(100)"><constraints nullable="false" unique="true" uniqueConstraintName="uq_module_code"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="category" type="VARCHAR(100)"/>
+            <column name="description" type="VARCHAR(1000)"/>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="display_order" type="INT" defaultValueNumeric="0"/>
+            <column name="is_core" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>CREATE TRIGGER trg_module_updated_at BEFORE UPDATE ON kabipay_ops.module FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_module_updated_at ON kabipay_ops.module;</sql>
+            <dropTable tableName="module" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== MODULE_DEPENDENCY ================== -->
+    <changeSet id="0003-002-create-module-dependency" author="kabipay-dev">
+        <comment>Module A depends on Module B (e.g. Payroll depends on Employee Core).</comment>
+        <createTable tableName="module_dependency" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="module_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="depends_on_module_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="module_dependency" schemaName="kabipay_ops"
+                             columnNames="module_id,depends_on_module_id"
+                             constraintName="uq_module_dependency"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="module_dependency" baseColumnNames="module_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="module" referencedColumnNames="id"
+                                 constraintName="fk_module_dependency_module" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="module_dependency" baseColumnNames="depends_on_module_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="module" referencedColumnNames="id"
+                                 constraintName="fk_module_dependency_depends_on" onDelete="CASCADE"/>
+        <rollback>
+            <dropTable tableName="module_dependency" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== MODULE_PRICING ================== -->
+    <changeSet id="0003-003-create-module-pricing" author="kabipay-dev">
+        <comment>Pricing definitions. pricing_model: FLAT | PER_SEAT | TIERED. is_current = true for the
+                 effective price; only one current row per (module_id).</comment>
+        <createTable tableName="module_pricing" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="module_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="pricing_model" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="base_price" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="billing_unit" type="VARCHAR(50)"/>
+            <column name="min_units" type="INT" defaultValueNumeric="1"/>
+            <column name="currency" type="VARCHAR(10)" defaultValue="INR"><constraints nullable="false"/></column>
+            <column name="effective_from" type="DATE"><constraints nullable="false"/></column>
+            <column name="effective_to" type="DATE"/>
+            <column name="is_current" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.module_pricing ADD CONSTRAINT chk_module_pricing_model CHECK (pricing_model IN ('FLAT','PER_SEAT','TIERED'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="module_pricing" baseColumnNames="module_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="module" referencedColumnNames="id"
+                                 constraintName="fk_module_pricing_module" onDelete="CASCADE"/>
+        <createIndex tableName="module_pricing" schemaName="kabipay_ops" indexName="idx_module_pricing_module">
+            <column name="module_id"/>
+        </createIndex>
+        <sql>CREATE UNIQUE INDEX uq_module_pricing_current ON kabipay_ops.module_pricing (module_id) WHERE is_current;</sql>
+        <sql>CREATE TRIGGER trg_module_pricing_updated_at BEFORE UPDATE ON kabipay_ops.module_pricing FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_module_pricing_updated_at ON kabipay_ops.module_pricing;</sql>
+            <sql>DROP INDEX IF EXISTS kabipay_ops.uq_module_pricing_current;</sql>
+            <dropTable tableName="module_pricing" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== PRICING_TIER ================== -->
+    <changeSet id="0003-004-create-pricing-tier" author="kabipay-dev">
+        <comment>Volume tiers for TIERED pricing_model.</comment>
+        <createTable tableName="pricing_tier" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="module_pricing_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="units_from" type="INT"><constraints nullable="false"/></column>
+            <column name="units_to" type="INT"/>
+            <column name="price_per_unit" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="pricing_tier" baseColumnNames="module_pricing_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="module_pricing" referencedColumnNames="id"
+                                 constraintName="fk_pricing_tier_module_pricing" onDelete="CASCADE"/>
+        <createIndex tableName="pricing_tier" schemaName="kabipay_ops" indexName="idx_pricing_tier_pricing">
+            <column name="module_pricing_id"/>
+        </createIndex>
+        <rollback>
+            <dropTable tableName="pricing_tier" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== CLIENT_PRICING_OVERRIDE ================== -->
+    <changeSet id="0003-005-create-client-pricing-override" author="kabipay-dev">
+        <comment>Per-tenant discount/price override. Multiple may be active; billing applies best-deal-wins.</comment>
+        <createTable tableName="client_pricing_override" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="module_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="override_type" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="override_value" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="valid_from" type="DATE"><constraints nullable="false"/></column>
+            <column name="valid_to" type="DATE"/>
+            <column name="reason" type="VARCHAR(500)"/>
+            <column name="approved_by" type="UUID"/>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.client_pricing_override ADD CONSTRAINT chk_override_type CHECK (override_type IN ('PERCENTAGE','FIXED_AMOUNT','FIXED_PRICE'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="client_pricing_override" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_client_pricing_override_tenant" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="client_pricing_override" baseColumnNames="module_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="module" referencedColumnNames="id"
+                                 constraintName="fk_client_pricing_override_module" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="client_pricing_override" baseColumnNames="approved_by"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_user" referencedColumnNames="id"
+                                 constraintName="fk_client_pricing_override_approver" onDelete="SET NULL"/>
+        <createIndex tableName="client_pricing_override" schemaName="kabipay_ops" indexName="idx_cpo_tenant_module">
+            <column name="tenant_id"/><column name="module_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_client_pricing_override_updated_at BEFORE UPDATE ON kabipay_ops.client_pricing_override FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_client_pricing_override_updated_at ON kabipay_ops.client_pricing_override;</sql>
+            <dropTable tableName="client_pricing_override" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== TENANT_SUBSCRIPTION ================== -->
+    <changeSet id="0003-006-create-tenant-subscription" author="kabipay-dev">
+        <comment>Active subscription of a tenant to a module. Seat enforcement: current_seat_usage must
+                 never exceed contracted_seats - enforced at application layer in kabipay-tenant service.</comment>
+        <createTable tableName="tenant_subscription" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="module_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE"><constraints nullable="false"/></column>
+            <column name="activated_at" type="DATE"/>
+            <column name="expires_at" type="DATE"/>
+            <column name="contracted_seats" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="current_seat_usage" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="overage_policy" type="VARCHAR(50)" defaultValue="BLOCK"><constraints nullable="false"/></column>
+            <column name="approved_by" type="UUID"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.tenant_subscription ADD CONSTRAINT chk_subscription_status CHECK (status IN ('PENDING','ACTIVE','SUSPENDED','CANCELLED','EXPIRED'));</sql>
+        <sql>ALTER TABLE kabipay_ops.tenant_subscription ADD CONSTRAINT chk_overage_policy CHECK (overage_policy IN ('BLOCK','ALLOW','NOTIFY'));</sql>
+        <sql>ALTER TABLE kabipay_ops.tenant_subscription ADD CONSTRAINT chk_seat_usage_non_negative CHECK (current_seat_usage &gt;= 0);</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="tenant_subscription" baseColumnNames="tenant_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant" referencedColumnNames="id"
+                                 constraintName="fk_tenant_subscription_tenant" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="tenant_subscription" baseColumnNames="module_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="module" referencedColumnNames="id"
+                                 constraintName="fk_tenant_subscription_module" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="tenant_subscription" baseColumnNames="approved_by"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="operator_user" referencedColumnNames="id"
+                                 constraintName="fk_tenant_subscription_approver" onDelete="SET NULL"/>
+        <addUniqueConstraint tableName="tenant_subscription" schemaName="kabipay_ops"
+                             columnNames="tenant_id,module_id"
+                             constraintName="uq_tenant_subscription_tenant_module"/>
+        <createIndex tableName="tenant_subscription" schemaName="kabipay_ops" indexName="idx_tenant_subscription_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="tenant_subscription" schemaName="kabipay_ops" indexName="idx_tenant_subscription_status">
+            <column name="status"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_tenant_subscription_updated_at BEFORE UPDATE ON kabipay_ops.tenant_subscription FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_tenant_subscription_updated_at ON kabipay_ops.tenant_subscription;</sql>
+            <dropTable tableName="tenant_subscription" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ================== SEAT_USAGE_LOG ================== -->
+    <changeSet id="0003-007-create-seat-usage-log" author="kabipay-dev">
+        <comment>Append-only log of seat add/remove operations for audit and billing reconciliation.</comment>
+        <createTable tableName="seat_usage_log" schemaName="kabipay_ops">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="subscription_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="user_id" type="UUID"/>
+            <column name="action" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="seat_count_after" type="INT"><constraints nullable="false"/></column>
+            <column name="triggered_by" type="VARCHAR(100)"/>
+            <column name="changed_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>ALTER TABLE kabipay_ops.seat_usage_log ADD CONSTRAINT chk_seat_log_action CHECK (action IN ('ADD','REMOVE','RESET'));</sql>
+        <addForeignKeyConstraint baseTableSchemaName="kabipay_ops" baseTableName="seat_usage_log" baseColumnNames="subscription_id"
+                                 referencedTableSchemaName="kabipay_ops" referencedTableName="tenant_subscription" referencedColumnNames="id"
+                                 constraintName="fk_seat_usage_log_subscription" onDelete="CASCADE"/>
+        <createIndex tableName="seat_usage_log" schemaName="kabipay_ops" indexName="idx_seat_usage_log_subscription">
+            <column name="subscription_id"/>
+        </createIndex>
+        <rollback>
+            <dropTable tableName="seat_usage_log" schemaName="kabipay_ops"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

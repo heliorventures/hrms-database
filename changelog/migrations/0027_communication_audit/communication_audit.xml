@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0027 — COMMUNICATION + AUDIT (ERD §27–28). audit_log is append-only (no updated_at trigger). -->
+
+    <changeSet id="0027-001-create-announcement" author="kabipay-dev">
+        <createTable tableName="announcement" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_by" type="UUID"/>
+            <column name="title" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="body" type="TEXT"/>
+            <column name="target_audience" type="VARCHAR(100)"/>
+            <column name="target_department_id" type="UUID"/>
+            <column name="target_location_id" type="UUID"/>
+            <column name="publish_at" type="TIMESTAMPTZ"/>
+            <column name="expires_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="announcement" schemaName="${schema}" indexName="idx_announcement_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="announcement" baseColumnNames="created_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_announcement_created_by" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="announcement" baseColumnNames="target_department_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id"
+                                 constraintName="fk_announcement_target_department" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="announcement" baseColumnNames="target_location_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="id"
+                                 constraintName="fk_announcement_target_location" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_announcement_updated_at BEFORE UPDATE ON "${schema}".announcement FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_announcement_updated_at ON "${schema}".announcement;</sql>
+            <dropTable tableName="announcement" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0027-002-create-notification" author="kabipay-dev">
+        <createTable tableName="notification" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="type" type="VARCHAR(100)"/>
+            <column name="title" type="VARCHAR(500)"/>
+            <column name="message" type="TEXT"/>
+            <column name="action_url" type="TEXT"/>
+            <column name="is_read" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="read_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="notification" schemaName="${schema}" indexName="idx_notification_user">
+            <column name="user_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="notification" baseColumnNames="user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_notification_user" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_notification_updated_at BEFORE UPDATE ON "${schema}".notification FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_notification_updated_at ON "${schema}".notification;</sql>
+            <dropTable tableName="notification" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0027-003-create-audit-log" author="kabipay-dev">
+        <createTable tableName="audit_log" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="user_id" type="UUID"/>
+            <column name="entity_type" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="entity_id" type="UUID"/>
+            <column name="action" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="before_state" type="JSONB"/>
+            <column name="after_state" type="JSONB"/>
+            <column name="ip_address" type="VARCHAR(45)"/>
+            <column name="user_agent" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="audit_log" schemaName="${schema}" indexName="idx_audit_log_tenant_created">
+            <column name="tenant_id"/>
+            <column name="created_at"/>
+        </createIndex>
+        <createIndex tableName="audit_log" schemaName="${schema}" indexName="idx_audit_log_entity">
+            <column name="entity_type"/>
+            <column name="entity_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="audit_log" baseColumnNames="user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_audit_log_user" onDelete="SET NULL"/>
+        <rollback>
+            <dropTable tableName="audit_log" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

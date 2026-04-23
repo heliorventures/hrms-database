@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0020 — SUCCESSION (depends on 0018 review_cycle). -->
+
+    <changeSet id="0020-001-create-competency" author="kabipay-dev">
+        <createTable tableName="competency" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="category" type="VARCHAR(100)"/>
+            <column name="description" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="competency" schemaName="${schema}" indexName="idx_competency_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_competency_updated_at BEFORE UPDATE ON "${schema}".competency FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_competency_updated_at ON "${schema}".competency;</sql>
+            <dropTable tableName="competency" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0020-002-create-competency-level" author="kabipay-dev">
+        <createTable tableName="competency_level" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="competency_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="level" type="INT"><constraints nullable="false"/></column>
+            <column name="descriptor" type="VARCHAR(500)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="competency_level" schemaName="${schema}"
+                             columnNames="competency_id,level"
+                             constraintName="uq_competency_level_comp_level"/>
+        <createIndex tableName="competency_level" schemaName="${schema}" indexName="idx_competency_level_competency">
+            <column name="competency_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="competency_level" baseColumnNames="competency_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="competency" referencedColumnNames="id"
+                                 constraintName="fk_competency_level_competency" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_competency_level_updated_at BEFORE UPDATE ON "${schema}".competency_level FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_competency_level_updated_at ON "${schema}".competency_level;</sql>
+            <dropTable tableName="competency_level" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0020-003-create-designation-competency" author="kabipay-dev">
+        <createTable tableName="designation_competency" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="designation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="competency_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="required_level" type="INT"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="designation_competency" schemaName="${schema}"
+                             columnNames="designation_id,competency_id"
+                             constraintName="uq_designation_competency_des_comp"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="designation_competency" baseColumnNames="designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_designation_competency_designation" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="designation_competency" baseColumnNames="competency_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="competency" referencedColumnNames="id"
+                                 constraintName="fk_designation_competency_competency" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_designation_competency_updated_at BEFORE UPDATE ON "${schema}".designation_competency FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_designation_competency_updated_at ON "${schema}".designation_competency;</sql>
+            <dropTable tableName="designation_competency" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0020-004-create-employee-competency" author="kabipay-dev">
+        <createTable tableName="employee_competency" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="competency_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="current_level" type="INT"><constraints nullable="false"/></column>
+            <column name="assessed_at" type="TIMESTAMPTZ"/>
+            <column name="assessed_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="employee_competency" schemaName="${schema}"
+                             columnNames="employee_id,competency_id"
+                             constraintName="uq_employee_competency_emp_comp"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_competency" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_competency_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_competency" baseColumnNames="competency_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="competency" referencedColumnNames="id"
+                                 constraintName="fk_employee_competency_competency" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_competency" baseColumnNames="assessed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_competency_assessed_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_employee_competency_updated_at BEFORE UPDATE ON "${schema}".employee_competency FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_competency_updated_at ON "${schema}".employee_competency;</sql>
+            <dropTable tableName="employee_competency" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0020-005-create-talent-pool" author="kabipay-dev">
+        <createTable tableName="talent_pool" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="talent_pool" schemaName="${schema}" indexName="idx_talent_pool_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_talent_pool_updated_at BEFORE UPDATE ON "${schema}".talent_pool FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_talent_pool_updated_at ON "${schema}".talent_pool;</sql>
+            <dropTable tableName="talent_pool" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0020-006-create-talent-pool-member" author="kabipay-dev">
+        <createTable tableName="talent_pool_member" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="talent_pool_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="readiness_level" type="VARCHAR(50)"/>
+            <column name="added_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="added_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="talent_pool_member" schemaName="${schema}"
+                             columnNames="talent_pool_id,employee_id"
+                             constraintName="uq_talent_pool_member_pool_emp"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="talent_pool_member" baseColumnNames="talent_pool_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="talent_pool" referencedColumnNames="id"
+                                 constraintName="fk_talent_pool_member_pool" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="talent_pool_member" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_talent_pool_member_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="talent_pool_member" baseColumnNames="added_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_talent_pool_member_added_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_talent_pool_member_updated_at BEFORE UPDATE ON "${schema}".talent_pool_member FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_talent_pool_member_updated_at ON "${schema}".talent_pool_member;</sql>
+            <dropTable tableName="talent_pool_member" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0020-007-create-succession-plan" author="kabipay-dev">
+        <createTable tableName="succession_plan" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="critical_designation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="review_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="succession_plan" schemaName="${schema}" indexName="idx_succession_plan_cycle">
+            <column name="review_cycle_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="succession_plan" baseColumnNames="critical_designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_succession_plan_designation" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="succession_plan" baseColumnNames="review_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="review_cycle" referencedColumnNames="id"
+                                 constraintName="fk_succession_plan_review_cycle" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_succession_plan_updated_at BEFORE UPDATE ON "${schema}".succession_plan FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_succession_plan_updated_at ON "${schema}".succession_plan;</sql>
+            <dropTable tableName="succession_plan" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0020-008-create-succession-candidate" author="kabipay-dev">
+        <createTable tableName="succession_candidate" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="succession_plan_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="rank" type="INT"/>
+            <column name="readiness_level" type="VARCHAR(50)"/>
+            <column name="gap_summary" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="succession_candidate" schemaName="${schema}"
+                             columnNames="succession_plan_id,employee_id"
+                             constraintName="uq_succession_candidate_plan_emp"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="succession_candidate" baseColumnNames="succession_plan_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="succession_plan" referencedColumnNames="id"
+                                 constraintName="fk_succession_candidate_plan" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="succession_candidate" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_succession_candidate_employee" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_succession_candidate_updated_at BEFORE UPDATE ON "${schema}".succession_candidate FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_succession_candidate_updated_at ON "${schema}".succession_candidate;</sql>
+            <dropTable tableName="succession_candidate" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0020-009-create-career-path" author="kabipay-dev">
+        <createTable tableName="career_path" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="from_designation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="to_designation_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="typical_months" type="INT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="career_path" schemaName="${schema}"
+                             columnNames="from_designation_id,to_designation_id"
+                             constraintName="uq_career_path_from_to"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="career_path" baseColumnNames="from_designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_career_path_from" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="career_path" baseColumnNames="to_designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_career_path_to" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_career_path_updated_at BEFORE UPDATE ON "${schema}".career_path FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_career_path_updated_at ON "${schema}".career_path;</sql>
+            <dropTable tableName="career_path" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

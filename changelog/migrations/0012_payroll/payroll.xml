@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0012 — PAYROLL & SALARY COMPONENTS -->
+
+    <changeSet id="0012-001-create-salary-component" author="kabipay-dev">
+        <createTable tableName="salary_component" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="code" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="type" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="is_taxable" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="is_fixed" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="formula_expression" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="salary_component" schemaName="${schema}"
+                             columnNames="tenant_id,code"
+                             constraintName="uq_salary_component_tenant_code"/>
+        <createIndex tableName="salary_component" schemaName="${schema}" indexName="idx_salary_component_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_salary_component_updated_at BEFORE UPDATE ON "${schema}".salary_component FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_salary_component_updated_at ON "${schema}".salary_component;</sql>
+            <dropTable tableName="salary_component" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0012-002-create-salary-structure" author="kabipay-dev">
+        <createTable tableName="salary_structure" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="salary_structure" schemaName="${schema}" indexName="idx_salary_structure_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_salary_structure_updated_at BEFORE UPDATE ON "${schema}".salary_structure FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_salary_structure_updated_at ON "${schema}".salary_structure;</sql>
+            <dropTable tableName="salary_structure" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0012-003-create-salary-structure-component" author="kabipay-dev">
+        <createTable tableName="salary_structure_component" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="salary_structure_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="salary_component_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="amount" type="NUMERIC(15,4)"/>
+            <column name="percentage_of_basic" type="NUMERIC(15,4)"/>
+            <column name="display_order" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="salary_structure_component" schemaName="${schema}" indexName="idx_ssc_structure">
+            <column name="salary_structure_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="salary_structure_component" baseColumnNames="salary_structure_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="salary_structure" referencedColumnNames="id"
+                                 constraintName="fk_ssc_salary_structure" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="salary_structure_component" baseColumnNames="salary_component_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="salary_component" referencedColumnNames="id"
+                                 constraintName="fk_ssc_salary_component" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_salary_structure_component_updated_at BEFORE UPDATE ON "${schema}".salary_structure_component FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_salary_structure_component_updated_at ON "${schema}".salary_structure_component;</sql>
+            <dropTable tableName="salary_structure_component" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0012-004-create-employee-salary-structure" author="kabipay-dev">
+        <createTable tableName="employee_salary_structure" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="salary_structure_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="ctc" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="effective_from" type="DATE"><constraints nullable="false"/></column>
+            <column name="effective_to" type="DATE"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="employee_salary_structure" schemaName="${schema}" indexName="idx_emp_sal_struct_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_salary_structure" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_emp_sal_struct_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_salary_structure" baseColumnNames="salary_structure_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="salary_structure" referencedColumnNames="id"
+                                 constraintName="fk_emp_sal_struct_structure" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_employee_salary_structure_updated_at BEFORE UPDATE ON "${schema}".employee_salary_structure FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_salary_structure_updated_at ON "${schema}".employee_salary_structure;</sql>
+            <dropTable tableName="employee_salary_structure" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0012-005-create-payroll-cycle" author="kabipay-dev">
+        <createTable tableName="payroll_cycle" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="month" type="INT"><constraints nullable="false"/></column>
+            <column name="year" type="INT"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="payment_date" type="DATE"/>
+            <column name="processed_by" type="UUID"/>
+            <column name="processed_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="payroll_cycle" schemaName="${schema}" indexName="idx_payroll_cycle_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex tableName="payroll_cycle" schemaName="${schema}" indexName="idx_payroll_cycle_period">
+            <column name="tenant_id"/>
+            <column name="year"/>
+            <column name="month"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payroll_cycle" baseColumnNames="processed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_payroll_cycle_processed_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_payroll_cycle_updated_at BEFORE UPDATE ON "${schema}".payroll_cycle FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_payroll_cycle_updated_at ON "${schema}".payroll_cycle;</sql>
+            <dropTable tableName="payroll_cycle" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0012-006-create-payslip" author="kabipay-dev">
+        <createTable tableName="payslip" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="payroll_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="gross_salary" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="total_deductions" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="net_salary" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="pf_employee" type="NUMERIC(15,4)"/>
+            <column name="pf_employer" type="NUMERIC(15,4)"/>
+            <column name="esi_employee" type="NUMERIC(15,4)"/>
+            <column name="esi_employer" type="NUMERIC(15,4)"/>
+            <column name="tds_amount" type="NUMERIC(15,4)"/>
+            <column name="professional_tax" type="NUMERIC(15,4)"/>
+            <column name="uan_number" type="VARCHAR(50)"/>
+            <column name="esic_number" type="VARCHAR(50)"/>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="generated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="payslip" schemaName="${schema}" indexName="idx_payslip_employee">
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="payslip" schemaName="${schema}" indexName="idx_payslip_cycle">
+            <column name="payroll_cycle_id"/>
+        </createIndex>
+        <createIndex tableName="payslip" schemaName="${schema}" indexName="idx_payslip_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payslip" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_payslip_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payslip" baseColumnNames="payroll_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="payroll_cycle" referencedColumnNames="id"
+                                 constraintName="fk_payslip_payroll_cycle" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_payslip_updated_at BEFORE UPDATE ON "${schema}".payslip FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_payslip_updated_at ON "${schema}".payslip;</sql>
+            <dropTable tableName="payslip" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0012-007-create-payslip-component" author="kabipay-dev">
+        <createTable tableName="payslip_component" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="payslip_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="salary_component_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="amount" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="component_type" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="payslip_component" schemaName="${schema}" indexName="idx_payslip_component_payslip">
+            <column name="payslip_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payslip_component" baseColumnNames="payslip_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="payslip" referencedColumnNames="id"
+                                 constraintName="fk_payslip_component_payslip" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payslip_component" baseColumnNames="salary_component_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="salary_component" referencedColumnNames="id"
+                                 constraintName="fk_payslip_component_component" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_payslip_component_updated_at BEFORE UPDATE ON "${schema}".payslip_component FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_payslip_component_updated_at ON "${schema}".payslip_component;</sql>
+            <dropTable tableName="payslip_component" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
