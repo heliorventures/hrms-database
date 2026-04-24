@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0033 — TRAVEL REQUEST (M14): trip metadata + approval aligned with expense RBAC. -->
+
+    <changeSet id="0033-001-create-travel-request" author="kabipay-dev">
+        <createTable tableName="travel_request" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="origin_location" type="VARCHAR(255)"/>
+            <column name="destination_location" type="VARCHAR(255)"/>
+            <column name="from_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="to_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="purpose" type="TEXT"><constraints nullable="false"/></column>
+            <column name="estimated_amount" type="NUMERIC(15,4)"/>
+            <column name="currency" type="VARCHAR(10)"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="rejection_reason" type="VARCHAR(1000)"/>
+            <column name="approved_by" type="UUID"/>
+            <column name="submitted_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="travel_request" schemaName="${schema}" indexName="idx_travel_request_tenant_employee">
+            <column name="tenant_id"/>
+            <column name="employee_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="travel_request" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_travel_request_employee" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="travel_request" baseColumnNames="approved_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_travel_request_approved_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_travel_request_updated_at BEFORE UPDATE ON "${schema}".travel_request FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_travel_request_updated_at ON "${schema}".travel_request;</sql>
+            <dropTable tableName="travel_request" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

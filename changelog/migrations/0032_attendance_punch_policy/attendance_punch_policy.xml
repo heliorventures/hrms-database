@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- M11: optional geofence + IP allowlist for live punch (tenant-scoped). -->
+
+    <changeSet id="0032-001-create-attendance-punch-policy" author="kabipay-dev">
+        <createTable tableName="attendance_punch_policy" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="is_enforced" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="site_latitude" type="NUMERIC(10,7)"/>
+            <column name="site_longitude" type="NUMERIC(10,7)"/>
+            <column name="max_distance_meters" type="INT"/>
+            <column name="ip_allowlist" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="attendance_punch_policy" schemaName="${schema}"
+                             columnNames="tenant_id"
+                             constraintName="uq_attendance_punch_policy_tenant"/>
+        <createIndex tableName="attendance_punch_policy" schemaName="${schema}" indexName="idx_attendance_punch_policy_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_attendance_punch_policy_updated_at BEFORE UPDATE ON "${schema}".attendance_punch_policy FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_attendance_punch_policy_updated_at ON "${schema}".attendance_punch_policy;</sql>
+            <dropTable tableName="attendance_punch_policy" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
