@@ -1,6 +1,8 @@
 .generated-tenant-*.properties
 .env
-
+node_modules/
+vendor/
+jre/
 # Excluded from org repos if copied from workspace parent
 STATUS.md
 ROADMAP.md

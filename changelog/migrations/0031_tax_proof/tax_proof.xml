@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!--
+      Per-employee tax deduction **proofs**: declared vs submitted actuals, approval before
+      amounts count toward year-end / `tax_computation.total_deductions`.
+    -->
+    <changeSet id="0031-001-create-tax-proof-line" author="kabipay-dev">
+        <createTable tableName="tax_proof_line" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="tax_config_version_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="fiscal_year" type="INT"><constraints nullable="false"/></column>
+            <column name="section_code" type="VARCHAR(64)"><constraints nullable="false"/></column>
+            <column name="declared_amount" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="actual_amount" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="status" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="rejection_reason" type="TEXT"/>
+            <column name="approved_by" type="UUID"/>
+            <column name="submitted_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="tax_proof_line" schemaName="${schema}" indexName="idx_tax_proof_employee_fy" unique="false">
+            <column name="employee_id"/>
+            <column name="fiscal_year"/>
+        </createIndex>
+        <createIndex tableName="tax_proof_line" schemaName="${schema}" indexName="idx_tax_proof_tenant" unique="false">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addUniqueConstraint tableName="tax_proof_line" schemaName="${schema}"
+            constraintName="uk_tax_proof_emp_config_section" columnNames="employee_id, tax_config_version_id, section_code"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="tax_proof_line" baseColumnNames="employee_id"
+            referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+            constraintName="fk_tax_proof_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="tax_proof_line" baseColumnNames="tax_config_version_id"
+            referencedTableSchemaName="${schema}" referencedTableName="tax_configuration_version" referencedColumnNames="id"
+            constraintName="fk_tax_proof_config_version" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="tax_proof_line" baseColumnNames="file_storage_id"
+            referencedTableSchemaName="${schema}" referencedTableName="file_storage" referencedColumnNames="id"
+            constraintName="fk_tax_proof_file" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="tax_proof_line" baseColumnNames="approved_by"
+            referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+            constraintName="fk_tax_proof_approver" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_tax_proof_line_updated_at BEFORE UPDATE ON "${schema}".tax_proof_line FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_tax_proof_line_updated_at ON "${schema}".tax_proof_line;</sql>
+            <dropTable tableName="tax_proof_line" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

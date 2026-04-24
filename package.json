@@ -1,0 +1,28 @@
+{
+  "name": "kabipay-database",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Liquibase migration project for the KabiPay HRMS PostgreSQL schema (npm install + npm run migrate-ops).",
+  "scripts": {
+    "ensure-java": "node ensure-java.cjs",
+    "migrate-ops": "node migrate-ops.cjs",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KabiPay/kabipay-database.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/KabiPay/kabipay-database/issues"
+  },
+  "homepage": "https://github.com/KabiPay/kabipay-database#readme",
+  "devDependencies": {
+    "dotenv": "^16.4.5",
+    "liquibase": "^4.28.1",
+    "njre": "^1.4.2",
+    "pg": "^8.13.1"
+  }
+}

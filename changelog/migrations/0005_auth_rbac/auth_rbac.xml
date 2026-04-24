@@ -173,4 +173,31 @@
         </rollback>
     </changeSet>
 
+    <!-- ================== PERMISSION_SCOPE (Gap H: data-level RBAC) ================== -->
+    <changeSet id="0005-007-permission-scope" author="kabipay-dev">
+        <comment>Per-role scope (SELF, TEAM, DEPARTMENT, ALL) for a resource+action pair.
+            Merged at login into the JWT; list resolvers filter by widest scope per resource.</comment>
+        <createTable tableName="permission_scope" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="role_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="resource" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="action" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="scope_type" type="VARCHAR(20)"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="permission_scope" schemaName="${schema}"
+                             columnNames="role_id,resource,action"
+                             constraintName="uq_permission_scope_role_resource_action"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="permission_scope" baseColumnNames="role_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="role" referencedColumnNames="id"
+                                 constraintName="fk_permission_scope_role" onDelete="CASCADE"/>
+        <createIndex tableName="permission_scope" schemaName="${schema}" indexName="idx_permission_scope_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <rollback>
+            <dropTable tableName="permission_scope" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

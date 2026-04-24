@@ -6,31 +6,22 @@ Liquibase migration project for the KabiPay HRMS PostgreSQL schema.
 
 | Requirement | Notes |
 |-------------|--------|
-| **PostgreSQL 16** | Required. SQLite/other engines are not supported. |
-| **Docker** (optional) | Recommended on Windows/macOS/Linux to run Postgres locally via `docker-compose.yml`. |
-| **Liquibase 4.27+** *or* **Docker** | To apply changelogs; Docker image `liquibase/liquibase:4.27` is enough. |
+| **Node.js 18+** and **npm** | Used to install bundled Liquibase (npm) + `pg` for SQL. No system `psql` or `liquibase` on PATH. |
+| **JRE 17** | Downloaded into `vendor/` on first `npm run migrate-ops` (via [njre](https://www.npmjs.com/package/njre)), unless `JAVA_HOME` is already set. |
+| **PostgreSQL 16** | Cloud (e.g. Aiven) or local. SQLite/other engines are not supported. |
+| **pgAdmin or another GUI** (optional) | Connect to your host with SSL if your provider requires it (e.g. Aiven). |
 
-## Quick start (run local Postgres + migrations)
+## Quick start (cloud Postgres + migrations)
 
-1. **Optional:** copy Compose env template and edit credentials/ports:
+1. Create a **PostgreSQL 16** service with your provider and note host, port, database name, user, and password.
 
-   ```powershell
-   copy .env.example .env
-   ```
+2. Put connection settings in **`kabipay-database/.env`** (copy from **`.env.example`**) or, in a monorepo, optionally **`kabipay-svc/.env`**: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_SSLMODE=require` when TLS is required. If both files exist, **database wins** for overlapping keys.
 
-2. **Start Postgres** (from this directory):
+3. In **`kabipay-database/`**, run **`npm install`** (pulls Liquibase, PostgreSQL driver, JRE helper, and `pg` — no global tools).
 
-   ```powershell
-   docker compose up -d postgres
-   ```
+4. **Apply ops migrations** once: **`npm run migrate-ops`**. The first run may download a JRE 17 into `vendor/` (gitignored — you can delete `vendor/` anytime; it is re-created when needed).
 
-   Optional pgAdmin: `docker compose --profile tools up -d pgadmin`
-
-3. **Align JDBC with your port** — if you changed `POSTGRES_PORT` in `.env`, set the same host/port in `liquibase.properties` (or pass `--url` when invoking Liquibase). Inside Docker, the service hostname is **`postgres`** and port **`5432`**.
-
-4. **Apply ops migrations** once (see [Run migrations](#run-migrations) below).
-
-5. **Tenant schemas** are created per customer (e.g. provisioning scripts in **kabipay-svc**); then apply `liquibase-tenant.properties` for each schema.
+5. **Provision tenants** and **tenant changelogs** with **`kabipay-svc/scripts/provision-tenant.ps1`** (uses `node run-sql.cjs` + bundled Liquibase; see [Run migrations](#run-migrations)).
 
 ## Topology
 
@@ -46,52 +37,28 @@ Two logical masters, two property files, one PostgreSQL database:
 
 ## Prerequisites
 
-- PostgreSQL 16 running locally: from **this directory**, `docker compose up -d postgres` (see `docker-compose.yml`; optional vars in `.env` from `.env.example`)
-- Liquibase 4.27+ **or** Docker (we'll use Docker — no local Liquibase install needed)
-- For JDBC/Liquibase against the Compose service: match host `localhost`, published `POSTGRES_PORT`, and credentials to `liquibase.properties` / your shell
+- PostgreSQL 16 reachable from your machine (cloud URL + TLS as required).
+- **Node.js**; **`npm install`** in this folder; **`.env`** in this folder (or **`kabipay-svc/.env`**) with the same `POSTGRES_*` (and `KABIPAY_DB_*` for Liquibase) values you use in apps.
 
 ## Run migrations
 
 ### 1. Ops/control plane (run once)
 
-From the `kabipay-database/` folder:
+From the `kabipay-database/` folder, with `kabipay-database/.env` (and/or `kabipay-svc/.env`) configured:
 
-```powershell
-# Using local liquibase binary (set KABIPAY_DB_USER / KABIPAY_DB_PASSWORD in the shell, or edit liquibase.properties):
-liquibase --defaults-file=liquibase.properties update
-
-# Using Docker (recommended — no install needed):
-# Prerequisites: `docker compose up -d postgres` from this folder. Replace user/password if your `.env` differs.
-# On Docker Desktop for Windows, attach to the Compose network so the hostname `postgres` resolves:
-docker run --rm --network kabipay_default `
-  -v ${PWD}:/liquibase/changelog `
-  liquibase/liquibase:4.27 `
-  --searchPath=/liquibase/changelog `
-  --defaultsFile=/liquibase/changelog/liquibase.properties `
-  --url=jdbc:postgresql://postgres:5432/kabipay_dev `
-  --username=kabipay `
-  --password=changeme `
-  update
+```bash
+npm run migrate-ops
 ```
 
-If your Compose project network is not named `kabipay_default`, run `docker network ls` and use the network that lists `kabipay_postgres`, or use `host.docker.internal` instead of `postgres` in the JDBC URL (and omit `--network`).
+The underlying command is `node migrate-ops.cjs` → `run-liquibase.cjs` (JDBC URL; add `?sslmode=require` for managed Postgres). A JRE 17 is placed under `vendor/` if `JAVA_HOME` is not set.
 
 Liquibase history tables are stored in `public` (see `liquibaseSchemaName` in `liquibase.properties`) so the first changeset can create `kabipay_ops`.
 
 ### 2. Tenant plane (run per tenant on provisioning)
 
-Replace `<tenant_id_short>` with the first 8 chars of the tenant UUID (no hyphens):
+Use **`..\kabipay-svc\scripts\provision-tenant.ps1`**; it creates the schema, updates `kabipay_ops.tenant_database`, and runs the tenant Liquibase changelog.
 
-```powershell
-# First, create the tenant schema:
-psql -h localhost -U kabipay -d kabipay_dev -c "CREATE SCHEMA tenant_abc12345;"
-
-# Then apply migrations into that schema:
-liquibase --defaults-file=liquibase-tenant.properties `
-  -Dschema=tenant_abc12345 `
-  --databaseChangelogTableName=tenant_abc12345_databasechangelog `
-  update
-```
+Or use **`node run-sql.cjs`** / **`node run-liquibase.cjs`** (after `npm install`) with a JDBC URL and the same **`.env`** load order — see `provision-tenant.ps1` for the exact pattern.
 
 In production, the `kabipay-tenant` service's provisioning workflow invokes this automatically.
 
