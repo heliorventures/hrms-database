@@ -43,4 +43,17 @@
         </rollback>
     </changeSet>
 
+    <changeSet id="0033-002-travel-request-rejected-by" author="kabipay-dev">
+        <addColumn tableName="travel_request" schemaName="${schema}">
+            <column name="rejected_by" type="UUID"/>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="travel_request" baseColumnNames="rejected_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_travel_request_rejected_by" onDelete="SET NULL"/>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="travel_request" constraintName="fk_travel_request_rejected_by"/>
+            <dropColumn tableName="travel_request" schemaName="${schema}" columnName="rejected_by"/>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>
