@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0036-001-expense-travel-request" author="kabipay-dev">
+        <addColumn tableName="expense" schemaName="${schema}">
+            <column name="travel_request_id" type="UUID"/>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense" baseColumnNames="travel_request_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="travel_request" referencedColumnNames="id"
+                                 constraintName="fk_expense_travel_request" onDelete="SET NULL"/>
+        <createIndex tableName="expense" schemaName="${schema}" indexName="idx_expense_travel_request">
+            <column name="tenant_id"/>
+            <column name="travel_request_id"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="expense" schemaName="${schema}" indexName="idx_expense_travel_request"/>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense" constraintName="fk_expense_travel_request"/>
+            <dropColumn tableName="expense" schemaName="${schema}" columnName="travel_request_id"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

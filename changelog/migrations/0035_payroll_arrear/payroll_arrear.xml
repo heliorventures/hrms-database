@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0035-001-payroll-arrear" author="kabipay-dev">
+        <createTable tableName="payroll_arrear" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="amount" type="DECIMAL(18,4)"><constraints nullable="false"/></column>
+            <column name="reason" type="VARCHAR(512)"/>
+            <column name="status" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="applied_payroll_cycle_id" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="payroll_arrear" schemaName="${schema}" indexName="idx_payroll_arrear_tenant_emp">
+            <column name="tenant_id"/>
+            <column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="payroll_arrear" schemaName="${schema}" indexName="idx_payroll_arrear_status">
+            <column name="tenant_id"/>
+            <column name="status"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payroll_arrear" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_payroll_arrear_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payroll_arrear" baseColumnNames="applied_payroll_cycle_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="payroll_cycle" referencedColumnNames="id"
+                                 constraintName="fk_payroll_arrear_cycle" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_payroll_arrear_updated_at BEFORE UPDATE ON "${schema}".payroll_arrear FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_payroll_arrear_updated_at ON "${schema}".payroll_arrear;</sql>
+            <dropTable tableName="payroll_arrear" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

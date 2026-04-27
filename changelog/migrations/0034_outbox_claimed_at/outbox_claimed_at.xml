@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- 0034 — outbox claim timestamp for stale PROCESSING reclaim (worker + ops). -->
+    <changeSet id="0034-001-outbox-claimed-at" author="kabipay-dev">
+        <addColumn tableName="outbox_event" schemaName="${schema}">
+            <column name="claimed_at" type="TIMESTAMPTZ" remarks="Set when status becomes PROCESSING; used to reclaim stuck rows"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="outbox_event" schemaName="${schema}" columnName="claimed_at"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

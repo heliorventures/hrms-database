@@ -48,5 +48,8 @@
     <include file="migrations/0031_tax_proof/tax_proof.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0032_attendance_punch_policy/attendance_punch_policy.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0033_travel_request/travel_request.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0034_outbox_claimed_at/outbox_claimed_at.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0035_payroll_arrear/payroll_arrear.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0036_expense_travel_link/expense_travel_link.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
