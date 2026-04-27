@@ -8,14 +8,16 @@ Liquibase migration project for the KabiPay HRMS PostgreSQL schema.
 |-------------|--------|
 | **Node.js 18+** and **npm** | Used to install bundled Liquibase (npm) + `pg` for SQL. No system `psql` or `liquibase` on PATH. |
 | **JRE 17** | Downloaded into `vendor/` on first `npm run migrate-ops` (via [njre](https://www.npmjs.com/package/njre)), unless `JAVA_HOME` is already set. |
-| **PostgreSQL 16** | Cloud (e.g. Aiven) or local. SQLite/other engines are not supported. |
-| **pgAdmin or another GUI** (optional) | Connect to your host with SSL if your provider requires it (e.g. Aiven). |
+| **PostgreSQL 16** | Cloud (Neon, Aiven, …) or local. SQLite/other engines are not supported. |
+| **pgAdmin or another GUI** (optional) | Connect with SSL when the provider requires it. |
+
+**Neon (serverless):** use the **`*-pooler.*.neon.tech`** host for `POSTGRES_HOST` (and JDBC URLs) so app traffic multiplexes through Neon’s pooler and you stay within connection/compute limits. Use **`POSTGRES_SSLMODE=require`**. The same DSN should align with `kabipay-svc`’s `DATABASE_URL` / `POSTGRES_*`. For heavy one-off admin DDL, your provider may also offer a **direct** (non-pooler) host—use only when their docs say to.
 
 ## Quick start (cloud Postgres + migrations)
 
-1. Create a **PostgreSQL 16** service with your provider and note host, port, database name, user, and password.
+1. Create a **PostgreSQL 16**–compatible service (e.g. **Neon**, **Aiven**, or self-hosted) and note host, port, database name, user, and password.
 
-2. Put connection settings in **`kabipay-database/.env`** (copy from **`.env.example`**) or, in a monorepo, optionally **`kabipay-svc/.env`**: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_SSLMODE=require` when TLS is required. If both files exist, **database wins** for overlapping keys.
+2. Put connection settings in **`kabipay-database/.env`** (copy from **`.env.example`**) or, in a monorepo, optionally **`kabipay-svc/.env`**: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_SSLMODE=require` when TLS is required. If both files exist, **database wins** for overlapping keys. For Neon, prefer the **pooler** endpoint for routine migrations and app traffic.
 
 3. In **`kabipay-database/`**, run **`npm install`** (pulls Liquibase, PostgreSQL driver, JRE helper, and `pg` — no global tools).
 
@@ -32,8 +34,8 @@ Two logical masters, two property files, one PostgreSQL database:
 | `changelog/db.changelog-master.xml` | `liquibase.properties` | `kabipay_ops` (fixed) | Once at environment setup |
 | `changelog/tenant.changelog-master.xml` | `liquibase-tenant.properties` | `${schema}` (parameterised) | Once per tenant, at tenant provisioning |
 
-- **Ops schema** (`kabipay_ops`) holds operator plane, control plane, module catalog, and billing tables (domains 0001–0004). This is KabiPay's own data.
-- **Tenant schemas** (`tenant_<uuid_short>`) each hold the full client plane (domains 0005–0030: auth through outbox). One isolated schema per customer.
+- **Ops schema** (`kabipay_ops`) holds operator plane, control plane, module catalog, and billing tables (domains 0001–0004, plus `0005_integration_connector_catalog`). This is KabiPay's control-plane data.
+- **Tenant schemas** (`tenant_<uuid_short>`) each hold the full client plane (domains **0005–0030** in the table below, plus **0031–0033** in `tenant.changelog-master.xml`: tax proof, attendance punch policy, travel request). One isolated schema per customer.
 
 ## Prerequisites
 
@@ -112,8 +114,11 @@ In production, the `kabipay-tenant` service's provisioning workflow invokes this
 | 0028 | `0028_master_data` | tenant | Done |
 | 0029 | `0029_file_storage` | tenant | Done |
 | 0030 | `0030_outbox_events` | tenant | Done |
+| 0031 | `0031_tax_proof` | tenant | Done |
+| 0032 | `0032_attendance_punch_policy` | tenant | Done |
+| 0033 | `0033_travel_request` | tenant | Done |
 
-**Ops:** `changelog/db.changelog-master.xml` also includes `0005_integration_connector_catalog` (global `integration_connector` table in `kabipay_ops`, referenced by `tenant_integration` in domain 0026). Apply ops migrations before tenant provisioning.
+**Ops:** `changelog/db.changelog-master.xml` includes `0005_integration_connector_catalog` (global `integration_connector` in `kabipay_ops`, referenced by `tenant_integration` in domain 0026). Apply **ops** migrations before **tenant** provisioning.
 
 ## Reference
 
