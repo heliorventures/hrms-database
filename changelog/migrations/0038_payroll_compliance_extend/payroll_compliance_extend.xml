@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- Pay run resolves salary components by code; payslip branding for future PDF/UI. -->
+
+    <changeSet id="0038-001-payroll-compliance-extended-fields" author="kabipay-dev">
+        <addColumn schemaName="${schema}" tableName="payroll_compliance_setting">
+            <column name="base_salary_component_code" type="VARCHAR(80)" defaultValue="BASIC">
+                <constraints nullable="false"/>
+            </column>
+            <column name="arrear_salary_component_code" type="VARCHAR(80)" defaultValue="ARREAR">
+                <constraints nullable="false"/>
+            </column>
+            <column name="payslip_header_title" type="VARCHAR(500)"/>
+            <column name="payslip_logo_file_storage_id" type="UUID"/>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payroll_compliance_setting"
+                                 baseColumnNames="payslip_logo_file_storage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="file_storage" referencedColumnNames="id"
+                                 constraintName="fk_payroll_compl_setting_logo_file" onDelete="SET NULL"/>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="payroll_compliance_setting"
+                                        constraintName="fk_payroll_compl_setting_logo_file"/>
+            <dropColumn schemaName="${schema}" tableName="payroll_compliance_setting" columnName="payslip_logo_file_storage_id"/>
+            <dropColumn schemaName="${schema}" tableName="payroll_compliance_setting" columnName="payslip_header_title"/>
+            <dropColumn schemaName="${schema}" tableName="payroll_compliance_setting" columnName="arrear_salary_component_code"/>
+            <dropColumn schemaName="${schema}" tableName="payroll_compliance_setting" columnName="base_salary_component_code"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

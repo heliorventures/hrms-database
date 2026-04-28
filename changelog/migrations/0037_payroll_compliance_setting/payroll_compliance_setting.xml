@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- One logical row per tenant: India statutory employer lines for payroll CSV exports. -->
+    <changeSet id="0037-001-payroll-compliance-setting" author="kabipay-dev">
+        <createTable tableName="payroll_compliance_setting" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employer_tan" type="VARCHAR(25)"/>
+            <column name="employer_legal_name" type="VARCHAR(500)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="payroll_compliance_setting" schemaName="${schema}"
+                     indexName="idx_payroll_compliance_setting_tenant" unique="true">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_payroll_compliance_setting_updated_at BEFORE UPDATE ON "${schema}".payroll_compliance_setting FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_payroll_compliance_setting_updated_at ON "${schema}".payroll_compliance_setting;</sql>
+            <dropTable tableName="payroll_compliance_setting" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- Tenant-configurable catalogue of Income Tax deduction section codes / labels for proof workflow.
+         Rebasing slabs vs regime remains on tax_configuration_version + tax_slab + employee tax_regime_chosen. -->
+
+    <changeSet id="0039-001-tax-section-definition" author="kabipay-dev">
+        <createTable tableName="tax_section_definition" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="section_code" type="VARCHAR(64)"><constraints nullable="false"/></column>
+            <column name="section_label" type="VARCHAR(300)"><constraints nullable="false"/></column>
+            <column name="regime_scope" type="VARCHAR(32)"/>
+            <column name="country_code" type="VARCHAR(10)" defaultValue="IN"><constraints nullable="false"/></column>
+            <column name="display_order" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="max_deduction_amount" type="NUMERIC(15,4)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="tax_section_definition" schemaName="${schema}" indexName="idx_tax_section_def_tenant_code"
+                     unique="true">
+            <column name="tenant_id"/>
+            <column name="section_code"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_tax_section_definition_updated_at BEFORE UPDATE ON "${schema}".tax_section_definition FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_tax_section_definition_updated_at ON "${schema}".tax_section_definition;</sql>
+            <dropTable tableName="tax_section_definition" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
