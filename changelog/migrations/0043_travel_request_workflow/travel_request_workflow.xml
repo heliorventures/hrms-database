@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- Link travel_request to workflow_instance (multi-step approval, parity with expense M32). -->
+
+    <changeSet id="0043-001-travel-request-workflow-instance" author="kabipay-dev">
+        <addColumn tableName="travel_request" schemaName="${schema}">
+            <column name="workflow_instance_id" type="UUID"/>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="travel_request"
+                                 baseColumnNames="workflow_instance_id"
+                                 referencedTableSchemaName="${schema}"
+                                 referencedTableName="workflow_instance"
+                                 referencedColumnNames="id"
+                                 constraintName="fk_travel_request_workflow_instance"
+                                 onDelete="SET NULL"/>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="travel_request"
+                                      constraintName="fk_travel_request_workflow_instance"/>
+            <dropColumn tableName="travel_request" schemaName="${schema}" columnName="workflow_instance_id"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

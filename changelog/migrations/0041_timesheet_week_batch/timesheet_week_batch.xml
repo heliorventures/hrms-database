@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0041-001-timesheet-week-batch" author="kabipay-dev">
+        <comment>Weekly timesheet submission aggregate + workflow (leave-style approvals).</comment>
+        <createTable tableName="timesheet_week_batch" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="week_start_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="workflow_instance_id" type="UUID"/>
+            <column name="submitted_at" type="TIMESTAMPTZ"/>
+            <column name="rejection_reason" type="VARCHAR(2000)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="timesheet_week_batch" schemaName="${schema}" indexName="idx_tsb_tenant_emp_week">
+            <column name="tenant_id"/>
+            <column name="employee_id"/>
+            <column name="week_start_date"/>
+        </createIndex>
+        <addUniqueConstraint tableName="timesheet_week_batch" schemaName="${schema}"
+                             columnNames="tenant_id,employee_id,week_start_date"
+                             constraintName="uq_timesheet_week_batch_tenant_emp_week"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="timesheet_week_batch" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_tsb_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="timesheet_week_batch" baseColumnNames="workflow_instance_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="workflow_instance" referencedColumnNames="id"
+                                 constraintName="fk_tsb_workflow_instance" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_timesheet_week_batch_updated_at BEFORE UPDATE ON "${schema}".timesheet_week_batch FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_timesheet_week_batch_updated_at ON "${schema}".timesheet_week_batch;</sql>
+            <dropTable tableName="timesheet_week_batch" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0041-002-timesheet-entry-batch-fk" author="kabipay-dev">
+        <addColumn tableName="timesheet_entry" schemaName="${schema}">
+            <column name="batch_id" type="UUID"/>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="timesheet_entry" baseColumnNames="batch_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="timesheet_week_batch" referencedColumnNames="id"
+                                 constraintName="fk_timesheet_entry_batch" onDelete="SET NULL"/>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="timesheet_entry" constraintName="fk_timesheet_entry_batch"/>
+            <dropColumn tableName="timesheet_entry" schemaName="${schema}" columnName="batch_id"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

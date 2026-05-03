@@ -55,5 +55,11 @@
     <include file="migrations/0038_payroll_compliance_extend/payroll_compliance_extend.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0039_tax_section_definition/tax_section_definition.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0040_leave_request_document/leave_request_document.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0041_timesheet_week_batch/timesheet_week_batch.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0042_timesheet_project_assignment/timesheet_project_assignment.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0043_travel_request_workflow/travel_request_workflow.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0044_announcement_media/announcement_media.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0045_expense_cap_payment/expense_cap_payment.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0046_user_notification_preference/user_notification_preference.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

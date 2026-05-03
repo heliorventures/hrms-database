@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- Optional image + document on public announcements; employee posts use same table. -->
+
+    <changeSet id="0044-001-announcement-media" author="kabipay-dev">
+        <addColumn tableName="announcement" schemaName="${schema}">
+            <column name="image_file_storage_id" type="UUID"/>
+            <column name="document_file_storage_id" type="UUID"/>
+            <column name="post_source" type="VARCHAR(30)" defaultValue="company">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="announcement" baseColumnNames="image_file_storage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="file_storage" referencedColumnNames="id"
+                                 constraintName="fk_announcement_image_file" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="announcement" baseColumnNames="document_file_storage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="file_storage" referencedColumnNames="id"
+                                 constraintName="fk_announcement_document_file" onDelete="SET NULL"/>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="announcement"
+                                      constraintName="fk_announcement_image_file"/>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="announcement"
+                                      constraintName="fk_announcement_document_file"/>
+            <dropColumn tableName="announcement" schemaName="${schema}" columnName="image_file_storage_id"/>
+            <dropColumn tableName="announcement" schemaName="${schema}" columnName="document_file_storage_id"/>
+            <dropColumn tableName="announcement" schemaName="${schema}" columnName="post_source"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

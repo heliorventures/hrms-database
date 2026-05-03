@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0042-001-timesheet-project-assignment" author="kabipay-dev">
+        <comment>
+          Maps employees to allowed TIMESHEET_PROJECT codes. Empty set for an employee means all catalog projects are allowed (legacy behavior).
+        </comment>
+        <createTable tableName="timesheet_project_assignment" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="project_code" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="assigned_by_user_id" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="timesheet_project_assignment" schemaName="${schema}" indexName="idx_tspa_tenant_employee">
+            <column name="tenant_id"/>
+            <column name="employee_id"/>
+        </createIndex>
+        <addUniqueConstraint tableName="timesheet_project_assignment" schemaName="${schema}"
+                             columnNames="tenant_id,employee_id,project_code"
+                             constraintName="uq_tspa_tenant_employee_project"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="timesheet_project_assignment" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_tspa_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="timesheet_project_assignment" baseColumnNames="assigned_by_user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_tspa_assigned_by_user" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_timesheet_project_assignment_updated_at BEFORE UPDATE ON "${schema}".timesheet_project_assignment FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_timesheet_project_assignment_updated_at ON "${schema}".timesheet_project_assignment;</sql>
+            <dropTable tableName="timesheet_project_assignment" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

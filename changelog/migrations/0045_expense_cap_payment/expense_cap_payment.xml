@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- Partial approval, payment lifecycle, receipt link, policy scoping (dept / designation / role). -->
+
+    <changeSet id="0045-001-expense-policy-scope" author="kabipay-dev">
+        <addColumn tableName="expense_policy" schemaName="${schema}">
+            <column name="applicable_to" type="VARCHAR(50)" defaultValue="ALL">
+                <constraints nullable="false"/>
+            </column>
+            <column name="department_id" type="UUID"/>
+            <column name="designation_id" type="UUID"/>
+            <column name="role_id" type="UUID"/>
+            <column name="max_amount_per_claim" type="NUMERIC(15,4)"/>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_policy" baseColumnNames="department_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id"
+                                 constraintName="fk_expense_policy_department" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_policy" baseColumnNames="designation_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id"
+                                 constraintName="fk_expense_policy_designation" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_policy" baseColumnNames="role_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="role" referencedColumnNames="id"
+                                 constraintName="fk_expense_policy_role" onDelete="CASCADE"/>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_policy" constraintName="fk_expense_policy_department"/>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_policy" constraintName="fk_expense_policy_designation"/>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense_policy" constraintName="fk_expense_policy_role"/>
+            <dropColumn tableName="expense_policy" schemaName="${schema}" columnName="max_amount_per_claim"/>
+            <dropColumn tableName="expense_policy" schemaName="${schema}" columnName="role_id"/>
+            <dropColumn tableName="expense_policy" schemaName="${schema}" columnName="designation_id"/>
+            <dropColumn tableName="expense_policy" schemaName="${schema}" columnName="department_id"/>
+            <dropColumn tableName="expense_policy" schemaName="${schema}" columnName="applicable_to"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0045-002-expense-approval-payment" author="kabipay-dev">
+        <addColumn tableName="expense" schemaName="${schema}">
+            <column name="approved_amount" type="NUMERIC(15,4)"/>
+            <column name="payment_status" type="VARCHAR(50)" defaultValue="NONE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="paid_at" type="TIMESTAMPTZ"/>
+            <column name="payment_reference" type="VARCHAR(500)"/>
+            <column name="receipt_file_storage_id" type="UUID"/>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense" baseColumnNames="receipt_file_storage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="file_storage" referencedColumnNames="id"
+                                 constraintName="fk_expense_receipt_file" onDelete="SET NULL"/>
+        <sql>
+            UPDATE "${schema}".expense SET payment_status = 'NONE' WHERE payment_status IS NULL;
+            UPDATE "${schema}".expense SET approved_amount = amount, payment_status = 'PENDING_PAYMENT'
+            WHERE status = 'APPROVED' AND approved_amount IS NULL;
+        </sql>
+        <rollback>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="expense" constraintName="fk_expense_receipt_file"/>
+            <dropColumn tableName="expense" schemaName="${schema}" columnName="receipt_file_storage_id"/>
+            <dropColumn tableName="expense" schemaName="${schema}" columnName="payment_reference"/>
+            <dropColumn tableName="expense" schemaName="${schema}" columnName="paid_at"/>
+            <dropColumn tableName="expense" schemaName="${schema}" columnName="payment_status"/>
+            <dropColumn tableName="expense" schemaName="${schema}" columnName="approved_amount"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
