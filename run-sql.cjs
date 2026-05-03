@@ -7,6 +7,28 @@ require("./load-env.cjs");
 const { Client } = require("pg");
 const fs = require("fs");
 
+/**
+ * Split a SQL script into statements at line endings that terminate with `;`.
+ * Avoids sending multi-statement strings in one pg round-trip (Neon pooler / some proxies reject it).
+ * Scripts must not place meaningful semicolons inside unterminated multi-line chunks except after full statements.
+ */
+function splitStatements(sql) {
+  const lines = sql.split(/\r?\n/);
+  const out = [];
+  let buf = [];
+  for (const line of lines) {
+    buf.push(line);
+    if (/;\s*$/.test(line)) {
+      const stmt = buf.join("\n").trim();
+      if (stmt) out.push(stmt);
+      buf = [];
+    }
+  }
+  const tail = buf.join("\n").trim();
+  if (tail) out.push(tail);
+  return out.length ? out : [sql.trim()];
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   let sql;
@@ -35,7 +57,11 @@ async function main() {
   const client = new Client({ host, port, database, user, password, ssl });
   await client.connect();
   try {
-    await client.query(sql);
+    const stmts = splitStatements(sql);
+    for (const stmt of stmts) {
+      if (!stmt.trim()) continue;
+      await client.query(stmt);
+    }
   } finally {
     await client.end();
   }

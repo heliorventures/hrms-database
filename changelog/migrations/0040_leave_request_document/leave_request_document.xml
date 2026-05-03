@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0040-001-leave-request-supporting-document-reference" author="kabipay-dev">
+        <addColumn tableName="leave_request" schemaName="${schema}">
+            <column name="supporting_document_reference" type="VARCHAR(500)"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="leave_request" schemaName="${schema}" columnName="supporting_document_reference"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

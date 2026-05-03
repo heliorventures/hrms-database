@@ -54,5 +54,6 @@
     <include file="migrations/0037_payroll_compliance_setting/payroll_compliance_setting.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0038_payroll_compliance_extend/payroll_compliance_extend.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0039_tax_section_definition/tax_section_definition.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0040_leave_request_document/leave_request_document.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
