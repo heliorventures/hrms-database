@@ -17,13 +17,13 @@ Liquibase migration project for the KabiPay HRMS PostgreSQL schema.
 
 1. Create a **PostgreSQL 16**–compatible service (e.g. **Neon**, **Aiven**, or self-hosted) and note host, port, database name, user, and password.
 
-2. Put connection settings in **`kabipay-database/.env`** (copy from **`.env.example`**) or, in a monorepo, optionally **`kabipay-svc/.env`**: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_SSLMODE=require` when TLS is required. If both files exist, **database wins** for overlapping keys. For Neon, prefer the **pooler** endpoint for routine migrations and app traffic.
+2. Put connection settings in **`kabipay-database/.env`** (copy from **`.env.example`**): `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_SSLMODE=require` when TLS is required. For Neon, prefer the **pooler** endpoint for routine migrations and app traffic.
 
 3. In **`kabipay-database/`**, run **`npm install`** (pulls Liquibase, PostgreSQL driver, JRE helper, and `pg` — no global tools).
 
 4. **Apply ops migrations** once: **`npm run migrate-ops`**. The first run may download a JRE 17 into `vendor/` (gitignored — you can delete `vendor/` anytime; it is re-created when needed).
 
-5. **Provision tenants** and **tenant changelogs** with **`kabipay-svc/scripts/provision-tenant.ps1`** (uses `node run-sql.cjs` + bundled Liquibase; see [Run migrations](#run-migrations)).
+5. **Provision tenants** and **tenant changelogs** with **`scripts/provision-tenant.ps1`** (uses `node run-sql.cjs` + bundled Liquibase; see [Run migrations](#run-migrations)).
 
 ## Topology
 
@@ -40,13 +40,13 @@ Two logical masters, two property files, one PostgreSQL database:
 ## Prerequisites
 
 - PostgreSQL 16 reachable from your machine (cloud URL + TLS as required).
-- **Node.js**; **`npm install`** in this folder; **`.env`** in this folder (or **`kabipay-svc/.env`**) with the same `POSTGRES_*` (and `KABIPAY_DB_*` for Liquibase) values you use in apps.
+- **Node.js**; **`npm install`** in this folder; **`.env`** in this folder with `POSTGRES_*` values for database tooling.
 
 ## Run migrations
 
 ### 1. Ops/control plane (run once)
 
-From the `kabipay-database/` folder, with `kabipay-database/.env` (and/or `kabipay-svc/.env`) configured:
+From the `kabipay-database/` folder, with `kabipay-database/.env` configured:
 
 ```bash
 npm run migrate-ops
@@ -58,9 +58,9 @@ Liquibase history tables are stored in `public` (see `liquibaseSchemaName` in `l
 
 ### 2. Tenant plane (run per tenant on provisioning)
 
-Use **`..\kabipay-svc\scripts\provision-tenant.ps1`**; it creates the schema, updates `kabipay_ops.tenant_database`, and runs the tenant Liquibase changelog.
+Use **`scripts\provision-tenant.ps1`**; it creates the schema, updates `kabipay_ops.tenant_database`, and runs the tenant Liquibase changelog.
 
-Or use **`node run-sql.cjs`** / **`node run-liquibase.cjs`** (after `npm install`) with a JDBC URL and the same **`.env`** load order — see `provision-tenant.ps1` for the exact pattern.
+Or use **`node run-sql.cjs`** / **`node run-liquibase.cjs`** (after `npm install`) with the same **`.env`** values; see `scripts\provision-tenant.ps1` for the exact pattern.
 
 In production, the `kabipay-tenant` service's provisioning workflow invokes this automatically.
 

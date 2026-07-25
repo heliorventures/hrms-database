@@ -14,7 +14,7 @@ const db = process.env.POSTGRES_DB;
 const ssl = process.env.POSTGRES_SSLMODE;
 
 if (!hostName || !port || !db) {
-  console.error("Set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB in kabipay-database/.env (or kabipay-svc/.env in a monorepo).");
+  console.error("Set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB in kabipay-database/.env.");
   process.exit(1);
 }
 if (!user || !pass) {

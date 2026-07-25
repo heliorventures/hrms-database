@@ -51,7 +51,7 @@ async function main() {
   const useSsl = process.env.POSTGRES_SSLMODE === "require" || process.env.POSTGRES_SSLMODE === "verify-full";
   const ssl = useSsl ? { rejectUnauthorized: false } : undefined;
   if (!database || !user) {
-    console.error("Set POSTGRES_DB and POSTGRES_USER in kabipay-database/.env (or kabipay-svc/.env in a monorepo).");
+    console.error("Set POSTGRES_DB and POSTGRES_USER in kabipay-database/.env.");
     process.exit(1);
   }
   const client = new Client({ host, port, database, user, password, ssl });
