@@ -11,7 +11,7 @@ Liquibase migration project for the KabiPay HRMS PostgreSQL schema.
 | **PostgreSQL 16** | Cloud (Neon, Aiven, …) or local. SQLite/other engines are not supported. |
 | **pgAdmin or another GUI** (optional) | Connect with SSL when the provider requires it. |
 
-**Neon (serverless):** use the **`*-pooler.*.neon.tech`** host for `POSTGRES_HOST` (and JDBC URLs) so app traffic multiplexes through Neon’s pooler and you stay within connection/compute limits. Use **`POSTGRES_SSLMODE=require`**. The same DSN should align with `kabipay-svc`’s `DATABASE_URL` / `POSTGRES_*`. For heavy one-off admin DDL, your provider may also offer a **direct** (non-pooler) host—use only when their docs say to.
+**Neon (serverless):** use the **`*-pooler.*.neon.tech`** host for `POSTGRES_HOST` (and JDBC URLs) so database tooling multiplexes through Neon pooler and stays within connection/compute limits. Use **`POSTGRES_SSLMODE=require`**. For heavy one-off admin DDL, your provider may also offer a **direct** (non-pooler) host; use only when their docs say to.
 
 ## Quick start (cloud Postgres + migrations)
 
