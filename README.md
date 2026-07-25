@@ -60,6 +60,29 @@ Liquibase history tables are stored in `public` (see `liquibaseSchemaName` in `l
 
 Use **`scripts\provision-tenant.ps1`**; it creates the schema, updates `kabipay_ops.tenant_database`, and runs the tenant Liquibase changelog.
 
+When provisioning for Docker Compose on the VPS, keep a clear split between the
+tooling connection and the runtime target. Your laptop or VPS shell may connect
+through `localhost` or a forwarded host port, but the deployed services must use
+the Compose service name stored in `kabipay_ops.tenant_database`:
+
+```powershell
+.\scripts\provision-tenant.ps1 `
+  -Name "Helior Prd" `
+  -Code helior-prd `
+  -RuntimePostgresHost postgres `
+  -RuntimeDbName helior
+```
+
+For an already-provisioned tenant, repair the stored runtime target without
+rerunning tenant migrations:
+
+```powershell
+.\scripts\update-tenant-database-target.ps1 `
+  -TenantId e6d4fc13-feb8-52a0-93bd-f66c795969b1 `
+  -RuntimePostgresHost postgres `
+  -RuntimeDbName helior
+```
+
 Or use **`node run-sql.cjs`** / **`node run-liquibase.cjs`** (after `npm install`) with the same **`.env`** values; see `scripts\provision-tenant.ps1` for the exact pattern.
 
 In production, the `kabipay-tenant` service's provisioning workflow invokes this automatically.

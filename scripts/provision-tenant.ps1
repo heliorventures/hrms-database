@@ -41,6 +41,15 @@
 .PARAMETER DbPassword
     If omitted, uses **kabipay-database/.env** `POSTGRES_PASSWORD` (required for Aiven; do not paste a placeholder like YOUR_PASSWORD on the command line).
 
+.PARAMETER RuntimePostgresHost
+    Database host that KabiPay services should use at runtime. This can differ from
+    POSTGRES_HOST when provisioning from a laptop, SSH tunnel, or VPS host shell.
+    For Docker Compose on the VPS, use `postgres`.
+
+.PARAMETER RuntimeDbName
+    Database name that KabiPay services should use at runtime. Defaults to the
+    tooling connection database from POSTGRES_DB.
+
 .PARAMETER PostgresHost
     If set, connect to this host (e.g. Aiven) with `run-sql.cjs` and bundled Liquibase. Use with -PostgresPort,
     -PostgresSsl, -DbName, -DbUser, -DbPassword. If *omitted*, uses `localhost` and -PostgresPort
@@ -62,6 +71,10 @@
 .EXAMPLE
     # Or pass only what you need; use the real Aiven password, not the literal "YOUR_PASSWORD"
     .\provision-tenant.ps1 -Name "Demo Co" -Code demo -PostgresHost "pg-....aivencloud.com" -PostgresPort 12507 -DbName defaultdb -DbUser avnadmin -DbPassword "<paste from Aiven>" -PostgresSsl
+
+.EXAMPLE
+    # Provision through localhost/host port, but store the Docker runtime target.
+    .\provision-tenant.ps1 -Name "Helior Prd" -Code helior-prd -RuntimePostgresHost postgres -RuntimeDbName client_demo_db
 #>
 
 [CmdletBinding()]
@@ -76,7 +89,9 @@ param(
     [string]$DbPassword,
     [string]$PostgresHost = '',
     [int]$PostgresPort = 5432,
-    [switch]$PostgresSsl
+    [switch]$PostgresSsl,
+    [string]$RuntimePostgresHost = '',
+    [string]$RuntimeDbName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -139,6 +154,14 @@ if ([string]::IsNullOrWhiteSpace($env:POSTGRES_HOST) -or [string]::IsNullOrWhite
     throw "After loading .env, POSTGRES_HOST/PORT/DB/USER/PASSWORD must be set. Pass -PostgresHost/-PostgresPort/... and/or set credentials in $DbEnv"
 }
 
+if ([string]::IsNullOrWhiteSpace($RuntimePostgresHost)) { $RuntimePostgresHost = $env:KABIPAY_RUNTIME_POSTGRES_HOST }
+if ([string]::IsNullOrWhiteSpace($RuntimeDbName)) { $RuntimeDbName = $env:KABIPAY_RUNTIME_POSTGRES_DB }
+if ([string]::IsNullOrWhiteSpace($RuntimePostgresHost)) { $RuntimePostgresHost = $env:POSTGRES_HOST }
+if ([string]::IsNullOrWhiteSpace($RuntimeDbName)) { $RuntimeDbName = $env:POSTGRES_DB }
+if ([string]::IsNullOrWhiteSpace($RuntimePostgresHost) -or [string]::IsNullOrWhiteSpace($RuntimeDbName)) {
+    throw "RuntimePostgresHost and RuntimeDbName must be set, either by parameters or KABIPAY_RUNTIME_POSTGRES_HOST/KABIPAY_RUNTIME_POSTGRES_DB."
+}
+
 function New-DeterministicUuid {
     param([Parameter(Mandatory=$true)][string]$Seed)
     # SHA1(seed) -> first 16 bytes -> set UUID v5 bits -> format.
@@ -168,6 +191,7 @@ if ([string]::IsNullOrWhiteSpace($Schema)) {
 Write-Host "Tenant UUID     : $TenantId"
 Write-Host "Tenant DB rowId : $TenantDbRowId"
 Write-Host "Subdomain       : $Subdomain"
+Write-Host "Runtime DB      : $RuntimePostgresHost/$RuntimeDbName"
 Write-Host ""
 
 function Invoke-Psql {
@@ -200,11 +224,12 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at = NOW();
 "@
 
-$RowDbHost = if ($env:POSTGRES_HOST) { $env:POSTGRES_HOST } else { 'localhost' }
+$RowDbHost = $RuntimePostgresHost.Replace("'", "''")
+$RowDbName = $RuntimeDbName.Replace("'", "''")
 Write-Host "==> Upserting kabipay_ops.tenant_database ..." -ForegroundColor Cyan
 Invoke-Psql @"
 INSERT INTO kabipay_ops.tenant_database (id, tenant_id, db_type, db_host, db_name, schema_name, is_active)
-VALUES ('$TenantDbRowId', '$TenantId', 'POSTGRES', '$RowDbHost', '$($env:POSTGRES_DB)', '$Schema', true)
+VALUES ('$TenantDbRowId', '$TenantId', 'POSTGRES', '$RowDbHost', '$RowDbName', '$Schema', true)
 ON CONFLICT (id) DO UPDATE SET
     tenant_id   = EXCLUDED.tenant_id,
     db_host     = EXCLUDED.db_host,
