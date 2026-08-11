@@ -5,8 +5,50 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
 
-    <changeSet id="0047-001-add-user-username-login" author="kabipay-dev">
-        <comment>Move tenant client-plane login from email-only to username. Existing emails become usernames; email remains optional contact metadata.</comment>
+    <changeSet id="0047-001-validate-user-username-login-data" author="kabipay-dev">
+        <comment>Validate existing tenant user data before deriving username from email. Fresh go-live schemas already have username and mark this repair step as ran.</comment>
+        <preConditions onFail="MARK_RAN" onError="HALT">
+            <not>
+                <columnExists tableName="user" schemaName="${schema}" columnName="username"/>
+            </not>
+        </preConditions>
+        <sql><![CDATA[
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}"."user"
+        WHERE email IS NULL OR TRIM(email) = ''
+    ) THEN
+        RAISE EXCEPTION 'Cannot derive username because tenant user email is blank in schema ${schema}';
+    END IF;
+END $$;
+        ]]></sql>
+        <sql><![CDATA[
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM (
+            SELECT tenant_id, LOWER(TRIM(email)) AS normalized_username
+            FROM "${schema}"."user"
+            GROUP BY tenant_id, LOWER(TRIM(email))
+            HAVING COUNT(*) > 1
+        ) duplicate_usernames
+    ) THEN
+        RAISE EXCEPTION 'Cannot derive unique username because normalized tenant user emails collide in schema ${schema}';
+    END IF;
+END $$;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="0047-002-add-user-username-login" author="kabipay-dev">
+        <comment>Repair existing tenant schemas by moving client-plane login from email-only to username. Existing emails become usernames; email remains optional contact metadata.</comment>
+        <preConditions onFail="MARK_RAN" onError="HALT">
+            <not>
+                <columnExists tableName="user" schemaName="${schema}" columnName="username"/>
+            </not>
+        </preConditions>
         <addColumn tableName="user" schemaName="${schema}">
             <column name="username" type="VARCHAR(255)"/>
         </addColumn>
@@ -24,6 +66,7 @@
                                columnName="email"
                                columnDataType="VARCHAR(255)"/>
         <rollback>
+            <sql>UPDATE "${schema}"."user" SET email = username WHERE email IS NULL OR TRIM(email) = '';</sql>
             <addNotNullConstraint tableName="user" schemaName="${schema}"
                                   columnName="email"
                                   columnDataType="VARCHAR(255)"/>
