@@ -651,6 +651,10 @@ VALUES ('$RoleHrAdminId', '$PermAttendancePunchPolicyId')
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
 INSERT INTO "$Schema".role_permission (role_id, permission_id)
+VALUES ('$RoleHrAdminId', '$PermAttendancePunchSelfId')
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+INSERT INTO "$Schema".role_permission (role_id, permission_id)
 VALUES ('$RoleHrAdminId', '$PermWorkflowManageId')
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
@@ -1655,7 +1659,7 @@ Write-Host ""
 Write-Host "Seed complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "Demo tenant logins (password ChangeMe!123):" -ForegroundColor Yellow
-Write-Host '  demo@kabipay.local          - HR_ADMIN + employee (full HR + self-service)'
+Write-Host '  demo@kabipay.local          - HR_ADMIN + employee (full HR + self-service + attendance:punch_self)'
 Write-Host '  tenant-admin@kabipay.local  - TENANT_ADMIN + HR_ADMIN row (workflow fallbacks + admin shell)'
 Write-Host '  manager@kabipay.local       - LINE_MANAGER (approvals + analytics:read + attendance:punch_self)'
 Write-Host '  staff@kabipay.local         - DEMO_STAFF (benefits:self, onboarding:self, grievance:self, attendance:punch_self)'

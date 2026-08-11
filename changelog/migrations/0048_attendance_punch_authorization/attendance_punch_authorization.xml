@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0048-001-ensure-attendance-punch-self-permission" author="kabipay-dev">
+        <comment>Create the explicit self-punch permission for subscribed Attendance tenants that previously depended on backend role or employee-directory fallbacks.</comment>
+        <sql><![CDATA[
+INSERT INTO "${schema}".permission (
+    id,
+    resource,
+    action,
+    module_id,
+    description
+)
+SELECT
+    gen_random_uuid(),
+    'attendance',
+    'punch_self',
+    module.id,
+    'Live punch in/out and own punch-day summary'
+FROM kabipay_ops.module AS module
+WHERE module.code = 'ATTENDANCE'
+  AND module.is_active = true
+  AND EXISTS (
+      SELECT 1
+      FROM kabipay_ops.tenant_subscription AS subscription
+      JOIN "${schema}".role AS tenant_role
+        ON tenant_role.tenant_id = subscription.tenant_id
+      WHERE subscription.module_id = module.id
+        AND subscription.status = 'ACTIVE'
+        AND subscription.is_deleted = false
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM "${schema}".permission AS existing_permission
+      WHERE existing_permission.resource = 'attendance'
+        AND existing_permission.action = 'punch_self'
+        AND existing_permission.module_id = module.id
+  );
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0048-002-grant-explicit-attendance-punch-access" author="kabipay-dev">
+        <comment>Preserve effective self-punch access by converting legacy administrator-role and employee-directory fallbacks into explicit role permissions. Rollback intentionally does not revoke authorization because a mapping may predate this migration or be approved later.</comment>
+        <sql><![CDATA[
+WITH punch_permission AS (
+    SELECT permission.id
+    FROM "${schema}".permission AS permission
+    JOIN kabipay_ops.module AS module
+      ON module.id = permission.module_id
+    WHERE permission.resource = 'attendance'
+      AND permission.action = 'punch_self'
+      AND module.code = 'ATTENDANCE'
+)
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT DISTINCT
+    tenant_role.id,
+    punch_permission.id
+FROM "${schema}".role AS tenant_role
+CROSS JOIN punch_permission
+WHERE tenant_role.is_deleted = false
+  AND (
+      UPPER(TRIM(tenant_role.name)) IN ('HR_ADMIN', 'TENANT_ADMIN', 'ORG_ADMIN')
+      OR EXISTS (
+          SELECT 1
+          FROM "${schema}".role_permission AS existing_role_permission
+          JOIN "${schema}".permission AS existing_permission
+            ON existing_permission.id = existing_role_permission.permission_id
+          WHERE existing_role_permission.role_id = tenant_role.id
+            AND existing_permission.resource = 'employee'
+            AND existing_permission.action IN ('write', 'manage')
+      )
+  )
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
