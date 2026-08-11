@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0047-001-add-user-username-login" author="kabipay-dev">
+        <comment>Move tenant client-plane login from email-only to username. Existing emails become usernames; email remains optional contact metadata.</comment>
+        <addColumn tableName="user" schemaName="${schema}">
+            <column name="username" type="VARCHAR(255)"/>
+        </addColumn>
+        <sql>UPDATE "${schema}"."user" SET username = LOWER(TRIM(email)) WHERE username IS NULL;</sql>
+        <addNotNullConstraint tableName="user" schemaName="${schema}"
+                              columnName="username"
+                              columnDataType="VARCHAR(255)"/>
+        <addUniqueConstraint tableName="user" schemaName="${schema}"
+                             columnNames="tenant_id,username"
+                             constraintName="uq_user_tenant_username"/>
+        <createIndex tableName="user" schemaName="${schema}" indexName="idx_user_username">
+            <column name="username"/>
+        </createIndex>
+        <dropNotNullConstraint tableName="user" schemaName="${schema}"
+                               columnName="email"
+                               columnDataType="VARCHAR(255)"/>
+        <rollback>
+            <addNotNullConstraint tableName="user" schemaName="${schema}"
+                                  columnName="email"
+                                  columnDataType="VARCHAR(255)"/>
+            <dropIndex tableName="user" schemaName="${schema}" indexName="idx_user_username"/>
+            <dropUniqueConstraint tableName="user" schemaName="${schema}"
+                                  constraintName="uq_user_tenant_username"/>
+            <dropColumn tableName="user" schemaName="${schema}" columnName="username"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

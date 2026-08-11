@@ -61,5 +61,6 @@
     <include file="migrations/0044_announcement_media/announcement_media.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0045_expense_cap_payment/expense_cap_payment.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0046_user_notification_preference/user_notification_preference.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0047_user_username_login/user_username_login.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

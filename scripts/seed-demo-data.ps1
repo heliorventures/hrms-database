@@ -399,8 +399,8 @@ INSERT INTO "$Schema".designation (id, tenant_id, department_id, title, level, g
 VALUES ('$DesignationAccountingId', '$TenantId', '$DepartmentAccountingId', 'Senior Accountant', 'IC2', 3)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO "$Schema"."user" (id, tenant_id, email, password_hash, is_active, mfa_enabled)
-VALUES ('$UserId', '$TenantId', 'demo@kabipay.local', '$PasswordHash', true, false)
+INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
+VALUES ('$UserId', '$TenantId', 'demo@kabipay.local', 'demo@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true;
 
 INSERT INTO "$Schema".employee (
@@ -413,8 +413,8 @@ INSERT INTO "$Schema".employee (
     CURRENT_DATE
 ) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO "$Schema"."user" (id, tenant_id, email, password_hash, is_active, mfa_enabled)
-VALUES ('$ManagerUserId', '$TenantId', 'manager@kabipay.local', '$PasswordHash', true, false)
+INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
+VALUES ('$ManagerUserId', '$TenantId', 'manager@kabipay.local', 'manager@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema".employee (
@@ -464,8 +464,8 @@ INSERT INTO "$Schema".role (id, tenant_id, name, description, is_system_role, is
 VALUES ('$RoleAccountingApproverId', '$TenantId', 'ACCOUNTING_APPROVER', 'Accounting / finance second-line approver for expense and travel workflows', true, false)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO "$Schema"."user" (id, tenant_id, email, password_hash, is_active, mfa_enabled)
-VALUES ('$TenantAdminUserId', '$TenantId', 'tenant-admin@kabipay.local', '$PasswordHash', true, false)
+INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
+VALUES ('$TenantAdminUserId', '$TenantId', 'tenant-admin@kabipay.local', 'tenant-admin@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true;
 
 INSERT INTO "$Schema".employee (
@@ -478,8 +478,8 @@ INSERT INTO "$Schema".employee (
     CURRENT_DATE, '$ManagerEmployeeId'
 ) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO "$Schema"."user" (id, tenant_id, email, password_hash, is_active, mfa_enabled)
-VALUES ('$AccountingUserId', '$TenantId', 'accountant@kabipay.local', '$PasswordHash', true, false)
+INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
+VALUES ('$AccountingUserId', '$TenantId', 'accountant@kabipay.local', 'accountant@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true;
 
 INSERT INTO "$Schema".employee (
@@ -492,8 +492,8 @@ INSERT INTO "$Schema".employee (
     CURRENT_DATE, '$ManagerEmployeeId'
 ) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO "$Schema"."user" (id, tenant_id, email, password_hash, is_active, mfa_enabled)
-VALUES ('$StaffUserId', '$TenantId', 'staff@kabipay.local', '$PasswordHash', true, false)
+INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
+VALUES ('$StaffUserId', '$TenantId', 'staff@kabipay.local', 'staff@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true;
 
 INSERT INTO "$Schema".employee (
