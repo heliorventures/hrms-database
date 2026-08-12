@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0050-001-add-employee-contact-fields" author="kabipay-dev">
+        <addColumn tableName="employee" schemaName="${schema}">
+            <column name="personal_phone" type="VARCHAR(50)"/>
+            <column name="current_address" type="TEXT"/>
+            <column name="permanent_address" type="TEXT"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="employee" schemaName="${schema}" columnName="permanent_address"/>
+            <dropColumn tableName="employee" schemaName="${schema}" columnName="current_address"/>
+            <dropColumn tableName="employee" schemaName="${schema}" columnName="personal_phone"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0050-002-add-document-system-key" author="kabipay-dev">
+        <addColumn tableName="document_type" schemaName="${schema}">
+            <column name="system_key" type="VARCHAR(100)"/>
+        </addColumn>
+        <sql>
+            WITH candidates AS (
+                SELECT id,
+                       tenant_id,
+                       CASE
+                           WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%AADHAAR%'
+                             OR UPPER(COALESCE(category, '') || ' ' || name) LIKE '%AADHAR%' THEN 'AADHAAR_CARD'
+                           WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%PAN%' THEN 'PAN_CARD'
+                           WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%PASSPORT%' THEN 'PASSPORT'
+                           WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%EXPERIENCE%'
+                             OR UPPER(COALESCE(category, '') || ' ' || name) LIKE '%RELIEVING%' THEN 'EXPERIENCE_LETTER'
+                           WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%EDUCATION%'
+                             OR UPPER(COALESCE(category, '') || ' ' || name) LIKE '%DEGREE%'
+                             OR UPPER(COALESCE(category, '') || ' ' || name) LIKE '%CERTIFICATE%' THEN 'EDUCATION_CERTIFICATE'
+                       END AS inferred_key,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY tenant_id,
+                               CASE
+                                   WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%AADHAAR%'
+                                     OR UPPER(COALESCE(category, '') || ' ' || name) LIKE '%AADHAR%' THEN 'AADHAAR_CARD'
+                                   WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%PAN%' THEN 'PAN_CARD'
+                                   WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%PASSPORT%' THEN 'PASSPORT'
+                                   WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%EXPERIENCE%'
+                                     OR UPPER(COALESCE(category, '') || ' ' || name) LIKE '%RELIEVING%' THEN 'EXPERIENCE_LETTER'
+                                   WHEN UPPER(COALESCE(category, '') || ' ' || name) LIKE '%EDUCATION%'
+                                     OR UPPER(COALESCE(category, '') || ' ' || name) LIKE '%DEGREE%'
+                                     OR UPPER(COALESCE(category, '') || ' ' || name) LIKE '%CERTIFICATE%' THEN 'EDUCATION_CERTIFICATE'
+                               END
+                           ORDER BY is_deleted ASC, created_at ASC, id ASC
+                       ) AS row_number
+                FROM "${schema}".document_type
+                WHERE is_deleted = FALSE
+            )
+            UPDATE "${schema}".document_type dt
+               SET system_key = candidates.inferred_key
+              FROM candidates
+             WHERE dt.id = candidates.id
+               AND candidates.inferred_key IS NOT NULL
+               AND candidates.row_number = 1;
+        </sql>
+        <sql>
+            CREATE UNIQUE INDEX uq_document_type_tenant_system_key
+                ON "${schema}".document_type (tenant_id, system_key)
+             WHERE system_key IS NOT NULL;
+        </sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS "${schema}".uq_document_type_tenant_system_key;</sql>
+            <dropColumn tableName="document_type" schemaName="${schema}" columnName="system_key"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0050-003-seed-employee-document-types" author="kabipay-dev">
+        <sql>
+            WITH current_tenant AS (
+                SELECT tenant_id
+                  FROM kabipay_ops.tenant_database
+                 WHERE schema_name = '${schema}'
+                   AND is_active = TRUE
+                 ORDER BY updated_at DESC
+                 LIMIT 1
+            ), required_types(system_key, name, category) AS (
+                VALUES
+                    ('PAN_CARD', 'PAN Card', 'PAN'),
+                    ('AADHAAR_CARD', 'Aadhaar Card', 'AADHAAR'),
+                    ('PASSPORT', 'Passport', 'PASSPORT'),
+                    ('EDUCATION_CERTIFICATE', 'Education Certificate', 'EDUCATION'),
+                    ('EXPERIENCE_LETTER', 'Experience Letter', 'WORK_EXPERIENCE')
+            )
+            INSERT INTO "${schema}".document_type (
+                id, tenant_id, name, category, system_key, is_required,
+                is_deleted, created_at, updated_at
+            )
+            SELECT md5(ct.tenant_id::text || ':document-type:' || rt.system_key)::uuid,
+                   ct.tenant_id,
+                   rt.name,
+                   rt.category,
+                   rt.system_key,
+                   FALSE,
+                   FALSE,
+                   NOW(),
+                   NOW()
+              FROM current_tenant ct
+              CROSS JOIN required_types rt
+             WHERE NOT EXISTS (
+                 SELECT 1
+                   FROM "${schema}".document_type existing
+                  WHERE existing.tenant_id = ct.tenant_id
+                    AND existing.system_key = rt.system_key
+             );
+        </sql>
+        <rollback>
+            <sql>
+                DELETE FROM "${schema}".document_type dt
+                 USING kabipay_ops.tenant_database td
+                 WHERE td.schema_name = '${schema}'
+                   AND dt.tenant_id = td.tenant_id
+                   AND dt.system_key IN (
+                       'PAN_CARD', 'AADHAAR_CARD', 'PASSPORT',
+                       'EDUCATION_CERTIFICATE', 'EXPERIENCE_LETTER'
+                   )
+                   AND dt.id = md5(dt.tenant_id::text || ':document-type:' || dt.system_key)::uuid;
+            </sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0050-004-create-employee-education" author="kabipay-dev">
+        <createTable tableName="employee_education" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="education_level" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="qualification" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="field_of_study" type="VARCHAR(255)"/>
+            <column name="institution" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="board_university" type="VARCHAR(255)"/>
+            <column name="start_date" type="DATE"/>
+            <column name="completion_year" type="INT"><constraints nullable="false"/></column>
+            <column name="grade_score" type="VARCHAR(100)"/>
+            <column name="description" type="TEXT"/>
+            <column name="verification_status" type="VARCHAR(50)" defaultValue="UNVERIFIED"><constraints nullable="false"/></column>
+            <column name="reviewed_by" type="UUID"/>
+            <column name="reviewed_at" type="TIMESTAMPTZ"/>
+            <column name="rejection_reason" type="VARCHAR(1000)"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>
+            ALTER TABLE "${schema}".employee_education
+                ADD CONSTRAINT chk_employee_education_level CHECK (
+                    education_level IN ('SECONDARY','HIGHER_SECONDARY','DIPLOMA','UNDERGRADUATE','POSTGRADUATE','DOCTORATE','CERTIFICATION','OTHER')
+                ),
+                ADD CONSTRAINT chk_employee_education_dates CHECK (
+                    completion_year &gt;= 1900
+                    AND (start_date IS NULL OR start_date &lt;= make_date(completion_year, 12, 31))
+                ),
+                ADD CONSTRAINT chk_employee_education_verification CHECK (
+                    verification_status IN ('UNVERIFIED','PENDING','VERIFIED','REJECTED')
+                );
+        </sql>
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION "${schema}".validate_employee_education_completion_year()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                IF NEW.completion_year > EXTRACT(YEAR FROM CURRENT_DATE)::INT THEN
+                    RAISE EXCEPTION 'completion_year cannot be in the future';
+                END IF;
+                RETURN NEW;
+            END;
+            $$;
+
+            CREATE TRIGGER trg_employee_education_completion_year
+                BEFORE INSERT OR UPDATE OF completion_year
+                ON "${schema}".employee_education
+                FOR EACH ROW
+                EXECUTE FUNCTION "${schema}".validate_employee_education_completion_year();
+        ]]></sql>
+        <createIndex tableName="employee_education" schemaName="${schema}" indexName="idx_employee_education_employee">
+            <column name="tenant_id"/><column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="employee_education" schemaName="${schema}" indexName="idx_employee_education_status">
+            <column name="tenant_id"/><column name="verification_status"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_education" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_education_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_education" baseColumnNames="reviewed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_education_reviewed_by" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_education" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_education_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_employee_education_updated_at BEFORE UPDATE ON "${schema}".employee_education FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_education_completion_year ON "${schema}".employee_education;</sql>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_education_updated_at ON "${schema}".employee_education;</sql>
+            <dropTable tableName="employee_education" schemaName="${schema}"/>
+            <sql>DROP FUNCTION IF EXISTS "${schema}".validate_employee_education_completion_year();</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0050-005-create-employee-work-experience" author="kabipay-dev">
+        <createTable tableName="employee_work_experience" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="company" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="role_title" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="employment_type" type="VARCHAR(100)"/>
+            <column name="location" type="VARCHAR(255)"/>
+            <column name="start_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="end_date" type="DATE"/>
+            <column name="is_current" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="verification_status" type="VARCHAR(50)" defaultValue="UNVERIFIED"><constraints nullable="false"/></column>
+            <column name="reviewed_by" type="UUID"/>
+            <column name="reviewed_at" type="TIMESTAMPTZ"/>
+            <column name="rejection_reason" type="VARCHAR(1000)"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>
+            ALTER TABLE "${schema}".employee_work_experience
+                ADD CONSTRAINT chk_employee_work_dates CHECK (
+                    (is_current = TRUE AND end_date IS NULL)
+                    OR (is_current = FALSE AND end_date IS NOT NULL AND end_date &gt;= start_date)
+                ),
+                ADD CONSTRAINT chk_employee_work_verification CHECK (
+                    verification_status IN ('UNVERIFIED','PENDING','VERIFIED','REJECTED')
+                );
+        </sql>
+        <createIndex tableName="employee_work_experience" schemaName="${schema}" indexName="idx_employee_work_experience_employee">
+            <column name="tenant_id"/><column name="employee_id"/>
+        </createIndex>
+        <createIndex tableName="employee_work_experience" schemaName="${schema}" indexName="idx_employee_work_experience_status">
+            <column name="tenant_id"/><column name="verification_status"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_work_experience" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_work_experience_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_work_experience" baseColumnNames="reviewed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_work_experience_reviewed_by" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_work_experience" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_employee_work_experience_deleted_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_employee_work_experience_updated_at BEFORE UPDATE ON "${schema}".employee_work_experience FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_work_experience_updated_at ON "${schema}".employee_work_experience;</sql>
+            <dropTable tableName="employee_work_experience" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0050-006-create-profile-change-request" author="kabipay-dev">
+        <createTable tableName="employee_profile_change_request" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="requested_by" type="UUID"><constraints nullable="false"/></column>
+            <column name="request_type" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="requested_payload" type="JSONB"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(50)" defaultValue="PENDING"><constraints nullable="false"/></column>
+            <column name="supporting_document_id" type="UUID"/>
+            <column name="reviewed_by" type="UUID"/>
+            <column name="reviewed_at" type="TIMESTAMPTZ"/>
+            <column name="rejection_reason" type="VARCHAR(1000)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <sql>
+            ALTER TABLE "${schema}".employee_profile_change_request
+                ADD CONSTRAINT chk_employee_profile_change_type CHECK (
+                    request_type IN ('LEGAL_NAME_OR_DOB','PAN','AADHAAR','BANK_ACCOUNT')
+                ),
+                ADD CONSTRAINT chk_employee_profile_change_status CHECK (
+                    status IN ('PENDING','APPROVED','REJECTED','CANCELLED')
+                );
+            CREATE UNIQUE INDEX uq_profile_change_pending
+                ON "${schema}".employee_profile_change_request (tenant_id, employee_id, request_type)
+             WHERE status = 'PENDING';
+        </sql>
+        <createIndex tableName="employee_profile_change_request" schemaName="${schema}" indexName="idx_profile_change_employee">
+            <column name="tenant_id"/><column name="employee_id"/><column name="created_at" descending="true"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_profile_change_request" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_profile_change_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_profile_change_request" baseColumnNames="requested_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_profile_change_requested_by" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_profile_change_request" baseColumnNames="supporting_document_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee_document" referencedColumnNames="id"
+                                 constraintName="fk_profile_change_document" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_profile_change_request" baseColumnNames="reviewed_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_profile_change_reviewed_by" onDelete="SET NULL"/>
+        <sql>CREATE TRIGGER trg_employee_profile_change_updated_at BEFORE UPDATE ON "${schema}".employee_profile_change_request FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_profile_change_updated_at ON "${schema}".employee_profile_change_request;</sql>
+            <dropTable tableName="employee_profile_change_request" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0050-007-create-profile-evidence-links" author="kabipay-dev">
+        <createTable tableName="employee_education_document" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_education_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_document_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="employee_education_document" schemaName="${schema}"
+                             columnNames="employee_education_id,employee_document_id"
+                             constraintName="uq_employee_education_document"/>
+        <addUniqueConstraint tableName="employee_education_document" schemaName="${schema}"
+                             columnNames="employee_document_id"
+                             constraintName="uq_employee_education_evidence_file"/>
+        <createIndex tableName="employee_education_document" schemaName="${schema}" indexName="idx_employee_education_document_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_education_document" baseColumnNames="employee_education_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee_education" referencedColumnNames="id"
+                                 constraintName="fk_employee_education_document_record" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_education_document" baseColumnNames="employee_document_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee_document" referencedColumnNames="id"
+                                 constraintName="fk_employee_education_document_file" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_employee_education_document_updated_at BEFORE UPDATE ON "${schema}".employee_education_document FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+
+        <createTable tableName="employee_work_experience_document" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_work_experience_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_document_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="employee_work_experience_document" schemaName="${schema}"
+                             columnNames="employee_work_experience_id,employee_document_id"
+                             constraintName="uq_employee_work_experience_document"/>
+        <addUniqueConstraint tableName="employee_work_experience_document" schemaName="${schema}"
+                             columnNames="employee_document_id"
+                             constraintName="uq_employee_work_evidence_file"/>
+        <createIndex tableName="employee_work_experience_document" schemaName="${schema}" indexName="idx_employee_work_experience_document_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_work_experience_document" baseColumnNames="employee_work_experience_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee_work_experience" referencedColumnNames="id"
+                                 constraintName="fk_employee_work_document_record" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_work_experience_document" baseColumnNames="employee_document_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee_document" referencedColumnNames="id"
+                                 constraintName="fk_employee_work_document_file" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_employee_work_document_updated_at BEFORE UPDATE ON "${schema}".employee_work_experience_document FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_work_document_updated_at ON "${schema}".employee_work_experience_document;</sql>
+            <dropTable tableName="employee_work_experience_document" schemaName="${schema}"/>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_education_document_updated_at ON "${schema}".employee_education_document;</sql>
+            <dropTable tableName="employee_education_document" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
