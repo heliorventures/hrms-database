@@ -63,5 +63,6 @@
     <include file="migrations/0046_user_notification_preference/user_notification_preference.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0047_user_username_login/user_username_login.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0048_attendance_punch_authorization/attendance_punch_authorization.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0049_user_must_change_password/user_must_change_password.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
