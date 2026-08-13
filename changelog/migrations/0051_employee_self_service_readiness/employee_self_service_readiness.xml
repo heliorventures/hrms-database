@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="0051-01-encrypt-profile-change-payload" author="kabipay">
+        <comment>Add authenticated encrypted storage for sensitive pending employee profile values. requested_payload remains a masked summary only for new writes.</comment>
+        <addColumn tableName="employee_profile_change_request" schemaName="${schema}">
+            <column name="requested_payload_encrypted" type="BYTEA"/>
+            <column name="payload_encryption_version" type="SMALLINT"/>
+        </addColumn>
+        <sql>
+            ALTER TABLE "${schema}".employee_profile_change_request
+            ADD CONSTRAINT chk_profile_change_payload_encryption_version
+            CHECK (
+                (requested_payload_encrypted IS NULL AND payload_encryption_version IS NULL)
+                OR (requested_payload_encrypted IS NOT NULL AND payload_encryption_version = 1)
+            );
+        </sql>
+        <rollback>
+            <sql>ALTER TABLE "${schema}".employee_profile_change_request DROP CONSTRAINT IF EXISTS chk_profile_change_payload_encryption_version;</sql>
+            <dropColumn tableName="employee_profile_change_request" schemaName="${schema}" columnName="payload_encryption_version"/>
+            <dropColumn tableName="employee_profile_change_request" schemaName="${schema}" columnName="requested_payload_encrypted"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0051-02-profile-review-query-index" author="kabipay">
+        <comment>Support bounded tenant-wide HR review queues.</comment>
+        <createIndex tableName="employee_profile_change_request" schemaName="${schema}" indexName="idx_profile_change_review_queue">
+            <column name="tenant_id"/>
+            <column name="status"/>
+            <column name="created_at" descending="true"/>
+            <column name="id" descending="true"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="employee_profile_change_request" schemaName="${schema}" indexName="idx_profile_change_review_queue"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0051-03-append-only-audit-log" author="kabipay">
+        <comment>Make the tenant audit ledger append-only for application/database writes.</comment>
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION "${schema}".prevent_audit_log_mutation()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            AS $body$
+            BEGIN
+                RAISE EXCEPTION 'audit_log is append-only';
+            END;
+            $body$;
+
+            CREATE TRIGGER trg_audit_log_append_only
+            BEFORE UPDATE OR DELETE ON "${schema}".audit_log
+            FOR EACH ROW EXECUTE FUNCTION "${schema}".prevent_audit_log_mutation();
+        ]]></sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_audit_log_append_only ON "${schema}".audit_log;</sql>
+            <sql>DROP FUNCTION IF EXISTS "${schema}".prevent_audit_log_mutation();</sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
