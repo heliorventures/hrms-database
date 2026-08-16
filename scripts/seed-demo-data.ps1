@@ -747,6 +747,10 @@ VALUES ('$RoleAccountingApproverId', '$PermExpensePayId')
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
 INSERT INTO "$Schema".role_permission (role_id, permission_id)
+VALUES ('$RoleAccountingApproverId', '$PermAttendancePunchSelfId')
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+INSERT INTO "$Schema".role_permission (role_id, permission_id)
 VALUES ('$RoleLineManagerId', '$PermBenefitsSelfId')
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
@@ -1349,8 +1353,8 @@ INSERT INTO "$Schema".workflow_step (
     id, tenant_id, workflow_id, sequence_order, step_name,
     approver_type, approver_role_id, can_skip, sla_hours
 ) VALUES (
-    '$ExpenseWorkflowStep1Id', '$TenantId', '$ExpenseWorkflowId', 1, 'Manager approval',
-    'REPORTING_MANAGER', NULL, false, NULL
+    '$ExpenseWorkflowStep1Id', '$TenantId', '$ExpenseWorkflowId', 1, 'Manager or HR approval',
+    'REPORTING_MANAGER_OR_ROLE', '$RoleHrAdminId', false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
     sequence_order = EXCLUDED.sequence_order,
     step_name = EXCLUDED.step_name,
@@ -1397,8 +1401,8 @@ INSERT INTO "$Schema".workflow_step (
     id, tenant_id, workflow_id, sequence_order, step_name,
     approver_type, approver_role_id, can_skip, sla_hours
 ) VALUES (
-    '$TravelWorkflowStep1Id', '$TenantId', '$TravelWorkflowId', 1, 'Reporting manager',
-    'REPORTING_MANAGER', NULL, false, NULL
+    '$TravelWorkflowStep1Id', '$TenantId', '$TravelWorkflowId', 1, 'Reporting manager or HR',
+    'REPORTING_MANAGER_OR_ROLE', '$RoleHrAdminId', false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
     sequence_order = EXCLUDED.sequence_order,
     step_name = EXCLUDED.step_name,

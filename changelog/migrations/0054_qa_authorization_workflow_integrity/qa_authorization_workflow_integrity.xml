@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0054-001-standard-expense-travel-hr-fallback" author="kabipay-dev">
+        <comment>Allow reporting managers or the tenant HR_ADMIN role to act on the first step of the standard expense and travel workflows.</comment>
+        <sql><![CDATA[
+WITH hr_role AS (
+    SELECT DISTINCT ON (tenant_id) tenant_id, id AS role_id
+    FROM "${schema}".role
+    WHERE UPPER(TRIM(name)) = 'HR_ADMIN'
+      AND is_deleted = false
+    ORDER BY tenant_id, id
+)
+UPDATE "${schema}".workflow_step workflow_step
+SET approver_type = 'REPORTING_MANAGER_OR_ROLE',
+    approver_role_id = hr_role.role_id,
+    updated_at = NOW()
+FROM "${schema}".workflow workflow, hr_role
+WHERE workflow_step.workflow_id = workflow.id
+  AND workflow_step.tenant_id = workflow.tenant_id
+  AND hr_role.tenant_id = workflow.tenant_id
+  AND workflow.is_active = true
+  AND workflow.entity_type IN ('EXPENSE', 'TRAVEL_REQUEST')
+  AND workflow.name IN ('Expense Approval', 'Travel pre-approval')
+  AND workflow_step.sequence_order = 1
+  AND UPPER(TRIM(workflow_step.approver_type)) IN ('REPORTING_MANAGER', 'MANAGER', 'LINE_MANAGER');
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0054-002-accounting-self-attendance" author="kabipay-dev">
+        <comment>Accounting approvers are employees too; grant ordinary self punch and missed-punch access without granting privileged regularization.</comment>
+        <sql><![CDATA[
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT tenant_role.id, permission.id
+FROM "${schema}".role tenant_role
+JOIN "${schema}".permission permission
+  ON permission.resource = 'attendance'
+ AND permission.action = 'punch_self'
+JOIN kabipay_ops.module module
+  ON module.id = permission.module_id
+ AND module.code = 'ATTENDANCE'
+WHERE UPPER(TRIM(tenant_role.name)) = 'ACCOUNTING_APPROVER'
+  AND tenant_role.is_deleted = false
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

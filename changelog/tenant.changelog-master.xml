@@ -68,5 +68,6 @@
     <include file="migrations/0051_employee_self_service_readiness/employee_self_service_readiness.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0052_payroll_assets_hrms_depth/payroll_assets_hrms_depth.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0053_hrms_qa_rbac_leave_integrity/hrms_qa_rbac_leave_integrity.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0054_qa_authorization_workflow_integrity/qa_authorization_workflow_integrity.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
