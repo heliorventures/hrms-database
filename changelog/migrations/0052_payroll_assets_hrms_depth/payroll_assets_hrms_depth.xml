@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0052-001-salary-structure-calculation-basis" author="kabipay-dev">
+        <comment>Add explicit salary-structure calculation basis so CTC can be split by fixed annual amount, percentage of CTC, or percentage of basic.</comment>
+        <addColumn schemaName="${schema}" tableName="salary_structure_component">
+            <column name="calculation_basis" type="VARCHAR(40)" defaultValue="FIXED_ANNUAL">
+                <constraints nullable="false"/>
+            </column>
+            <column name="calculation_value" type="NUMERIC(15,4)"/>
+        </addColumn>
+        <sql><![CDATA[
+UPDATE "${schema}".salary_structure_component
+SET calculation_basis = CASE
+        WHEN percentage_of_basic IS NOT NULL THEN 'PERCENT_OF_BASIC'
+        ELSE 'FIXED_ANNUAL'
+    END,
+    calculation_value = COALESCE(percentage_of_basic, amount, calculation_value);
+
+ALTER TABLE "${schema}".salary_structure_component
+    ADD CONSTRAINT chk_salary_structure_component_calc_basis
+    CHECK (calculation_basis IN ('FIXED_ANNUAL','FIXED_MONTHLY','PERCENT_OF_CTC','PERCENT_OF_BASIC'));
+        ]]></sql>
+        <rollback>
+            <sql>ALTER TABLE "${schema}".salary_structure_component DROP CONSTRAINT IF EXISTS chk_salary_structure_component_calc_basis;</sql>
+            <dropColumn schemaName="${schema}" tableName="salary_structure_component" columnName="calculation_value"/>
+            <dropColumn schemaName="${schema}" tableName="salary_structure_component" columnName="calculation_basis"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0052-002-employee-salary-component-override" author="kabipay-dev">
+        <comment>Employee-specific salary component overrides support one-off fixed/custom component values without mutating the shared salary structure.</comment>
+        <createTable tableName="employee_salary_component_override" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_salary_structure_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="salary_component_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="calculation_basis" type="VARCHAR(40)" defaultValue="FIXED_ANNUAL"><constraints nullable="false"/></column>
+            <column name="calculation_value" type="NUMERIC(15,4)"><constraints nullable="false"/></column>
+            <column name="notes" type="TEXT"/>
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="employee_salary_component_override" schemaName="${schema}"
+                             columnNames="tenant_id,employee_salary_structure_id,salary_component_id"
+                             constraintName="uq_emp_sal_comp_override_component"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_salary_component_override"
+                                 baseColumnNames="employee_salary_structure_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee_salary_structure"
+                                 referencedColumnNames="id"
+                                 constraintName="fk_emp_sal_comp_override_structure" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_salary_component_override"
+                                 baseColumnNames="salary_component_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="salary_component"
+                                 referencedColumnNames="id"
+                                 constraintName="fk_emp_sal_comp_override_component" onDelete="RESTRICT"/>
+        <sql><![CDATA[
+ALTER TABLE "${schema}".employee_salary_component_override
+    ADD CONSTRAINT chk_emp_sal_comp_override_calc_basis
+    CHECK (calculation_basis IN ('FIXED_ANNUAL','FIXED_MONTHLY','PERCENT_OF_CTC','PERCENT_OF_BASIC'));
+
+CREATE TRIGGER trg_employee_salary_component_override_updated_at
+BEFORE UPDATE ON "${schema}".employee_salary_component_override
+FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();
+        ]]></sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_employee_salary_component_override_updated_at ON "${schema}".employee_salary_component_override;</sql>
+            <dropTable tableName="employee_salary_component_override" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0052-003-assets-self-read-permissions" author="kabipay-dev">
+        <comment>Add explicit asset read/self permissions; manager access remains assets:manage.</comment>
+        <sql><![CDATA[
+DO $$
+DECLARE
+    assets_module_id UUID;
+BEGIN
+    SELECT permission.module_id
+    INTO assets_module_id
+    FROM "${schema}".permission AS permission
+    WHERE permission.resource = 'assets'
+      AND permission.action = 'manage'
+    LIMIT 1;
+
+    IF assets_module_id IS NULL THEN
+        RAISE EXCEPTION 'required base permission %.% is missing in schema ${schema}', 'assets', 'manage';
+    END IF;
+
+    INSERT INTO "${schema}".permission (id, resource, action, module_id, description)
+    SELECT gen_random_uuid(), wanted.resource, wanted.action, assets_module_id, wanted.description
+    FROM (
+        VALUES
+            ('assets', 'read', 'Read tenant-wide asset inventory and employee allocations'),
+            ('assets', 'self', 'View assets assigned to the signed-in employee')
+    ) AS wanted(resource, action, description)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM "${schema}".permission AS existing_permission
+        WHERE existing_permission.resource = wanted.resource
+          AND existing_permission.action = wanted.action
+    );
+END $$;
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0052-004-grant-assets-read-to-managers" author="kabipay-dev">
+        <comment>Preserve manager/admin behavior by granting assets:read/self to roles that already manage assets or employee records.</comment>
+        <sql><![CDATA[
+WITH wanted_permission AS (
+    SELECT permission.id
+    FROM "${schema}".permission AS permission
+    WHERE permission.resource = 'assets'
+      AND permission.action IN ('read', 'self')
+),
+manager_role AS (
+    SELECT DISTINCT tenant_role.id
+    FROM "${schema}".role AS tenant_role
+    WHERE tenant_role.is_deleted = false
+      AND (
+          UPPER(TRIM(tenant_role.name)) IN ('HR_ADMIN', 'TENANT_ADMIN', 'ORG_ADMIN')
+          OR EXISTS (
+              SELECT 1
+              FROM "${schema}".role_permission AS role_permission
+              JOIN "${schema}".permission AS permission
+                ON permission.id = role_permission.permission_id
+              WHERE role_permission.role_id = tenant_role.id
+                AND (
+                    (permission.resource = 'assets' AND permission.action = 'manage')
+                    OR (permission.resource = 'employee' AND permission.action IN ('write','manage'))
+                )
+          )
+      )
+)
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT manager_role.id, wanted_permission.id
+FROM manager_role
+CROSS JOIN wanted_permission
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0052-005-grant-assets-self-to-active-roles" author="kabipay-dev">
+        <comment>Every authenticated employee role may view only its own assigned assets; backend ownership checks still prevent cross-employee access.</comment>
+        <sql><![CDATA[
+WITH self_permission AS (
+    SELECT permission.id
+    FROM "${schema}".permission AS permission
+    WHERE permission.resource = 'assets'
+      AND permission.action = 'self'
+)
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT tenant_role.id, self_permission.id
+FROM "${schema}".role AS tenant_role
+CROSS JOIN self_permission
+WHERE tenant_role.is_deleted = false
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0052-006-one-active-asset-allocation" author="kabipay-dev">
+        <comment>Prevent concurrent requests or stale asset status from assigning the same asset to more than one active employee allocation.</comment>
+        <sql><![CDATA[
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_allocation_one_active_per_asset
+ON "${schema}".asset_allocation (tenant_id, asset_id)
+WHERE status = 'ACTIVE';
+        ]]></sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS "${schema}".uq_asset_allocation_one_active_per_asset;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0052-007-one-salary-assignment-per-effective-date" author="kabipay-dev">
+        <comment>Keep employee salary effective-dated history deterministic when HR corrects or replaces an assignment on the same effective date.</comment>
+        <sql><![CDATA[
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employee_salary_structure_effective_date
+ON "${schema}".employee_salary_structure (tenant_id, employee_id, effective_from);
+        ]]></sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS "${schema}".uq_employee_salary_structure_effective_date;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -66,5 +66,7 @@
     <include file="migrations/0049_user_must_change_password/user_must_change_password.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0050_employee_self_service/employee_self_service.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0051_employee_self_service_readiness/employee_self_service_readiness.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0052_payroll_assets_hrms_depth/payroll_assets_hrms_depth.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0053_hrms_qa_rbac_leave_integrity/hrms_qa_rbac_leave_integrity.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

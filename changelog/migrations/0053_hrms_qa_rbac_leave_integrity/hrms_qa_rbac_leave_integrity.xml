@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0053-001-reimbursement-payment-accounting-only" author="kabipay-dev">
+        <comment>Keep Mark Paid on the accounting reimbursement path; approval/admin roles must not inherit expense:pay.</comment>
+        <sql><![CDATA[
+DELETE FROM "${schema}".role_permission role_permission
+USING "${schema}".role tenant_role, "${schema}".permission permission
+WHERE role_permission.role_id = tenant_role.id
+  AND role_permission.permission_id = permission.id
+  AND permission.resource = 'expense'
+  AND permission.action = 'pay'
+  AND tenant_role.is_deleted = false
+  AND UPPER(TRIM(tenant_role.name)) IN ('HR_ADMIN', 'TENANT_ADMIN', 'ORG_ADMIN', 'LINE_MANAGER', 'MANAGER');
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0053-002-one-leave-policy-per-type" author="kabipay-dev">
+        <comment>Collapse duplicate leave policies before adding the tenant/type uniqueness guard; keep the most recently updated policy row.</comment>
+        <sql><![CDATA[
+WITH ranked_policy AS (
+    SELECT
+        id,
+        ROW_NUMBER() OVER (
+            PARTITION BY tenant_id, leave_type_id
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+        ) AS row_rank
+    FROM "${schema}".leave_policy
+)
+DELETE FROM "${schema}".leave_policy leave_policy
+USING ranked_policy
+WHERE leave_policy.id = ranked_policy.id
+  AND ranked_policy.row_rank > 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_leave_policy_tenant_type
+ON "${schema}".leave_policy (tenant_id, leave_type_id);
+        ]]></sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS "${schema}".uq_leave_policy_tenant_type;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

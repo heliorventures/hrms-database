@@ -739,10 +739,6 @@ VALUES ('$RoleLineManagerId', '$PermExpenseApproveId')
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
 INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermExpensePayId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
 VALUES ('$RoleAccountingApproverId', '$PermExpenseApproveId')
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
@@ -807,6 +803,13 @@ SELECT '$RoleTenantAdminId', rp.permission_id
 FROM "$Schema".role_permission rp
 WHERE rp.role_id = '$RoleHrAdminId'
 ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+DELETE FROM "$Schema".role_permission rp
+USING "$Schema".role r
+WHERE rp.role_id = r.id
+  AND rp.permission_id = '$PermExpensePayId'
+  AND r.tenant_id = '$TenantId'
+  AND UPPER(TRIM(r.name)) IN ('HR_ADMIN', 'TENANT_ADMIN', 'ORG_ADMIN', 'LINE_MANAGER', 'MANAGER');
 
 INSERT INTO "$Schema".user_role (user_id, role_id)
 VALUES ('$TenantAdminUserId', '$RoleTenantAdminId')
