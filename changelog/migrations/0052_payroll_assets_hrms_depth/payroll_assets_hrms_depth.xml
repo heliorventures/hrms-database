@@ -76,7 +76,7 @@ FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();
 
     <changeSet id="0052-003-assets-self-read-permissions" author="kabipay-dev">
         <comment>Add explicit asset read/self permissions; manager access remains assets:manage.</comment>
-        <sql><![CDATA[
+        <sql splitStatements="false"><![CDATA[
 DO $$
 DECLARE
     assets_module_id UUID;
