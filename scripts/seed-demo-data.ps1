@@ -934,7 +934,7 @@ INSERT INTO "$Schema".leave_balance (
     ('$LbDemoSlId', '$TenantId', '$EmployeeId', '$LeaveTypeSlId', EXTRACT(YEAR FROM CURRENT_DATE)::int,
         10, 0, 0, 0, 10, NOW(), NOW()),
     ('$LbDemoPtoId', '$TenantId', '$EmployeeId', '$LeaveTypePtoId', EXTRACT(YEAR FROM CURRENT_DATE)::int,
-        15, 0, 0, 0, 15, NOW(), NOW()),
+        0, 0, 0, 0, 0, NOW(), NOW()),
     ('$LbMgrClId', '$TenantId', '$ManagerEmployeeId', '$LeaveTypeClId', EXTRACT(YEAR FROM CURRENT_DATE)::int,
         12, 0, 0, 0, 12, NOW(), NOW()),
     ('$LbStaffClId', '$TenantId', '$StaffEmployeeId', '$LeaveTypeClId', EXTRACT(YEAR FROM CURRENT_DATE)::int,
@@ -944,8 +944,88 @@ INSERT INTO "$Schema".leave_balance (
     ('$LbTenantAdminSlId', '$TenantId', '$TenantAdminEmployeeId', '$LeaveTypeSlId', EXTRACT(YEAR FROM CURRENT_DATE)::int,
         10, 0, 0, 0, 10, NOW(), NOW()),
     ('$LbTenantAdminPtoId', '$TenantId', '$TenantAdminEmployeeId', '$LeaveTypePtoId', EXTRACT(YEAR FROM CURRENT_DATE)::int,
-        15, 0, 0, 0, 15, NOW(), NOW())
+        0, 0, 0, 0, 0, NOW(), NOW())
 ON CONFLICT (employee_id, leave_type_id, year) DO NOTHING;
+
+WITH monthly_policy AS (
+    SELECT
+        policy.tenant_id,
+        policy.leave_type_id,
+        COALESCE(policy.accrual_days, 0)::numeric AS accrual_days
+    FROM "$Schema".leave_policy policy
+    JOIN "$Schema".leave_type leave_type
+      ON leave_type.id = policy.leave_type_id
+     AND leave_type.tenant_id = policy.tenant_id
+    WHERE UPPER(TRIM(COALESCE(policy.accrual_frequency, ''))) = 'MONTHLY'
+      AND leave_type.is_deleted = false
+),
+eligible_balance AS (
+    SELECT
+        balance.id,
+        balance.year,
+        balance.used_days,
+        balance.pending_days,
+        balance.carried_forward_days,
+        monthly_policy.accrual_days,
+        COALESCE(employee.date_of_joining, make_date(balance.year, 1, 1)) AS joining_date,
+        make_date(balance.year, 1, 1) AS year_start,
+        make_date(balance.year, 12, 31) AS year_end
+    FROM "$Schema".leave_balance balance
+    JOIN monthly_policy
+      ON monthly_policy.tenant_id = balance.tenant_id
+     AND monthly_policy.leave_type_id = balance.leave_type_id
+    JOIN "$Schema".employee employee
+      ON employee.id = balance.employee_id
+     AND employee.tenant_id = balance.tenant_id
+    WHERE balance.year = EXTRACT(YEAR FROM CURRENT_DATE)::int
+      AND employee.is_deleted = false
+),
+month_window AS (
+    SELECT
+        id,
+        used_days,
+        pending_days,
+        carried_forward_days,
+        accrual_days,
+        GREATEST(
+            CASE
+                WHEN EXTRACT(DAY FROM joining_date)::int = 1
+                    THEN date_trunc('month', joining_date)::date
+                ELSE (date_trunc('month', joining_date)::date + INTERVAL '1 month')::date
+            END,
+            year_start
+        ) AS accrual_start,
+        LEAST(CURRENT_DATE, year_end) AS accrual_as_of
+    FROM eligible_balance
+),
+earned_balance AS (
+    SELECT
+        id,
+        CASE
+            WHEN accrual_start > accrual_as_of THEN 0::numeric
+            ELSE (
+                accrual_days
+                * (
+                    ((EXTRACT(YEAR FROM accrual_as_of)::int - EXTRACT(YEAR FROM accrual_start)::int) * 12)
+                    + EXTRACT(MONTH FROM accrual_as_of)::int
+                    - EXTRACT(MONTH FROM accrual_start)::int
+                    + 1
+                )
+            )::numeric(15, 4)
+        END AS target_entitled_days
+    FROM month_window
+)
+UPDATE "$Schema".leave_balance balance
+SET entitled_days = earned_balance.target_entitled_days,
+    balance_days = (
+        earned_balance.target_entitled_days
+        + balance.carried_forward_days
+        - balance.used_days
+        - balance.pending_days
+    )::numeric(15, 4),
+    updated_at = NOW()
+FROM earned_balance
+WHERE balance.id = earned_balance.id;
 
 INSERT INTO "$Schema".leave_request (
     id, tenant_id, employee_id, leave_type_id,

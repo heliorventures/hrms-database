@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0055-001-recompute-monthly-accrual-balances" author="kabipay-dev">
+        <comment>Recompute current-year leave balances for monthly accrual policies so PTO shows earned balance instead of annual entitlement.</comment>
+        <sql><![CDATA[
+WITH monthly_policy AS (
+    SELECT
+        policy.tenant_id,
+        policy.leave_type_id,
+        COALESCE(policy.accrual_days, 0)::numeric AS accrual_days
+    FROM "${schema}".leave_policy policy
+    JOIN "${schema}".leave_type leave_type
+      ON leave_type.id = policy.leave_type_id
+     AND leave_type.tenant_id = policy.tenant_id
+    WHERE UPPER(TRIM(COALESCE(policy.accrual_frequency, ''))) = 'MONTHLY'
+      AND leave_type.is_deleted = false
+),
+eligible_balance AS (
+    SELECT
+        balance.id,
+        balance.year,
+        balance.used_days,
+        balance.pending_days,
+        balance.carried_forward_days,
+        monthly_policy.accrual_days,
+        COALESCE(employee.date_of_joining, make_date(balance.year, 1, 1)) AS joining_date,
+        make_date(balance.year, 1, 1) AS year_start,
+        make_date(balance.year, 12, 31) AS year_end
+    FROM "${schema}".leave_balance balance
+    JOIN monthly_policy
+      ON monthly_policy.tenant_id = balance.tenant_id
+     AND monthly_policy.leave_type_id = balance.leave_type_id
+    JOIN "${schema}".employee employee
+      ON employee.id = balance.employee_id
+     AND employee.tenant_id = balance.tenant_id
+    WHERE balance.year = EXTRACT(YEAR FROM CURRENT_DATE)::int
+      AND employee.is_deleted = false
+),
+month_window AS (
+    SELECT
+        id,
+        used_days,
+        pending_days,
+        carried_forward_days,
+        accrual_days,
+        GREATEST(
+            CASE
+                WHEN EXTRACT(DAY FROM joining_date)::int = 1
+                    THEN date_trunc('month', joining_date)::date
+                ELSE (date_trunc('month', joining_date)::date + INTERVAL '1 month')::date
+            END,
+            year_start
+        ) AS accrual_start,
+        LEAST(CURRENT_DATE, year_end) AS accrual_as_of
+    FROM eligible_balance
+),
+earned_balance AS (
+    SELECT
+        id,
+        CASE
+            WHEN accrual_start > accrual_as_of THEN 0::numeric
+            ELSE (
+                accrual_days
+                * (
+                    ((EXTRACT(YEAR FROM accrual_as_of)::int - EXTRACT(YEAR FROM accrual_start)::int) * 12)
+                    + EXTRACT(MONTH FROM accrual_as_of)::int
+                    - EXTRACT(MONTH FROM accrual_start)::int
+                    + 1
+                )
+            )::numeric(15, 4)
+        END AS target_entitled_days
+    FROM month_window
+)
+UPDATE "${schema}".leave_balance balance
+SET entitled_days = earned_balance.target_entitled_days,
+    balance_days = (
+        earned_balance.target_entitled_days
+        + balance.carried_forward_days
+        - balance.used_days
+        - balance.pending_days
+    )::numeric(15, 4),
+    updated_at = NOW()
+FROM earned_balance
+WHERE balance.id = earned_balance.id
+  AND (
+      balance.entitled_days IS DISTINCT FROM earned_balance.target_entitled_days
+      OR balance.balance_days IS DISTINCT FROM (
+          earned_balance.target_entitled_days
+          + balance.carried_forward_days
+          - balance.used_days
+          - balance.pending_days
+      )::numeric(15, 4)
+  );
+        ]]></sql>
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
