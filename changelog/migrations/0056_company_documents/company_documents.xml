@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0056-001-create-company-document" author="kabipay-dev">
+        <createTable tableName="company_document" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="category" type="VARCHAR(40)"><constraints nullable="false"/></column>
+            <column name="title" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="file_storage_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(30)" defaultValue="ACTIVE"><constraints nullable="false"/></column>
+            <column name="visible_to_employees" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="uploaded_by" type="UUID"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="deleted_at" type="TIMESTAMPTZ"/>
+            <column name="deleted_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+
+        <sql>
+            ALTER TABLE "${schema}".company_document
+                ADD CONSTRAINT chk_company_document_category CHECK (
+                    category IN ('COMPANY_POLICY','ONBOARDING','EXIT_FORMALITY')
+                ),
+                ADD CONSTRAINT chk_company_document_status CHECK (
+                    status IN ('ACTIVE','ARCHIVED')
+                ),
+                ADD CONSTRAINT chk_company_document_title_not_blank CHECK (
+                    length(trim(title)) &gt; 0
+                );
+        </sql>
+
+        <createIndex tableName="company_document" schemaName="${schema}" indexName="idx_company_document_visible">
+            <column name="tenant_id"/>
+            <column name="category"/>
+            <column name="status"/>
+            <column name="visible_to_employees"/>
+            <column name="is_deleted"/>
+        </createIndex>
+        <createIndex tableName="company_document" schemaName="${schema}" indexName="idx_company_document_updated">
+            <column name="tenant_id"/>
+            <column name="updated_at"/>
+        </createIndex>
+
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="company_document" baseColumnNames="file_storage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="file_storage" referencedColumnNames="id"
+                                 constraintName="fk_company_document_file" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="company_document" baseColumnNames="uploaded_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_company_document_uploaded_by" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="company_document" baseColumnNames="deleted_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_company_document_deleted_by" onDelete="SET NULL"/>
+
+        <sql>CREATE TRIGGER trg_company_document_updated_at BEFORE UPDATE ON "${schema}".company_document FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_company_document_updated_at ON "${schema}".company_document;</sql>
+            <dropTable tableName="company_document" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

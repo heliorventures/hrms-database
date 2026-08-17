@@ -70,5 +70,6 @@
     <include file="migrations/0053_hrms_qa_rbac_leave_integrity/hrms_qa_rbac_leave_integrity.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0054_qa_authorization_workflow_integrity/qa_authorization_workflow_integrity.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0055_leave_monthly_accrual_balance_repair/leave_monthly_accrual_balance_repair.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0056_company_documents/company_documents.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
