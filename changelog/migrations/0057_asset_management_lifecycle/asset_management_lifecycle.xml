@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0057-001-asset-management-lifecycle" author="kabipay-dev">
+        <comment>Add non-destructive category/asset lifecycle fields and durable inventory/return integrity.</comment>
+
+        <addColumn schemaName="${schema}" tableName="asset_category">
+            <column name="is_active" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="retired_at" type="TIMESTAMPTZ"/>
+            <column name="retired_by" type="UUID"/>
+        </addColumn>
+
+        <addColumn schemaName="${schema}" tableName="asset">
+            <column name="retired_at" type="TIMESTAMPTZ"/>
+            <column name="retired_by" type="UUID"/>
+        </addColumn>
+
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset_category" baseColumnNames="retired_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_asset_category_retired_by" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset" baseColumnNames="retired_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_asset_retired_by" onDelete="SET NULL"/>
+
+        <sql><![CDATA[
+UPDATE "${schema}".asset
+SET asset_tag = NULLIF(BTRIM(asset_tag), ''),
+    serial_number = NULLIF(BTRIM(serial_number), ''),
+    status = CASE
+        WHEN UPPER(BTRIM(status)) IN ('AVAILABLE', 'ASSIGNED', 'RETIRED')
+            THEN UPPER(BTRIM(status))
+        WHEN EXISTS (
+            SELECT 1
+            FROM "${schema}".asset_allocation allocation
+            WHERE allocation.tenant_id = asset.tenant_id
+              AND allocation.asset_id = asset.id
+              AND allocation.status = 'ACTIVE'
+        ) THEN 'ASSIGNED'
+        ELSE 'AVAILABLE'
+    END;
+
+ALTER TABLE "${schema}".asset
+    ADD CONSTRAINT chk_asset_status
+    CHECK (status IN ('AVAILABLE', 'ASSIGNED', 'RETIRED'));
+
+ALTER TABLE "${schema}".asset_category
+    ADD CONSTRAINT chk_asset_category_name_not_blank
+    CHECK (length(BTRIM(name)) > 0);
+
+ALTER TABLE "${schema}".asset
+    ADD CONSTRAINT chk_asset_name_not_blank
+    CHECK (length(BTRIM(name)) > 0),
+    ADD CONSTRAINT chk_asset_purchase_value_non_negative
+    CHECK (purchase_value IS NULL OR purchase_value >= 0);
+
+CREATE UNIQUE INDEX uq_asset_tenant_asset_tag_ci
+ON "${schema}".asset (tenant_id, UPPER(asset_tag))
+WHERE asset_tag IS NOT NULL AND BTRIM(asset_tag) <> '';
+
+CREATE UNIQUE INDEX uq_asset_tenant_serial_number_ci
+ON "${schema}".asset (tenant_id, UPPER(serial_number))
+WHERE serial_number IS NOT NULL AND BTRIM(serial_number) <> '';
+
+CREATE UNIQUE INDEX uq_asset_return_log_allocation
+ON "${schema}".asset_return_log (tenant_id, asset_allocation_id);
+        ]]></sql>
+
+        <rollback>
+            <sql><![CDATA[
+DROP INDEX IF EXISTS "${schema}".uq_asset_return_log_allocation;
+DROP INDEX IF EXISTS "${schema}".uq_asset_tenant_serial_number_ci;
+DROP INDEX IF EXISTS "${schema}".uq_asset_tenant_asset_tag_ci;
+ALTER TABLE "${schema}".asset DROP CONSTRAINT IF EXISTS chk_asset_purchase_value_non_negative;
+ALTER TABLE "${schema}".asset DROP CONSTRAINT IF EXISTS chk_asset_name_not_blank;
+ALTER TABLE "${schema}".asset_category DROP CONSTRAINT IF EXISTS chk_asset_category_name_not_blank;
+ALTER TABLE "${schema}".asset DROP CONSTRAINT IF EXISTS chk_asset_status;
+            ]]></sql>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset" constraintName="fk_asset_retired_by"/>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="asset_category" constraintName="fk_asset_category_retired_by"/>
+            <dropColumn schemaName="${schema}" tableName="asset" columnName="retired_by"/>
+            <dropColumn schemaName="${schema}" tableName="asset" columnName="retired_at"/>
+            <dropColumn schemaName="${schema}" tableName="asset_category" columnName="retired_by"/>
+            <dropColumn schemaName="${schema}" tableName="asset_category" columnName="retired_at"/>
+            <dropColumn schemaName="${schema}" tableName="asset_category" columnName="is_active"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
