@@ -1,0 +1,352 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0058-001-asset-management-integrity" author="kabipay-dev">
+        <comment>
+            Enforce tenant-parent integrity and globally identified asset-allocation/return uniqueness.
+            The migration never deletes or automatically deduplicates records. It intentionally normalizes
+            category codes, recognized allocation statuses, asset identifiers, and derived asset statuses;
+            those data normalizations are not reversible by rollback.
+        </comment>
+
+        <!--
+            Preflight runs before every normalization and DDL statement. PostgreSQL executes this changeset
+            transactionally, so an exception leaves neither normalized data nor partially created constraints.
+            Every diagnostic is deliberately limited to ten representative rows while retaining the total count.
+        -->
+        <sql splitStatements="false"><![CDATA[
+DO $$
+DECLARE
+    violation_count BIGINT;
+    sample_rows TEXT;
+BEGIN
+    WITH violations AS (
+        SELECT format('asset id=%s tenant_id=%s references category id=%s tenant_id=%s',
+                      asset.id, asset.tenant_id, category.id, category.tenant_id) AS detail
+        FROM "${schema}".asset AS asset
+        JOIN "${schema}".asset_category AS category ON category.id = asset.asset_category_id
+        WHERE asset.tenant_id <> category.tenant_id
+
+        UNION ALL
+
+        SELECT format('asset id=%s tenant_id=%s references location id=%s tenant_id=%s',
+                      asset.id, asset.tenant_id, location.id, location.tenant_id)
+        FROM "${schema}".asset AS asset
+        JOIN "${schema}".location AS location ON location.id = asset.location_id
+        WHERE asset.tenant_id <> location.tenant_id
+
+        UNION ALL
+
+        SELECT format('allocation id=%s tenant_id=%s references asset id=%s tenant_id=%s',
+                      allocation.id, allocation.tenant_id, asset.id, asset.tenant_id)
+        FROM "${schema}".asset_allocation AS allocation
+        JOIN "${schema}".asset AS asset ON asset.id = allocation.asset_id
+        WHERE allocation.tenant_id <> asset.tenant_id
+
+        UNION ALL
+
+        SELECT format('allocation id=%s tenant_id=%s references employee id=%s tenant_id=%s',
+                      allocation.id, allocation.tenant_id, employee.id, employee.tenant_id)
+        FROM "${schema}".asset_allocation AS allocation
+        JOIN "${schema}".employee AS employee ON employee.id = allocation.employee_id
+        WHERE allocation.tenant_id <> employee.tenant_id
+
+        UNION ALL
+
+        SELECT format('return_log id=%s tenant_id=%s references allocation id=%s tenant_id=%s',
+                      return_log.id, return_log.tenant_id, allocation.id, allocation.tenant_id)
+        FROM "${schema}".asset_return_log AS return_log
+        JOIN "${schema}".asset_allocation AS allocation ON allocation.id = return_log.asset_allocation_id
+        WHERE return_log.tenant_id <> allocation.tenant_id
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % tenant-parent mismatch(es) exist.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Correct the listed child tenant_id values or the parent relationship; do not delete audit history. Then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format('asset id=%s tenant_id=%s is RETIRED but allocation id=%s is ACTIVE',
+                      asset.id, asset.tenant_id, allocation.id) AS detail
+        FROM "${schema}".asset AS asset
+        JOIN "${schema}".asset_allocation AS allocation ON allocation.asset_id = asset.id
+        WHERE UPPER(BTRIM(asset.status)) = 'RETIRED'
+          AND UPPER(BTRIM(allocation.status)) = 'ACTIVE'
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % retired asset(s) still have an active allocation.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Return or otherwise close the listed active allocation records before retiring the asset, then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format('asset id=%s has active allocation ids=%s', asset_id, string_agg(id::TEXT, ',' ORDER BY id)) AS detail
+        FROM "${schema}".asset_allocation
+        WHERE UPPER(BTRIM(status)) = 'ACTIVE'
+        GROUP BY asset_id
+        HAVING COUNT(*) > 1
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % asset(s) have multiple active allocations.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Choose the one valid active allocation for each listed asset and close the others without deleting audit history. Then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format('allocation id=%s has return log ids=%s', asset_allocation_id, string_agg(id::TEXT, ',' ORDER BY id)) AS detail
+        FROM "${schema}".asset_return_log
+        GROUP BY asset_allocation_id
+        HAVING COUNT(*) > 1
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % allocation(s) have duplicate return logs.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Reconcile each listed return-log group, retaining the valid audit record and removing only a confirmed duplicate. Then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format('tenant_id=%s normalized_code=%L category_ids=%s', tenant_id, normalized_code, string_agg(id::TEXT, ',' ORDER BY id)) AS detail
+        FROM (
+            SELECT id, tenant_id, UPPER(BTRIM(code)) AS normalized_code
+            FROM "${schema}".asset_category
+        ) AS category_code
+        GROUP BY tenant_id, normalized_code
+        HAVING COUNT(*) > 1
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % normalized category-code duplicate group(s) exist.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Give each listed category a distinct UPPER(BTRIM(code)) value within its tenant, then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format('tenant_id=%s normalized_asset_tag=%L asset_ids=%s', tenant_id, normalized_value, string_agg(id::TEXT, ',' ORDER BY id)) AS detail
+        FROM (
+            SELECT id, tenant_id, UPPER(BTRIM(asset_tag)) AS normalized_value
+            FROM "${schema}".asset
+            WHERE NULLIF(BTRIM(asset_tag), '') IS NOT NULL
+        ) AS asset_tag
+        GROUP BY tenant_id, normalized_value
+        HAVING COUNT(*) > 1
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % normalized asset-tag duplicate group(s) exist.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Resolve the listed duplicate UPPER(BTRIM(asset_tag)) values without discarding asset records, then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format('tenant_id=%s normalized_serial_number=%L asset_ids=%s', tenant_id, normalized_value, string_agg(id::TEXT, ',' ORDER BY id)) AS detail
+        FROM (
+            SELECT id, tenant_id, UPPER(BTRIM(serial_number)) AS normalized_value
+            FROM "${schema}".asset
+            WHERE NULLIF(BTRIM(serial_number), '') IS NOT NULL
+        ) AS serial_number
+        GROUP BY tenant_id, normalized_value
+        HAVING COUNT(*) > 1
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % normalized serial-number duplicate group(s) exist.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Resolve the listed duplicate UPPER(BTRIM(serial_number)) values without discarding asset records, then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format('category id=%s tenant_id=%s name=%L code=%L', id, tenant_id, name, code) AS detail
+        FROM "${schema}".asset_category
+        WHERE name IS NULL
+           OR BTRIM(name) = ''
+           OR code IS NULL
+           OR BTRIM(code) = ''
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % asset category row(s) have blank names or codes.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Populate a nonblank category name and code for every listed row, then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format('asset id=%s tenant_id=%s name=%L purchase_value=%s', id, tenant_id, name, purchase_value) AS detail
+        FROM "${schema}".asset
+        WHERE name IS NULL
+           OR BTRIM(name) = ''
+           OR purchase_value < 0
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset integrity migration blocked: % asset row(s) have blank names or negative purchase values.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Correct each listed source asset without deleting its history, then rerun the tenant migration.';
+    END IF;
+END;
+$$;
+        ]]></sql>
+
+        <!-- Values are changed only after every legacy-data preflight has passed. -->
+        <sql><![CDATA[
+UPDATE "${schema}".asset_category
+SET code = UPPER(BTRIM(code));
+
+UPDATE "${schema}".asset_allocation
+SET status = UPPER(BTRIM(status))
+WHERE UPPER(BTRIM(status)) IN ('ACTIVE', 'RETURNED')
+  AND status <> UPPER(BTRIM(status));
+
+UPDATE "${schema}".asset AS asset
+SET asset_tag = NULLIF(BTRIM(asset_tag), ''),
+    serial_number = NULLIF(BTRIM(serial_number), ''),
+    status = CASE
+        WHEN UPPER(BTRIM(asset.status)) = 'RETIRED' THEN 'RETIRED'
+        WHEN EXISTS (
+            SELECT 1
+            FROM "${schema}".asset_allocation AS allocation
+            WHERE allocation.asset_id = asset.id
+              AND allocation.status = 'ACTIVE'
+        ) THEN 'ASSIGNED'
+        ELSE 'AVAILABLE'
+    END;
+
+ALTER TABLE "${schema}".asset_category
+    DROP CONSTRAINT IF EXISTS uq_asset_category_tenant_code;
+CREATE UNIQUE INDEX uq_asset_category_tenant_code_normalized_ci
+    ON "${schema}".asset_category (tenant_id, UPPER(code));
+ALTER TABLE "${schema}".asset_category
+    ADD CONSTRAINT chk_asset_category_code_normalized
+    CHECK (code IS NOT NULL AND code = BTRIM(code) AND code = UPPER(code));
+
+ALTER TABLE "${schema}".asset_category
+    ADD CONSTRAINT uq_asset_category_id_tenant UNIQUE (id, tenant_id);
+ALTER TABLE "${schema}".asset
+    ADD CONSTRAINT uq_asset_id_tenant UNIQUE (id, tenant_id);
+ALTER TABLE "${schema}".location
+    ADD CONSTRAINT uq_location_id_tenant UNIQUE (id, tenant_id);
+ALTER TABLE "${schema}".employee
+    ADD CONSTRAINT uq_employee_id_tenant UNIQUE (id, tenant_id);
+ALTER TABLE "${schema}".asset_allocation
+    ADD CONSTRAINT uq_asset_allocation_id_tenant UNIQUE (id, tenant_id);
+
+ALTER TABLE "${schema}".asset
+    ADD CONSTRAINT fk_asset_category_tenant
+    FOREIGN KEY (asset_category_id, tenant_id)
+    REFERENCES "${schema}".asset_category (id, tenant_id)
+    ON DELETE RESTRICT;
+ALTER TABLE "${schema}".asset
+    DROP CONSTRAINT IF EXISTS fk_asset_location;
+ALTER TABLE "${schema}".asset
+    ADD CONSTRAINT fk_asset_location_tenant
+    FOREIGN KEY (location_id, tenant_id)
+    REFERENCES "${schema}".location (id, tenant_id)
+    ON DELETE SET NULL (location_id);
+ALTER TABLE "${schema}".asset_allocation
+    ADD CONSTRAINT fk_asset_allocation_asset_tenant
+    FOREIGN KEY (asset_id, tenant_id)
+    REFERENCES "${schema}".asset (id, tenant_id)
+    ON DELETE RESTRICT;
+ALTER TABLE "${schema}".asset_allocation
+    ADD CONSTRAINT fk_asset_allocation_employee_tenant
+    FOREIGN KEY (employee_id, tenant_id)
+    REFERENCES "${schema}".employee (id, tenant_id)
+    ON DELETE RESTRICT;
+ALTER TABLE "${schema}".asset_return_log
+    ADD CONSTRAINT fk_asset_return_log_allocation_tenant
+    FOREIGN KEY (asset_allocation_id, tenant_id)
+    REFERENCES "${schema}".asset_allocation (id, tenant_id)
+    ON DELETE CASCADE;
+
+DROP INDEX IF EXISTS "${schema}".uq_asset_allocation_one_active_per_asset;
+CREATE UNIQUE INDEX uq_asset_allocation_one_active_per_asset
+    ON "${schema}".asset_allocation (asset_id)
+    WHERE status = 'ACTIVE';
+
+DROP INDEX IF EXISTS "${schema}".uq_asset_return_log_allocation;
+CREATE UNIQUE INDEX uq_asset_return_log_allocation
+    ON "${schema}".asset_return_log (asset_allocation_id);
+        ]]></sql>
+
+        <rollback>
+            <!--
+                DDL rollback only. It cannot restore the intentionally normalized data values described
+                in this changeset comment; operators must restore those from a verified backup if required.
+            -->
+            <sql><![CDATA[
+ALTER TABLE "${schema}".asset_return_log DROP CONSTRAINT IF EXISTS fk_asset_return_log_allocation_tenant;
+ALTER TABLE "${schema}".asset_allocation DROP CONSTRAINT IF EXISTS fk_asset_allocation_employee_tenant;
+ALTER TABLE "${schema}".asset_allocation DROP CONSTRAINT IF EXISTS fk_asset_allocation_asset_tenant;
+ALTER TABLE "${schema}".asset DROP CONSTRAINT IF EXISTS fk_asset_location_tenant;
+ALTER TABLE "${schema}".asset
+    ADD CONSTRAINT fk_asset_location
+    FOREIGN KEY (location_id) REFERENCES "${schema}".location (id)
+    ON DELETE SET NULL;
+ALTER TABLE "${schema}".asset DROP CONSTRAINT IF EXISTS fk_asset_category_tenant;
+ALTER TABLE "${schema}".asset_allocation DROP CONSTRAINT IF EXISTS uq_asset_allocation_id_tenant;
+ALTER TABLE "${schema}".employee DROP CONSTRAINT IF EXISTS uq_employee_id_tenant;
+ALTER TABLE "${schema}".asset DROP CONSTRAINT IF EXISTS uq_asset_id_tenant;
+ALTER TABLE "${schema}".location DROP CONSTRAINT IF EXISTS uq_location_id_tenant;
+ALTER TABLE "${schema}".asset_category DROP CONSTRAINT IF EXISTS uq_asset_category_id_tenant;
+
+DROP INDEX IF EXISTS "${schema}".uq_asset_return_log_allocation;
+CREATE UNIQUE INDEX uq_asset_return_log_allocation
+    ON "${schema}".asset_return_log (tenant_id, asset_allocation_id);
+
+DROP INDEX IF EXISTS "${schema}".uq_asset_allocation_one_active_per_asset;
+CREATE UNIQUE INDEX uq_asset_allocation_one_active_per_asset
+    ON "${schema}".asset_allocation (tenant_id, asset_id)
+    WHERE status = 'ACTIVE';
+
+ALTER TABLE "${schema}".asset_category DROP CONSTRAINT IF EXISTS chk_asset_category_code_normalized;
+DROP INDEX IF EXISTS "${schema}".uq_asset_category_tenant_code_normalized_ci;
+ALTER TABLE "${schema}".asset_category
+    ADD CONSTRAINT uq_asset_category_tenant_code UNIQUE (tenant_id, code);
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

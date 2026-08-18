@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0060-001-private-file-cleanup" author="kabipay-dev">
+        <comment>Durable tenant-scoped tombstones for private objects whose owning business metadata has been permanently removed.</comment>
+
+        <createTable tableName="private_file_cleanup_task" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="file_storage_id" type="UUID"/>
+            <column name="deduplication_key" type="VARCHAR(64)"><constraints nullable="false"/></column>
+            <column name="provider" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="bucket" type="VARCHAR(255)"/>
+            <column name="storage_path" type="TEXT"/>
+            <column name="local_root" type="TEXT"/>
+            <column name="status" type="VARCHAR(20)" defaultValue="PENDING"><constraints nullable="false"/></column>
+            <column name="attempt_count" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="next_attempt_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="claimed_at" type="TIMESTAMPTZ"/>
+            <column name="last_error_class" type="VARCHAR(40)"/>
+            <column name="completed_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+
+        <addUniqueConstraint tableName="private_file_cleanup_task" schemaName="${schema}"
+                             columnNames="tenant_id,deduplication_key"
+                             constraintName="uq_private_file_cleanup_tenant_deduplication"/>
+
+        <sql><![CDATA[
+ALTER TABLE "${schema}".private_file_cleanup_task
+    ADD CONSTRAINT chk_private_file_cleanup_status
+        CHECK (status IN ('PENDING','PROCESSING','FAILED','COMPLETED')),
+    ADD CONSTRAINT chk_private_file_cleanup_attempts
+        CHECK (attempt_count >= 0),
+    ADD CONSTRAINT chk_private_file_cleanup_deduplication_key
+        CHECK (deduplication_key ~ '^[0-9a-f]{64}$'),
+    ADD CONSTRAINT chk_private_file_cleanup_error_class
+        CHECK (last_error_class IS NULL OR last_error_class IN (
+            'INVALID_STORAGE_METADATA',
+            'LOCAL_IO',
+            'STORAGE_CONFIGURATION',
+            'OBJECT_STORE',
+            'UNSUPPORTED_PROVIDER'
+        )),
+    ADD CONSTRAINT chk_private_file_cleanup_payload
+        CHECK (
+            (status = 'COMPLETED' AND storage_path IS NULL AND bucket IS NULL AND local_root IS NULL AND completed_at IS NOT NULL)
+            OR
+            (status <> 'COMPLETED' AND storage_path IS NOT NULL AND completed_at IS NULL)
+        ),
+    ADD CONSTRAINT chk_private_file_cleanup_provider_payload
+        CHECK (
+            status = 'COMPLETED'
+            OR (provider = 'LOCAL' AND bucket IS NULL AND local_root IS NOT NULL)
+            OR (provider = 'S3' AND bucket IS NOT NULL AND BTRIM(bucket) <> '' AND local_root IS NULL)
+        ),
+    ADD CONSTRAINT chk_private_file_cleanup_claim_lifecycle
+        CHECK (
+            (status = 'PROCESSING' AND claimed_at IS NOT NULL)
+            OR
+            (status IN ('PENDING','FAILED','COMPLETED') AND claimed_at IS NULL)
+        );
+
+CREATE INDEX idx_private_file_cleanup_due
+ON "${schema}".private_file_cleanup_task (tenant_id, next_attempt_at, created_at)
+WHERE status IN ('PENDING','FAILED');
+
+CREATE INDEX idx_private_file_cleanup_processing
+ON "${schema}".private_file_cleanup_task (tenant_id, claimed_at)
+WHERE status = 'PROCESSING';
+
+CREATE TRIGGER trg_private_file_cleanup_updated_at
+BEFORE UPDATE ON "${schema}".private_file_cleanup_task
+FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();
+        ]]></sql>
+
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM "${schema}".private_file_cleanup_task) THEN
+        RAISE EXCEPTION 'Cannot roll back private-file cleanup while cleanup task history exists.'
+            USING HINT = 'Retain the durable cleanup audit trail. If rollback is explicitly approved, export the completed-task history and resolve every pending task through the cleanup worker before an authorized operator purges the rows and reruns rollback.';
+    END IF;
+END;
+$$;
+            ]]></sql>
+            <sql><![CDATA[
+DROP TRIGGER IF EXISTS trg_private_file_cleanup_updated_at ON "${schema}".private_file_cleanup_task;
+DROP INDEX IF EXISTS "${schema}".idx_private_file_cleanup_processing;
+DROP INDEX IF EXISTS "${schema}".idx_private_file_cleanup_due;
+            ]]></sql>
+            <dropTable tableName="private_file_cleanup_task" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0059-001-file-upload-stage" author="kabipay-dev">
+        <comment>Add operation-owned, expiring file-upload stages for atomic business-object claims with tenant-bound ownership and claimed-company-document references.</comment>
+
+        <sql splitStatements="false"><![CDATA[
+DO $$
+DECLARE
+    violation_count BIGINT;
+    sample_rows TEXT;
+BEGIN
+    WITH violations AS (
+        SELECT format('company_document id=%s tenant_id=%s references file_storage id=%s tenant_id=%s',
+                      document.id, document.tenant_id, file.id, file.tenant_id) AS detail
+        FROM "${schema}".company_document AS document
+        JOIN "${schema}".file_storage AS file ON file.id = document.file_storage_id
+        WHERE document.tenant_id <> file.tenant_id
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'File-upload stage migration blocked: % company document/file tenant mismatch(es) exist.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Correct each listed company_document tenant_id or file_storage relationship without deleting document history, then rerun the tenant migration.';
+    END IF;
+END;
+$$;
+        ]]></sql>
+
+        <createIndex tableName="file_storage" schemaName="${schema}" indexName="uq_file_storage_tenant_id_id" unique="true">
+            <column name="tenant_id"/>
+            <column name="id"/>
+        </createIndex>
+
+        <addUniqueConstraint tableName="company_document" schemaName="${schema}"
+                             columnNames="id,tenant_id"
+                             constraintName="uq_company_document_id_tenant"/>
+        <addUniqueConstraint tableName="user" schemaName="${schema}"
+                             columnNames="id,tenant_id"
+                             constraintName="uq_user_id_tenant"/>
+
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="company_document"
+                                 baseColumnNames="tenant_id,file_storage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="file_storage"
+                                 referencedColumnNames="tenant_id,id"
+                                 constraintName="fk_company_document_file_tenant" onDelete="RESTRICT"/>
+        <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="company_document"
+                                  constraintName="fk_company_document_file"/>
+
+        <createTable tableName="file_upload_stage" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="file_storage_id" type="UUID"><constraints nullable="false" unique="true" uniqueConstraintName="uq_file_upload_stage_file"/></column>
+            <column name="purpose" type="VARCHAR(64)"><constraints nullable="false"/></column>
+            <column name="created_by" type="UUID"><constraints nullable="false"/></column>
+            <column name="expires_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+            <column name="claimed_at" type="TIMESTAMPTZ"/>
+            <column name="claimed_resource_id" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="file_upload_stage"
+                                 baseColumnNames="tenant_id,file_storage_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="file_storage"
+                                  referencedColumnNames="tenant_id,id"
+                                  constraintName="fk_file_upload_stage_tenant_file" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="file_upload_stage"
+                                 baseColumnNames="tenant_id,created_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user"
+                                 referencedColumnNames="tenant_id,id"
+                                 constraintName="fk_file_upload_stage_created_by_tenant" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="file_upload_stage"
+                                 baseColumnNames="tenant_id,claimed_resource_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="company_document"
+                                 referencedColumnNames="tenant_id,id"
+                                 constraintName="fk_file_upload_stage_claimed_document_tenant" onDelete="RESTRICT"/>
+
+        <sql><![CDATA[
+ALTER TABLE "${schema}".file_upload_stage
+    ADD CONSTRAINT chk_file_upload_stage_purpose
+        CHECK (purpose IN ('COMPANY_DOCUMENT')),
+    ADD CONSTRAINT chk_file_upload_stage_expiry
+        CHECK (expires_at > created_at),
+    ADD CONSTRAINT chk_file_upload_stage_claim
+        CHECK ((claimed_at IS NULL) = (claimed_resource_id IS NULL));
+
+CREATE INDEX idx_file_upload_stage_unclaimed
+ON "${schema}".file_upload_stage (tenant_id, purpose, created_by, expires_at)
+WHERE claimed_at IS NULL;
+
+CREATE TRIGGER trg_file_upload_stage_updated_at
+BEFORE UPDATE ON "${schema}".file_upload_stage
+FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();
+        ]]></sql>
+
+        <rollback>
+            <!--
+                Do not discard stage rows: each unclaimed row owns a private file and external object,
+                while each claimed row is audit evidence for a published company document. Operators must
+                first claim valid stages or use the supported cleanup operation for unclaimed stages.
+            -->
+            <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM "${schema}".file_upload_stage) THEN
+        RAISE EXCEPTION 'Cannot roll back file-upload staging while stage rows exist.'
+            USING HINT = 'Claim every valid stage, or remove each unclaimed stage and its matching file_storage record/object through the supported company-upload cleanup operation. Then rerun rollback.';
+    END IF;
+END;
+$$;
+            ]]></sql>
+            <sql><![CDATA[
+DROP TRIGGER IF EXISTS trg_file_upload_stage_updated_at ON "${schema}".file_upload_stage;
+DROP INDEX IF EXISTS "${schema}".idx_file_upload_stage_unclaimed;
+            ]]></sql>
+            <dropTable tableName="file_upload_stage" schemaName="${schema}"/>
+            <sql><![CDATA[
+ALTER TABLE "${schema}".company_document DROP CONSTRAINT IF EXISTS fk_company_document_file_tenant;
+ALTER TABLE "${schema}".company_document
+    ADD CONSTRAINT fk_company_document_file
+    FOREIGN KEY (file_storage_id) REFERENCES "${schema}".file_storage (id)
+    ON DELETE RESTRICT;
+ALTER TABLE "${schema}"."user" DROP CONSTRAINT IF EXISTS uq_user_id_tenant;
+ALTER TABLE "${schema}".company_document DROP CONSTRAINT IF EXISTS uq_company_document_id_tenant;
+            ]]></sql>
+            <dropIndex tableName="file_storage" schemaName="${schema}" indexName="uq_file_storage_tenant_id_id"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
