@@ -6,7 +6,7 @@
   "scripts": {
     "ensure-java": "node ensure-java.cjs",
     "migrate-ops": "node migrate-ops.cjs",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/liquibase-sql-blocks.test.cjs"
   },
   "repository": {
     "type": "git",

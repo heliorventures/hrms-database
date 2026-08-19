@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0061-001-asset-identifier-integrity" author="kabipay-dev">
+        <comment>
+            Make asset-tag and serial-number normalization match their uniqueness semantics.
+            Existing identifiers are trimmed and blank identifiers become NULL; that data normalization
+            is intentionally not reversible. The preflight blocks ambiguous normalization rather than
+            choosing an asset record or deleting asset history.
+        </comment>
+
+        <sql splitStatements="false"><![CDATA[
+DO $$
+DECLARE
+    violation_count BIGINT;
+    sample_rows TEXT;
+BEGIN
+    WITH violations AS (
+        SELECT format(
+                   'tenant_id=%s normalized_asset_tag=%L asset_ids=%s',
+                   tenant_id,
+                   normalized_value,
+                   string_agg(id::TEXT, ',' ORDER BY id)
+               ) AS detail
+        FROM (
+            SELECT id, tenant_id, UPPER(BTRIM(asset_tag)) AS normalized_value
+            FROM "${schema}".asset
+            WHERE NULLIF(BTRIM(asset_tag), '') IS NOT NULL
+        ) AS normalized_asset_tags
+        GROUP BY tenant_id, normalized_value
+        HAVING COUNT(*) > 1
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset identifier migration blocked: % normalized asset-tag duplicate group(s) exist.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Assign distinct UPPER(BTRIM(asset_tag)) values within each tenant without deleting asset history, then rerun the tenant migration.';
+    END IF;
+
+    WITH violations AS (
+        SELECT format(
+                   'tenant_id=%s normalized_serial_number=%L asset_ids=%s',
+                   tenant_id,
+                   normalized_value,
+                   string_agg(id::TEXT, ',' ORDER BY id)
+               ) AS detail
+        FROM (
+            SELECT id, tenant_id, UPPER(BTRIM(serial_number)) AS normalized_value
+            FROM "${schema}".asset
+            WHERE NULLIF(BTRIM(serial_number), '') IS NOT NULL
+        ) AS normalized_serial_numbers
+        GROUP BY tenant_id, normalized_value
+        HAVING COUNT(*) > 1
+    ), samples AS (
+        SELECT detail FROM violations ORDER BY detail LIMIT 10
+    )
+    SELECT (SELECT COUNT(*) FROM violations),
+           (SELECT string_agg(detail, E'\n') FROM samples)
+    INTO violation_count, sample_rows;
+    IF violation_count > 0 THEN
+        RAISE EXCEPTION 'Asset identifier migration blocked: % normalized serial-number duplicate group(s) exist.', violation_count
+            USING DETAIL = sample_rows,
+                  HINT = 'Assign distinct UPPER(BTRIM(serial_number)) values within each tenant without deleting asset history, then rerun the tenant migration.';
+    END IF;
+END;
+$$;
+        ]]></sql>
+
+        <sql><![CDATA[
+UPDATE "${schema}".asset
+SET asset_tag = NULLIF(BTRIM(asset_tag), ''),
+    serial_number = NULLIF(BTRIM(serial_number), '')
+WHERE asset_tag IS DISTINCT FROM NULLIF(BTRIM(asset_tag), '')
+   OR serial_number IS DISTINCT FROM NULLIF(BTRIM(serial_number), '');
+
+DROP INDEX IF EXISTS "${schema}".uq_asset_tenant_asset_tag_ci;
+CREATE UNIQUE INDEX uq_asset_tenant_asset_tag_ci
+    ON "${schema}".asset (tenant_id, UPPER(BTRIM(asset_tag)))
+    WHERE asset_tag IS NOT NULL;
+
+DROP INDEX IF EXISTS "${schema}".uq_asset_tenant_serial_number_ci;
+CREATE UNIQUE INDEX uq_asset_tenant_serial_number_ci
+    ON "${schema}".asset (tenant_id, UPPER(BTRIM(serial_number)))
+    WHERE serial_number IS NOT NULL;
+
+ALTER TABLE "${schema}".asset
+    ADD CONSTRAINT chk_asset_tag_normalized
+        CHECK (asset_tag IS NULL OR (asset_tag = BTRIM(asset_tag) AND asset_tag <> '')),
+    ADD CONSTRAINT chk_asset_serial_number_normalized
+        CHECK (serial_number IS NULL OR (serial_number = BTRIM(serial_number) AND serial_number <> ''));
+        ]]></sql>
+
+        <rollback>
+            <!-- DDL rollback only; normalized identifier values cannot be reconstructed. -->
+            <sql><![CDATA[
+ALTER TABLE "${schema}".asset DROP CONSTRAINT IF EXISTS chk_asset_serial_number_normalized;
+ALTER TABLE "${schema}".asset DROP CONSTRAINT IF EXISTS chk_asset_tag_normalized;
+
+DROP INDEX IF EXISTS "${schema}".uq_asset_tenant_serial_number_ci;
+CREATE UNIQUE INDEX uq_asset_tenant_serial_number_ci
+    ON "${schema}".asset (tenant_id, UPPER(serial_number))
+    WHERE serial_number IS NOT NULL AND BTRIM(serial_number) <> '';
+
+DROP INDEX IF EXISTS "${schema}".uq_asset_tenant_asset_tag_ci;
+CREATE UNIQUE INDEX uq_asset_tenant_asset_tag_ci
+    ON "${schema}".asset (tenant_id, UPPER(asset_tag))
+    WHERE asset_tag IS NOT NULL AND BTRIM(asset_tag) <> '';
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0062-001-private-file-cleanup-hardening" author="kabipay-dev">
+        <comment>
+            Add explicit cleanup-task claim ownership and durable quarantine metadata for upload
+            stages whose file-storage invariant is broken. The migration refuses to invent ownership
+            tokens for in-flight work; the cleanup worker must be drained and paused before deployment.
+        </comment>
+
+        <sql splitStatements="false"><![CDATA[
+DO $$
+DECLARE
+    processing_count BIGINT;
+    sample_task_ids TEXT;
+BEGIN
+    SELECT COUNT(*)
+    INTO processing_count
+    FROM "${schema}".private_file_cleanup_task
+    WHERE status = 'PROCESSING';
+
+    IF processing_count > 0 THEN
+        SELECT string_agg(id::TEXT, ',' ORDER BY id)
+        INTO sample_task_ids
+        FROM (
+            SELECT id
+            FROM "${schema}".private_file_cleanup_task
+            WHERE status = 'PROCESSING'
+            ORDER BY claimed_at, id
+            LIMIT 10
+        ) AS processing_tasks;
+
+        RAISE EXCEPTION 'Private-file cleanup hardening blocked: % task(s) are currently processing.', processing_count
+            USING DETAIL = format('Representative cleanup task IDs: %s', sample_task_ids),
+                  HINT = 'Allow the cleanup worker to drain, verify no PROCESSING tasks remain, then pause the worker and rerun the tenant migration.';
+    END IF;
+END;
+$$;
+        ]]></sql>
+
+        <addColumn schemaName="${schema}" tableName="private_file_cleanup_task">
+            <column name="claim_token" type="UUID"/>
+        </addColumn>
+        <addColumn schemaName="${schema}" tableName="file_upload_stage">
+            <column name="cleanup_blocked_at" type="TIMESTAMPTZ"/>
+            <column name="cleanup_error_class" type="VARCHAR(40)"/>
+        </addColumn>
+
+        <sql><![CDATA[
+ALTER TABLE "${schema}".private_file_cleanup_task
+    DROP CONSTRAINT chk_private_file_cleanup_claim_lifecycle,
+    ADD CONSTRAINT chk_private_file_cleanup_claim_lifecycle
+        CHECK (
+            (status = 'PROCESSING' AND claimed_at IS NOT NULL AND claim_token IS NOT NULL)
+            OR
+            (status IN ('PENDING','FAILED','COMPLETED') AND claimed_at IS NULL AND claim_token IS NULL)
+        );
+
+ALTER TABLE "${schema}".file_upload_stage
+    ADD CONSTRAINT chk_file_upload_stage_cleanup_block
+        CHECK (
+            (cleanup_blocked_at IS NULL AND cleanup_error_class IS NULL)
+            OR
+            (
+                cleanup_blocked_at IS NOT NULL
+                AND cleanup_error_class IS NOT NULL
+                AND cleanup_error_class = 'MISSING_FILE_STORAGE'
+                AND claimed_at IS NULL
+                AND claimed_resource_id IS NULL
+            )
+        );
+
+DROP INDEX IF EXISTS "${schema}".idx_file_upload_stage_unclaimed;
+CREATE INDEX idx_file_upload_stage_unclaimed
+ON "${schema}".file_upload_stage (tenant_id, purpose, created_by, expires_at)
+WHERE claimed_at IS NULL AND cleanup_blocked_at IS NULL;
+        ]]></sql>
+
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".file_upload_stage
+        WHERE cleanup_blocked_at IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION 'Cannot roll back private-file cleanup hardening while quarantined upload stages exist.'
+            USING HINT = 'Repair each quarantined stage/file-storage invariant and clear its cleanup block through an authorized data-repair operation before rerunning rollback.';
+    END IF;
+END;
+$$;
+            ]]></sql>
+            <sql><![CDATA[
+DROP INDEX IF EXISTS "${schema}".idx_file_upload_stage_unclaimed;
+CREATE INDEX idx_file_upload_stage_unclaimed
+ON "${schema}".file_upload_stage (tenant_id, purpose, created_by, expires_at)
+WHERE claimed_at IS NULL;
+
+ALTER TABLE "${schema}".file_upload_stage
+    DROP CONSTRAINT IF EXISTS chk_file_upload_stage_cleanup_block;
+
+ALTER TABLE "${schema}".private_file_cleanup_task
+    DROP CONSTRAINT IF EXISTS chk_private_file_cleanup_claim_lifecycle,
+    ADD CONSTRAINT chk_private_file_cleanup_claim_lifecycle
+        CHECK (
+            (status = 'PROCESSING' AND claimed_at IS NOT NULL)
+            OR
+            (status IN ('PENDING','FAILED','COMPLETED') AND claimed_at IS NULL)
+        );
+            ]]></sql>
+            <dropColumn schemaName="${schema}" tableName="file_upload_stage" columnName="cleanup_error_class"/>
+            <dropColumn schemaName="${schema}" tableName="file_upload_stage" columnName="cleanup_blocked_at"/>
+            <dropColumn schemaName="${schema}" tableName="private_file_cleanup_task" columnName="claim_token"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,6 +1,7 @@
 -- Read-only post-migration verification for 0057_asset_management_lifecycle,
--- 0058_asset_management_integrity, 0059_file_upload_stage, and
--- 0060_private_file_cleanup. Run against one
+-- 0058_asset_management_integrity, 0059_file_upload_stage,
+-- 0060_private_file_cleanup, 0061_asset_identifier_integrity, and
+-- 0062_private_file_cleanup_hardening. Run against one
 -- tenant schema with psql:
 --   psql "$DATABASE_URL" -v schema=tenant_example -f tests/asset_management_lifecycle_verification.sql
 -- Every violation_count must be zero before this tenant is accepted.
@@ -95,6 +96,24 @@ WITH checks AS (
         COUNT(*)::BIGINT
     FROM :"schema".asset
     WHERE purchase_value < 0
+
+    UNION ALL
+
+    SELECT
+        'asset_tag_not_normalized',
+        COUNT(*)::BIGINT
+    FROM :"schema".asset
+    WHERE asset_tag IS NOT NULL
+      AND (asset_tag <> BTRIM(asset_tag) OR asset_tag = '')
+
+    UNION ALL
+
+    SELECT
+        'serial_number_not_normalized',
+        COUNT(*)::BIGINT
+    FROM :"schema".asset
+    WHERE serial_number IS NOT NULL
+      AND (serial_number <> BTRIM(serial_number) OR serial_number = '')
 
     UNION ALL
 
@@ -239,6 +258,24 @@ WITH checks AS (
     UNION ALL
 
     SELECT
+        'file_upload_stage_invalid_cleanup_block',
+        COUNT(*)::BIGINT
+    FROM :"schema".file_upload_stage
+    WHERE NOT (
+        (cleanup_blocked_at IS NULL AND cleanup_error_class IS NULL)
+        OR
+        (
+            cleanup_blocked_at IS NOT NULL
+            AND cleanup_error_class IS NOT NULL
+            AND cleanup_error_class = 'MISSING_FILE_STORAGE'
+            AND claimed_at IS NULL
+            AND claimed_resource_id IS NULL
+        )
+    )
+
+    UNION ALL
+
+    SELECT
         'private_file_cleanup_invalid_status',
         COUNT(*)::BIGINT
     FROM :"schema".private_file_cleanup_task
@@ -317,11 +354,20 @@ WITH checks AS (
     UNION ALL
 
     SELECT
+        'private_file_cleanup_processing_claim_token_missing',
+        COUNT(*)::BIGINT
+    FROM :"schema".private_file_cleanup_task
+    WHERE status = 'PROCESSING'
+      AND claim_token IS NULL
+
+    UNION ALL
+
+    SELECT
         'private_file_cleanup_nonprocessing_claim_present',
         COUNT(*)::BIGINT
     FROM :"schema".private_file_cleanup_task
     WHERE status IN ('PENDING', 'FAILED', 'COMPLETED')
-      AND claimed_at IS NOT NULL
+      AND (claimed_at IS NOT NULL OR claim_token IS NOT NULL)
 
     UNION ALL
 
@@ -350,6 +396,8 @@ WITH checks AS (
     FROM (
         VALUES
             ('chk_asset_category_code_normalized', 'c'),
+            ('chk_asset_tag_normalized', 'c'),
+            ('chk_asset_serial_number_normalized', 'c'),
             ('uq_asset_category_id_tenant', 'u'),
             ('uq_asset_id_tenant', 'u'),
             ('uq_employee_id_tenant', 'u'),
@@ -370,6 +418,7 @@ WITH checks AS (
             ('chk_file_upload_stage_purpose', 'c'),
             ('chk_file_upload_stage_expiry', 'c'),
             ('chk_file_upload_stage_claim', 'c'),
+            ('chk_file_upload_stage_cleanup_block', 'c'),
             ('uq_private_file_cleanup_tenant_deduplication', 'u'),
             ('chk_private_file_cleanup_status', 'c'),
             ('chk_private_file_cleanup_attempts', 'c'),
@@ -398,25 +447,28 @@ WITH checks AS (
                     expected.index_fragment IN
                     REGEXP_REPLACE(REPLACE(LOWER(index_definition.indexdef), '"', ''), '\s+', ' ', 'g')
                   ) > 0
+              AND POSITION(
+                    expected.column_fragment IN
+                    REGEXP_REPLACE(REPLACE(LOWER(index_definition.indexdef), '"', ''), '\s+', ' ', 'g')
+                  ) > 0
               AND CASE expected.predicate_kind
                     WHEN 'none' THEN index_metadata.indpred IS NULL
                     WHEN 'active' THEN index_metadata.indpred IS NOT NULL
                         AND LOWER(pg_get_expr(index_metadata.indpred, index_metadata.indrelid)) LIKE '%status%'
                         AND LOWER(pg_get_expr(index_metadata.indpred, index_metadata.indrelid)) LIKE '%active%'
-                    WHEN 'nonblank' THEN index_metadata.indpred IS NOT NULL
+                    WHEN 'nonnull' THEN index_metadata.indpred IS NOT NULL
                         AND LOWER(pg_get_expr(index_metadata.indpred, index_metadata.indrelid)) LIKE '%is not null%'
-                        AND LOWER(pg_get_expr(index_metadata.indpred, index_metadata.indrelid)) LIKE '%btrim%'
                     ELSE FALSE
                   END
         ) THEN 0 ELSE 1 END::BIGINT
     FROM (
         VALUES
-            ('uq_asset_category_tenant_code_normalized_ci', 'tenant_id, upper(code)', 'none'),
-            ('uq_asset_tenant_asset_tag_ci', 'tenant_id, upper(asset_tag)', 'nonblank'),
-            ('uq_asset_tenant_serial_number_ci', 'tenant_id, upper(serial_number)', 'nonblank'),
-            ('uq_asset_allocation_one_active_per_asset', 'asset_id', 'active'),
-            ('uq_asset_return_log_allocation', 'asset_allocation_id', 'none')
-    ) AS expected(index_name, index_fragment, predicate_kind)
+            ('uq_asset_category_tenant_code_normalized_ci', 'tenant_id, upper(', 'code', 'none'),
+            ('uq_asset_tenant_asset_tag_ci', 'tenant_id, upper(btrim(', 'asset_tag', 'nonnull'),
+            ('uq_asset_tenant_serial_number_ci', 'tenant_id, upper(btrim(', 'serial_number', 'nonnull'),
+            ('uq_asset_allocation_one_active_per_asset', 'asset_id', 'asset_id', 'active'),
+            ('uq_asset_return_log_allocation', 'asset_allocation_id', 'asset_allocation_id', 'none')
+    ) AS expected(index_name, index_fragment, column_fragment, predicate_kind)
 
     UNION ALL
 
@@ -442,7 +494,7 @@ WITH checks AS (
     FROM (
         VALUES
             ('uq_file_storage_tenant_id_id', 'tenant_id, id', TRUE, '%'),
-            ('idx_file_upload_stage_unclaimed', 'tenant_id, purpose, created_by, expires_at', FALSE, '%claimed_at is null%')
+            ('idx_file_upload_stage_unclaimed', 'tenant_id, purpose, created_by, expires_at', FALSE, '%claimed_at is null%cleanup_blocked_at is null%')
     ) AS expected(index_name, index_fragment, is_unique, predicate_fragment)
 
     UNION ALL

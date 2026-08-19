@@ -75,5 +75,7 @@
     <include file="migrations/0058_asset_management_integrity/asset_management_integrity.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0059_file_upload_stage/file_upload_stage.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0060_private_file_cleanup/private_file_cleanup.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0061_asset_identifier_integrity/asset_identifier_integrity.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0062_private_file_cleanup_hardening/private_file_cleanup_hardening.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
