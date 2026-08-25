@@ -77,5 +77,6 @@
     <include file="migrations/0060_private_file_cleanup/private_file_cleanup.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0061_asset_identifier_integrity/asset_identifier_integrity.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0062_private_file_cleanup_hardening/private_file_cleanup_hardening.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0063_attendance_management/attendance_management.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

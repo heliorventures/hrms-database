@@ -206,6 +206,8 @@ $ScopeScopeExpenseTeamLmId = New-DeterministicUuid -Seed "${Schema}:permission_s
 $ScopeScopeExpenseAcctAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:expense:approve:ALL:ACCOUNTING"
 $ScopeScopeAttendanceAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:attendance:read:ALL"
 $ScopeAttendancePunchPolicyAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:attendance:punch_policy:ALL"
+$ScopeAttendanceRegularizeAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:attendance:regularize:ALL"
+$ScopeAttendanceRegularizeTeamLmId = New-DeterministicUuid -Seed "${Schema}:permission_scope:attendance:regularize:TEAM:LINE_MANAGER"
 $ScopeWorkflowManageAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:workflow:manage:ALL"
 $ScopeTimesheetApproveAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:timesheet:approve:ALL"
 $ScopeTimesheetApproveTeamLmId = New-DeterministicUuid -Seed "${Schema}:permission_scope:timesheet:approve:TEAM:LM"
@@ -838,6 +840,8 @@ VALUES
   ('$ScopeScopeExpenseAllId',  '$TenantId', '$RoleHrAdminId', 'expense', 'approve', 'ALL'),
   ('$ScopeScopeAttendanceAllId', '$TenantId', '$RoleHrAdminId', 'attendance', 'read', 'ALL'),
   ('$ScopeAttendancePunchPolicyAllId', '$TenantId', '$RoleHrAdminId', 'attendance', 'punch_policy', 'ALL'),
+  ('$ScopeAttendanceRegularizeAllId', '$TenantId', '$RoleHrAdminId', 'attendance', 'regularize', 'ALL'),
+  ('$ScopeAttendanceRegularizeTeamLmId', '$TenantId', '$RoleLineManagerId', 'attendance', 'regularize', 'TEAM'),
   ('$ScopeWorkflowManageAllId', '$TenantId', '$RoleHrAdminId', 'workflow', 'manage', 'ALL'),
   ('$ScopeTimesheetApproveAllId', '$TenantId', '$RoleHrAdminId', 'timesheet', 'approve', 'ALL'),
   ('$ScopeTimesheetApproveTeamLmId', '$TenantId', '$RoleLineManagerId', 'timesheet', 'approve', 'TEAM'),

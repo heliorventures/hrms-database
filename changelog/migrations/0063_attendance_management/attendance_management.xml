@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0063-001-create-attendance-adjustment-audit" author="kabipay-dev">
+        <comment>Store an immutable accountability record whenever authorized managed attendance creates or changes an attendance segment.</comment>
+        <createTable tableName="attendance_adjustment_audit" schemaName="${schema}">
+            <column name="id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="tenant_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="attendance_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="target_employee_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="actor_user_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="operation" type="VARCHAR(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="reason" type="VARCHAR(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="before_values" type="JSONB"/>
+            <column name="after_values" type="JSONB">
+                <constraints nullable="false"/>
+            </column>
+            <column name="request_id" type="VARCHAR(128)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="attendance_adjustment_audit" baseColumnNames="attendance_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="attendance" referencedColumnNames="id"
+                                 constraintName="fk_attendance_adjustment_audit_attendance" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="attendance_adjustment_audit" baseColumnNames="target_employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_attendance_adjustment_audit_employee" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="attendance_adjustment_audit" baseColumnNames="actor_user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_attendance_adjustment_audit_actor" onDelete="RESTRICT"/>
+
+        <sql><![CDATA[
+ALTER TABLE "${schema}".attendance_adjustment_audit
+    ADD CONSTRAINT chk_attendance_adjustment_audit_operation
+        CHECK (operation IN ('CREATE', 'UPDATE')),
+    ADD CONSTRAINT chk_attendance_adjustment_audit_reason
+        CHECK (char_length(trim(reason)) BETWEEN 5 AND 500),
+    ADD CONSTRAINT chk_attendance_adjustment_audit_before_values
+        CHECK (
+            (operation = 'CREATE' AND before_values IS NULL)
+            OR
+            (operation = 'UPDATE' AND before_values IS NOT NULL)
+        );
+        ]]></sql>
+
+        <createIndex tableName="attendance_adjustment_audit" schemaName="${schema}" indexName="idx_attendance_adjustment_audit_attendance">
+            <column name="attendance_id"/>
+            <column name="created_at" descending="true"/>
+        </createIndex>
+        <createIndex tableName="attendance_adjustment_audit" schemaName="${schema}" indexName="idx_attendance_adjustment_audit_employee">
+            <column name="target_employee_id"/>
+            <column name="created_at" descending="true"/>
+        </createIndex>
+        <createIndex tableName="attendance_adjustment_audit" schemaName="${schema}" indexName="idx_attendance_adjustment_audit_actor">
+            <column name="actor_user_id"/>
+            <column name="created_at" descending="true"/>
+        </createIndex>
+
+        <sql splitStatements="false"><![CDATA[
+CREATE OR REPLACE FUNCTION "${schema}".prevent_attendance_adjustment_audit_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $body$
+BEGIN
+    RAISE EXCEPTION 'attendance_adjustment_audit is append-only';
+END;
+$body$;
+
+CREATE TRIGGER trg_attendance_adjustment_audit_append_only
+BEFORE UPDATE OR DELETE ON "${schema}".attendance_adjustment_audit
+FOR EACH ROW EXECUTE FUNCTION "${schema}".prevent_attendance_adjustment_audit_mutation();
+        ]]></sql>
+
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_attendance_adjustment_audit_append_only ON "${schema}".attendance_adjustment_audit;</sql>
+            <sql>DROP FUNCTION IF EXISTS "${schema}".prevent_attendance_adjustment_audit_mutation();</sql>
+            <dropTable tableName="attendance_adjustment_audit" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0063-002-grant-attendance-regularization" author="kabipay-dev">
+        <comment>Create attendance:regularize for active Attendance subscribers, then grant the approved ALL scope only to active HR/admin roles. Rollback intentionally preserves approved authorization.</comment>
+        <sql><![CDATA[
+INSERT INTO "${schema}".permission (
+    id,
+    resource,
+    action,
+    module_id,
+    description
+)
+SELECT
+    gen_random_uuid(),
+    'attendance',
+    'regularize',
+    module.id,
+    'Create or adjust managed attendance with an auditable reason'
+FROM kabipay_ops.module AS module
+WHERE module.code = 'ATTENDANCE'
+  AND module.is_active = true
+  AND EXISTS (
+      SELECT 1
+      FROM kabipay_ops.tenant_subscription AS subscription
+      JOIN "${schema}".role AS tenant_role
+        ON tenant_role.tenant_id = subscription.tenant_id
+      WHERE subscription.module_id = module.id
+        AND subscription.status = 'ACTIVE'
+        AND subscription.is_deleted = false
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM "${schema}".permission AS existing_permission
+      WHERE existing_permission.resource = 'attendance'
+        AND existing_permission.action = 'regularize'
+        AND existing_permission.module_id = module.id
+  );
+        ]]></sql>
+
+        <sql><![CDATA[
+WITH regularize_permission AS (
+    SELECT permission.id
+    FROM "${schema}".permission AS permission
+    JOIN kabipay_ops.module AS module
+      ON module.id = permission.module_id
+    WHERE permission.resource = 'attendance'
+      AND permission.action = 'regularize'
+      AND module.code = 'ATTENDANCE'
+      AND module.is_active = true
+), active_admin_roles AS (
+    SELECT tenant_role.id, tenant_role.tenant_id
+    FROM "${schema}".role AS tenant_role
+    JOIN kabipay_ops.tenant_subscription AS subscription
+      ON subscription.tenant_id = tenant_role.tenant_id
+    JOIN kabipay_ops.module AS module
+      ON module.id = subscription.module_id
+    WHERE tenant_role.is_deleted = false
+      AND subscription.status = 'ACTIVE'
+      AND subscription.is_deleted = false
+      AND module.code = 'ATTENDANCE'
+      AND module.is_active = true
+      AND UPPER(TRIM(tenant_role.name)) IN ('HR_ADMIN', 'TENANT_ADMIN', 'ORG_ADMIN')
+)
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT active_admin_roles.id, regularize_permission.id
+FROM active_admin_roles
+CROSS JOIN regularize_permission
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+        ]]></sql>
+
+        <sql><![CDATA[
+WITH regularize_permission AS (
+    SELECT permission.id
+    FROM "${schema}".permission AS permission
+    JOIN kabipay_ops.module AS module
+      ON module.id = permission.module_id
+    WHERE permission.resource = 'attendance'
+      AND permission.action = 'regularize'
+      AND module.code = 'ATTENDANCE'
+      AND module.is_active = true
+), active_admin_roles AS (
+    SELECT tenant_role.id, tenant_role.tenant_id
+    FROM "${schema}".role AS tenant_role
+    JOIN kabipay_ops.tenant_subscription AS subscription
+      ON subscription.tenant_id = tenant_role.tenant_id
+    JOIN kabipay_ops.module AS module
+      ON module.id = subscription.module_id
+    WHERE tenant_role.is_deleted = false
+      AND subscription.status = 'ACTIVE'
+      AND subscription.is_deleted = false
+      AND module.code = 'ATTENDANCE'
+      AND module.is_active = true
+      AND UPPER(TRIM(tenant_role.name)) IN ('HR_ADMIN', 'TENANT_ADMIN', 'ORG_ADMIN')
+)
+INSERT INTO "${schema}".permission_scope (id, tenant_id, role_id, resource, action, scope_type)
+SELECT gen_random_uuid(), active_admin_roles.tenant_id, active_admin_roles.id, 'attendance', 'regularize', 'ALL'
+FROM active_admin_roles
+WHERE EXISTS (SELECT 1 FROM regularize_permission)
+ON CONFLICT (role_id, resource, action) DO UPDATE SET scope_type = EXCLUDED.scope_type;
+        ]]></sql>
+
+        <rollback>
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
