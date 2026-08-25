@@ -78,5 +78,8 @@
     <include file="migrations/0061_asset_identifier_integrity/asset_identifier_integrity.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0062_private_file_cleanup_hardening/private_file_cleanup_hardening.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0063_attendance_management/attendance_management.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0064_approval_integrity/approval_integrity.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0065_attendance_time_integrity/attendance_time_integrity.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0066_lifecycle_validation_integrity/lifecycle_validation_integrity.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

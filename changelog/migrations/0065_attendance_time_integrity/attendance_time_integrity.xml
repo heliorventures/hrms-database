@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0065-001-attendance-instants" author="kabipay-dev">
+        <comment>Add canonical UTC punch instants while retaining legacy tenant-local wall fields during migration.</comment>
+        <addColumn tableName="attendance" schemaName="${schema}">
+            <column name="check_in_at" type="TIMESTAMPTZ"/>
+            <column name="check_out_at" type="TIMESTAMPTZ"/>
+        </addColumn>
+
+        <createTable tableName="attendance_instant_backfill_audit" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="attendance_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="field_name" type="VARCHAR(20)"><constraints nullable="false"/></column>
+            <column name="timezone" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="legacy_work_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="legacy_time" type="TIME"><constraints nullable="false"/></column>
+            <column name="reason" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint
+            tableName="attendance_instant_backfill_audit"
+            schemaName="${schema}"
+            columnNames="attendance_id,field_name"
+            constraintName="uq_attendance_instant_backfill_field"/>
+        <addForeignKeyConstraint
+            baseTableSchemaName="${schema}"
+            baseTableName="attendance_instant_backfill_audit"
+            baseColumnNames="attendance_id"
+            referencedTableSchemaName="${schema}"
+            referencedTableName="attendance"
+            referencedColumnNames="id"
+            constraintName="fk_attendance_instant_backfill_attendance"
+            onDelete="CASCADE"/>
+
+        <sql><![CDATA[
+UPDATE "${schema}".attendance
+   SET status = 'COMPLETE',
+       updated_at = NOW()
+ WHERE status = 'OPEN' AND check_out_time IS NOT NULL;
+
+WITH duplicate_open AS (
+    SELECT id,
+           ROW_NUMBER() OVER (
+               PARTITION BY tenant_id, employee_id
+               ORDER BY created_at DESC, id DESC
+           ) AS open_rank
+      FROM "${schema}".attendance
+     WHERE status = 'OPEN'
+       AND check_out_time IS NULL
+)
+UPDATE "${schema}".attendance AS attendance
+   SET status = 'INCOMPLETE',
+       updated_at = NOW()
+  FROM duplicate_open
+ WHERE attendance.id = duplicate_open.id
+   AND duplicate_open.open_rank > 1;
+
+CREATE UNIQUE INDEX uq_attendance_one_open
+    ON "${schema}".attendance (tenant_id, employee_id)
+ WHERE check_out_at IS NULL
+   AND status = 'OPEN';
+
+ALTER TABLE "${schema}".attendance
+    ADD CONSTRAINT ck_attendance_completed_instants
+    CHECK (
+        (check_in_at IS NULL AND check_out_at IS NULL)
+        OR
+        (
+            check_in_at IS NOT NULL
+            AND (
+                (status IN ('OPEN', 'INCOMPLETE') AND check_out_at IS NULL)
+                OR
+                (
+                    COALESCE(status, 'COMPLETE') NOT IN ('OPEN', 'INCOMPLETE')
+                    AND check_out_at IS NOT NULL
+                    AND check_out_at > check_in_at
+                )
+            )
+        )
+    );
+        ]]></sql>
+
+        <rollback>
+            <sql><![CDATA[
+ALTER TABLE "${schema}".attendance DROP CONSTRAINT IF EXISTS ck_attendance_completed_instants;
+DROP INDEX IF EXISTS "${schema}".uq_attendance_one_open;
+            ]]></sql>
+            <dropTable tableName="attendance_instant_backfill_audit" schemaName="${schema}"/>
+            <dropColumn tableName="attendance" schemaName="${schema}" columnName="check_out_at"/>
+            <dropColumn tableName="attendance" schemaName="${schema}" columnName="check_in_at"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

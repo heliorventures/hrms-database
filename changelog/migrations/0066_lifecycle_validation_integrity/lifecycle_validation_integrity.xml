@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0066-001-due-separation-offboarding" author="kabipay-dev">
+        <comment>Persist idempotent offboarding completion and its durable event marker.</comment>
+        <addColumn tableName="separation" schemaName="${schema}">
+            <column name="offboarded_at" type="TIMESTAMPTZ"/>
+            <column name="offboarding_event_id" type="UUID"/>
+        </addColumn>
+        <addUniqueConstraint
+            tableName="separation"
+            schemaName="${schema}"
+            columnNames="offboarding_event_id"
+            constraintName="uq_separation_offboarding_event"/>
+        <addForeignKeyConstraint
+            baseTableSchemaName="${schema}"
+            baseTableName="separation"
+            baseColumnNames="offboarding_event_id"
+            referencedTableSchemaName="${schema}"
+            referencedTableName="outbox_event"
+            referencedColumnNames="id"
+            constraintName="fk_separation_offboarding_event"
+            deferrable="true"
+            initiallyDeferred="true"
+            onDelete="RESTRICT"/>
+        <sql><![CDATA[
+CREATE INDEX idx_separation_due_offboarding
+    ON "${schema}".separation (tenant_id, last_working_date, id)
+ WHERE status = 'APPROVED'
+   AND offboarded_at IS NULL;
+
+ALTER TABLE "${schema}".separation
+    ADD CONSTRAINT ck_separation_offboarding_marker
+    CHECK (
+        (offboarded_at IS NULL AND offboarding_event_id IS NULL)
+        OR
+        (offboarded_at IS NOT NULL AND offboarding_event_id IS NOT NULL)
+    );
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+ALTER TABLE "${schema}".separation DROP CONSTRAINT IF EXISTS ck_separation_offboarding_marker;
+DROP INDEX IF EXISTS "${schema}".idx_separation_due_offboarding;
+            ]]></sql>
+            <dropForeignKeyConstraint
+                baseTableName="separation"
+                baseTableSchemaName="${schema}"
+                constraintName="fk_separation_offboarding_event"/>
+            <dropUniqueConstraint
+                tableName="separation"
+                schemaName="${schema}"
+                constraintName="uq_separation_offboarding_event"/>
+            <dropColumn tableName="separation" schemaName="${schema}" columnName="offboarding_event_id"/>
+            <dropColumn tableName="separation" schemaName="${schema}" columnName="offboarded_at"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0066-002-timesheet-two-decimal-integrity" author="kabipay-dev">
+        <comment>Normalize historical timesheet hours and enforce the public two-decimal contract.</comment>
+        <sql><![CDATA[
+UPDATE "${schema}".timesheet_entry
+   SET hours_worked = ROUND(hours_worked, 2),
+       updated_at = NOW()
+ WHERE hours_worked <> ROUND(hours_worked, 2);
+
+ALTER TABLE "${schema}".timesheet_entry
+    ADD CONSTRAINT ck_timesheet_hours_two_decimals
+    CHECK (hours_worked = ROUND(hours_worked, 2));
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+ALTER TABLE "${schema}".timesheet_entry DROP CONSTRAINT IF EXISTS ck_timesheet_hours_two_decimals;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0064-001-workflow-terminal-action-idempotency" author="kabipay-dev">
+        <comment>Prevent a workflow actor from recording the same terminal decision more than once for one workflow step.</comment>
+        <sql><![CDATA[
+CREATE UNIQUE INDEX uq_workflow_action_terminal_actor
+    ON "${schema}".workflow_action
+       (tenant_id, instance_id, workflow_step_id, performed_by, action)
+    WHERE action IN ('APPROVE', 'REJECT');
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+DROP INDEX IF EXISTS "${schema}".uq_workflow_action_terminal_actor;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0064-002-workflow-permission-authority" author="kabipay-dev">
+        <comment>Store the exact effective permission required by workflow steps; roles remain assignment containers only.</comment>
+        <addColumn tableName="workflow_step" schemaName="${schema}">
+            <column name="approver_permission" type="VARCHAR(150)"/>
+        </addColumn>
+        <sql><![CDATA[
+UPDATE "${schema}".workflow_step AS workflow_step
+   SET approver_permission = CASE UPPER(TRIM(workflow.entity_type))
+           WHEN 'LEAVE_REQUEST' THEN 'leave:approve'
+           WHEN 'EXPENSE' THEN 'expense:approve'
+           WHEN 'TRAVEL_REQUEST' THEN 'expense:approve'
+           WHEN 'TIMESHEET_WEEK_BATCH' THEN 'timesheet:approve'
+           ELSE workflow_step.approver_permission
+       END,
+       approver_type = CASE UPPER(TRIM(COALESCE(workflow_step.approver_type, 'REPORTING_MANAGER')))
+           WHEN 'ROLE' THEN 'PERMISSION'
+           WHEN 'REPORTING_MANAGER_OR_ROLE' THEN 'REPORTING_MANAGER_OR_PERMISSION'
+           WHEN 'MANAGER_OR_ROLE' THEN 'REPORTING_MANAGER_OR_PERMISSION'
+           ELSE workflow_step.approver_type
+       END,
+       approver_role_id = CASE
+           WHEN UPPER(TRIM(COALESCE(workflow_step.approver_type, 'REPORTING_MANAGER'))) IN
+                ('ROLE', 'REPORTING_MANAGER_OR_ROLE', 'MANAGER_OR_ROLE')
+           THEN NULL
+           ELSE workflow_step.approver_role_id
+       END,
+       updated_at = NOW()
+  FROM "${schema}".workflow AS workflow
+ WHERE workflow.id = workflow_step.workflow_id
+   AND workflow.tenant_id = workflow_step.tenant_id
+   AND UPPER(TRIM(workflow.entity_type)) IN
+       ('LEAVE_REQUEST', 'EXPENSE', 'TRAVEL_REQUEST', 'TIMESHEET_WEEK_BATCH');
+
+ALTER TABLE "${schema}".workflow_step
+    ADD CONSTRAINT ck_workflow_step_permission_authority
+    CHECK (
+        UPPER(TRIM(COALESCE(approver_type, 'REPORTING_MANAGER'))) NOT IN
+            ('PERMISSION', 'REPORTING_MANAGER_OR_PERMISSION', 'MANAGER_OR_PERMISSION')
+        OR NULLIF(TRIM(approver_permission), '') IS NOT NULL
+    );
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+ALTER TABLE "${schema}".workflow_step DROP CONSTRAINT IF EXISTS ck_workflow_step_permission_authority;
+            ]]></sql>
+            <dropColumn tableName="workflow_step" schemaName="${schema}" columnName="approver_permission"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
