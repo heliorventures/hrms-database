@@ -81,6 +81,9 @@ rerunning tenant migrations:
   -TenantId e6d4fc13-feb8-52a0-93bd-f66c795969b1 `
   -RuntimePostgresHost postgres `
   -RuntimeDbName helior
+
+or to migrate scehma
+ .\scripts\update-tenant-liquibase.ps1 -Schema tenant_e6d4fc13 
 ```
 
 Or use **`node run-sql.cjs`** / **`node run-liquibase.cjs`** (after `npm install`) with the same **`.env`** values; see `scripts\provision-tenant.ps1` for the exact pattern.
