@@ -1,0 +1,883 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0067-001-canonical-rbac-authorization" author="kabipay-dev" runInTransaction="true">
+        <comment>Replace the five legacy system roles with the canonical tenant RBAC model while preserving custom roles and remapping every role foreign key before deletion.</comment>
+
+        <sql><![CDATA[
+LOCK TABLE "${schema}"."user" IN SHARE MODE NOWAIT;
+LOCK TABLE "${schema}".user_role IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+LOCK TABLE "${schema}".employee IN SHARE MODE NOWAIT;
+
+LOCK TABLE
+    "${schema}".role,
+    "${schema}".permission,
+    "${schema}".role_permission,
+    "${schema}".permission_scope,
+    "${schema}".user_session,
+    "${schema}".workflow_step,
+    "${schema}".approval_rule,
+    "${schema}".expense_policy,
+    "${schema}".announcement
+IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+
+LOCK TABLE kabipay_ops.module, kabipay_ops.tenant_database IN SHARE MODE NOWAIT;
+
+CREATE TEMP TABLE tenant_context (
+    tenant_id UUID PRIMARY KEY
+) ON COMMIT DROP;
+
+INSERT INTO tenant_context (tenant_id)
+SELECT tenant_database.tenant_id
+FROM kabipay_ops.tenant_database AS tenant_database
+WHERE tenant_database.schema_name = '${schema}';
+
+CREATE TEMP TABLE required_modules (
+    module_code VARCHAR(100) PRIMARY KEY
+) ON COMMIT DROP;
+
+INSERT INTO required_modules (module_code)
+VALUES
+    ('EMPLOYEE'),
+    ('ATTENDANCE'),
+    ('LEAVE'),
+    ('EXPENSE'),
+    ('PAYROLL'),
+    ('TAX'),
+    ('WORKFLOW');
+
+CREATE TEMP TABLE target_permission_catalog (
+    module_code VARCHAR(100) NOT NULL,
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    description VARCHAR(500) NOT NULL,
+    PRIMARY KEY (resource, action)
+) ON COMMIT DROP;
+
+WITH required_permission_pairs(resource, action) AS (
+    VALUES
+        ('employee', 'self'),
+        ('employee', 'read'),
+        ('employee', 'write'),
+        ('employee', 'manage'),
+        ('notification', 'read'),
+        ('notification', 'manage'),
+        ('role', 'manage'),
+        ('attendance', 'read'),
+        ('attendance', 'punch_self'),
+        ('attendance', 'regularize'),
+        ('attendance', 'punch_policy'),
+        ('timesheet', 'read'),
+        ('timesheet', 'write'),
+        ('timesheet', 'approve'),
+        ('timesheet', 'manage'),
+        ('leave', 'read'),
+        ('leave', 'submit'),
+        ('leave', 'approve'),
+        ('leave', 'manage'),
+        ('expense', 'read'),
+        ('expense', 'submit'),
+        ('expense', 'approve'),
+        ('expense', 'manage'),
+        ('expense', 'pay'),
+        ('travel', 'read'),
+        ('travel', 'submit'),
+        ('travel', 'approve'),
+        ('travel', 'manage'),
+        ('payroll', 'read'),
+        ('payroll', 'manage'),
+        ('payroll', 'statutory_export'),
+        ('tax', 'read'),
+        ('tax', 'submit'),
+        ('tax', 'approve'),
+        ('tax', 'manage'),
+        ('workflow', 'manage')
+),
+permission_module_ownership(resource, module_code) AS (
+    VALUES
+        ('employee', 'EMPLOYEE'),
+        ('notification', 'EMPLOYEE'),
+        ('role', 'EMPLOYEE'),
+        ('attendance', 'ATTENDANCE'),
+        ('timesheet', 'ATTENDANCE'),
+        ('leave', 'LEAVE'),
+        ('expense', 'EXPENSE'),
+        ('travel', 'EXPENSE'),
+        ('payroll', 'PAYROLL'),
+        ('tax', 'TAX'),
+        ('workflow', 'WORKFLOW')
+)
+INSERT INTO target_permission_catalog (module_code, resource, action, description)
+SELECT
+    permission_module_ownership.module_code,
+    required_permission_pairs.resource,
+    required_permission_pairs.action,
+    'Canonical permission ' || required_permission_pairs.resource || ':' || required_permission_pairs.action
+FROM required_permission_pairs
+JOIN permission_module_ownership
+  ON permission_module_ownership.resource = required_permission_pairs.resource;
+        ]]></sql>
+
+        <sql splitStatements="false"><![CDATA[
+DO $$
+DECLARE
+    tenant_context_count INTEGER;
+    ambiguous_role_names TEXT;
+    ambiguous_module_codes TEXT;
+    missing_module_codes TEXT;
+    ambiguous_permission_codes TEXT;
+BEGIN
+    SELECT COUNT(*)
+    INTO tenant_context_count
+    FROM tenant_context;
+
+    IF tenant_context_count <> 1 THEN
+        RAISE EXCEPTION
+            'canonical RBAC migration requires exactly one kabipay_ops.tenant_database row for schema %, found %',
+            '${schema}',
+            tenant_context_count;
+    END IF;
+
+    SELECT STRING_AGG(duplicate_role.normalized_name, ', ' ORDER BY duplicate_role.normalized_name)
+    INTO ambiguous_role_names
+    FROM (
+        SELECT UPPER(TRIM(tenant_role.name)) AS normalized_name
+        FROM "${schema}".role AS tenant_role
+        WHERE UPPER(TRIM(tenant_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN')
+        GROUP BY UPPER(TRIM(tenant_role.name))
+        HAVING COUNT(*) > 1
+    ) AS duplicate_role;
+
+    IF ambiguous_role_names IS NOT NULL THEN
+        RAISE EXCEPTION
+            'canonical RBAC migration found duplicate normalized canonical role names in schema %: %',
+            '${schema}',
+            ambiguous_role_names;
+    END IF;
+
+    SELECT STRING_AGG(duplicate_module.module_code, ', ' ORDER BY duplicate_module.module_code)
+    INTO ambiguous_module_codes
+    FROM (
+        SELECT required_modules.module_code
+        FROM required_modules
+        JOIN kabipay_ops.module AS module
+          ON UPPER(TRIM(module.code)) = required_modules.module_code
+        GROUP BY required_modules.module_code
+        HAVING COUNT(*) > 1
+    ) AS duplicate_module;
+
+    IF ambiguous_module_codes IS NOT NULL THEN
+        RAISE EXCEPTION
+            'canonical RBAC migration found duplicate normalized required module codes: %',
+            ambiguous_module_codes;
+    END IF;
+
+    SELECT STRING_AGG(required_modules.module_code, ', ' ORDER BY required_modules.module_code)
+    INTO missing_module_codes
+    FROM required_modules
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM kabipay_ops.module AS module
+        WHERE UPPER(TRIM(module.code)) = required_modules.module_code
+    );
+
+    IF missing_module_codes IS NOT NULL THEN
+        RAISE EXCEPTION
+            'canonical RBAC migration is missing required kabipay_ops.module rows: %',
+            missing_module_codes;
+    END IF;
+
+    SELECT STRING_AGG(duplicate_permission.permission_code, ', ' ORDER BY duplicate_permission.permission_code)
+    INTO ambiguous_permission_codes
+    FROM (
+        SELECT
+            LOWER(TRIM(permission.resource)) || ':' || LOWER(TRIM(permission.action)) AS permission_code
+        FROM "${schema}".permission AS permission
+        GROUP BY LOWER(TRIM(permission.resource)), LOWER(TRIM(permission.action))
+        HAVING COUNT(*) > 1
+    ) AS duplicate_permission;
+
+    IF ambiguous_permission_codes IS NOT NULL THEN
+        RAISE EXCEPTION
+            'canonical RBAC migration found ambiguous permission rows because JWT permission codes omit module ID: %',
+            ambiguous_permission_codes;
+    END IF;
+END $$;
+        ]]></sql>
+
+        <sql><![CDATA[
+WITH canonical_roles(name) AS (
+    VALUES
+        ('EMPLOYEE'),
+        ('MANAGER'),
+        ('HR'),
+        ('PAYROLL'),
+        ('ADMIN')
+),
+inserted_canonical_roles AS (
+    INSERT INTO "${schema}".role (
+        id,
+        tenant_id,
+        name,
+        description,
+        is_system_role,
+        is_deleted,
+        deleted_at,
+        deleted_by
+    )
+    SELECT
+        gen_random_uuid(),
+        tenant_context.tenant_id,
+        canonical_roles.name,
+        CASE canonical_roles.name
+            WHEN 'EMPLOYEE' THEN 'Canonical employee self-service role'
+            WHEN 'MANAGER' THEN 'Canonical people manager role'
+            WHEN 'HR' THEN 'Canonical human resources role'
+            WHEN 'PAYROLL' THEN 'Canonical payroll and finance role'
+            WHEN 'ADMIN' THEN 'Canonical tenant administrator role'
+        END,
+        true,
+        false,
+        NULL,
+        NULL
+    FROM canonical_roles
+    CROSS JOIN tenant_context
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM "${schema}".role AS existing_role
+        WHERE existing_role.tenant_id = tenant_context.tenant_id
+          AND UPPER(TRIM(existing_role.name)) = canonical_roles.name
+    )
+    RETURNING id
+)
+UPDATE "${schema}".role AS canonical_role
+SET name = canonical_roles.name,
+    description = CASE canonical_roles.name
+        WHEN 'EMPLOYEE' THEN 'Canonical employee self-service role'
+        WHEN 'MANAGER' THEN 'Canonical people manager role'
+        WHEN 'HR' THEN 'Canonical human resources role'
+        WHEN 'PAYROLL' THEN 'Canonical payroll and finance role'
+        WHEN 'ADMIN' THEN 'Canonical tenant administrator role'
+    END,
+    is_system_role = true,
+    is_deleted = false,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW()
+FROM canonical_roles
+CROSS JOIN tenant_context
+WHERE canonical_role.tenant_id = tenant_context.tenant_id
+  AND UPPER(TRIM(canonical_role.name)) = canonical_roles.name;
+
+UPDATE "${schema}".permission AS permission
+SET resource = target_permission_catalog.resource,
+    action = target_permission_catalog.action,
+    module_id = module.id,
+    description = COALESCE(permission.description, target_permission_catalog.description),
+    updated_at = NOW()
+FROM target_permission_catalog
+JOIN kabipay_ops.module AS module
+  ON UPPER(TRIM(module.code)) = target_permission_catalog.module_code
+WHERE LOWER(TRIM(permission.resource)) = target_permission_catalog.resource
+  AND LOWER(TRIM(permission.action)) = target_permission_catalog.action;
+
+INSERT INTO "${schema}".permission (id, resource, action, module_id, description)
+SELECT
+    gen_random_uuid(),
+    target_permission_catalog.resource,
+    target_permission_catalog.action,
+    module.id,
+    target_permission_catalog.description
+FROM target_permission_catalog
+JOIN kabipay_ops.module AS module
+  ON UPPER(TRIM(module.code)) = target_permission_catalog.module_code
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM "${schema}".permission AS existing_permission
+    WHERE LOWER(TRIM(existing_permission.resource)) = target_permission_catalog.resource
+      AND LOWER(TRIM(existing_permission.action)) = target_permission_catalog.action
+);
+        ]]></sql>
+
+        <sql><![CDATA[
+CREATE TEMP TABLE legacy_role_mapping (
+    legacy_name VARCHAR(255) PRIMARY KEY,
+    canonical_name VARCHAR(255) NOT NULL
+) ON COMMIT DROP;
+
+WITH legacy_role_mapping(legacy_name, canonical_name) AS (
+    VALUES
+        ('DEMO_STAFF', 'EMPLOYEE'),
+        ('LINE_MANAGER', 'MANAGER'),
+        ('HR_ADMIN', 'HR'),
+        ('ACCOUNTING_APPROVER', 'PAYROLL'),
+        ('TENANT_ADMIN', 'ADMIN')
+)
+INSERT INTO legacy_role_mapping (legacy_name, canonical_name)
+SELECT
+    legacy_role_mapping.legacy_name,
+    legacy_role_mapping.canonical_name
+FROM legacy_role_mapping;
+
+CREATE TEMP TABLE resolved_role_mapping (
+    legacy_role_id UUID PRIMARY KEY,
+    canonical_role_id UUID NOT NULL,
+    legacy_name VARCHAR(255) NOT NULL,
+    canonical_name VARCHAR(255) NOT NULL
+) ON COMMIT DROP;
+
+WITH resolved_role_mapping AS (
+    SELECT
+        legacy_role.id AS legacy_role_id,
+        canonical_role.id AS canonical_role_id,
+        legacy_role_mapping.legacy_name,
+        legacy_role_mapping.canonical_name
+    FROM "${schema}".role AS legacy_role
+    JOIN legacy_role_mapping
+      ON UPPER(TRIM(legacy_role.name)) = legacy_role_mapping.legacy_name
+    JOIN "${schema}".role AS canonical_role
+      ON UPPER(TRIM(canonical_role.name)) = legacy_role_mapping.canonical_name
+     AND canonical_role.tenant_id = legacy_role.tenant_id
+    JOIN tenant_context
+      ON tenant_context.tenant_id = legacy_role.tenant_id
+)
+INSERT INTO resolved_role_mapping (legacy_role_id, canonical_role_id, legacy_name, canonical_name)
+SELECT
+    resolved_role_mapping.legacy_role_id,
+    resolved_role_mapping.canonical_role_id,
+    resolved_role_mapping.legacy_name,
+    resolved_role_mapping.canonical_name
+FROM resolved_role_mapping;
+
+INSERT INTO "${schema}".user_role (user_id, role_id, assigned_at)
+SELECT
+    legacy_user_role.user_id,
+    resolved_role_mapping.canonical_role_id,
+    legacy_user_role.assigned_at
+FROM "${schema}".user_role AS legacy_user_role
+JOIN resolved_role_mapping
+  ON legacy_user_role.role_id = resolved_role_mapping.legacy_role_id
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+UPDATE "${schema}".user_role AS user_role
+SET role_id = resolved_role_mapping.canonical_role_id
+FROM resolved_role_mapping
+WHERE user_role.role_id = resolved_role_mapping.legacy_role_id
+  AND NOT EXISTS (
+      SELECT 1
+      FROM "${schema}".user_role AS canonical_user_role
+      WHERE canonical_user_role.user_id = user_role.user_id
+        AND canonical_user_role.role_id = resolved_role_mapping.canonical_role_id
+  );
+
+DELETE FROM "${schema}".user_role AS legacy_user_role
+USING resolved_role_mapping
+WHERE legacy_user_role.role_id = resolved_role_mapping.legacy_role_id;
+
+UPDATE "${schema}".workflow_step AS workflow_step
+SET approver_role_id = resolved_role_mapping.canonical_role_id
+FROM resolved_role_mapping
+WHERE workflow_step.approver_role_id = resolved_role_mapping.legacy_role_id;
+
+UPDATE "${schema}".approval_rule AS approval_rule
+SET approver_role_id = resolved_role_mapping.canonical_role_id
+FROM resolved_role_mapping
+WHERE approval_rule.approver_role_id = resolved_role_mapping.legacy_role_id;
+
+UPDATE "${schema}".expense_policy AS expense_policy
+SET role_id = resolved_role_mapping.canonical_role_id
+FROM resolved_role_mapping
+WHERE expense_policy.role_id = resolved_role_mapping.legacy_role_id;
+
+UPDATE "${schema}".announcement AS announcement
+SET target_audience = 'ROLE:' || legacy_role_mapping.canonical_name
+FROM legacy_role_mapping
+WHERE UPPER(TRIM(announcement.target_audience)) = 'ROLE:' || legacy_role_mapping.legacy_name;
+        ]]></sql>
+
+        <sql><![CDATA[
+CREATE TEMP TABLE canonical_permission_matrix (
+    role_name VARCHAR(255) NOT NULL,
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    scope_type VARCHAR(20) NOT NULL,
+    PRIMARY KEY (role_name, resource, action)
+) ON COMMIT DROP;
+
+WITH employee_grants(resource, action, scope_type) AS (
+    VALUES
+        ('employee', 'self', 'SELF'),
+        ('attendance', 'read', 'SELF'),
+        ('attendance', 'punch_self', 'SELF'),
+        ('timesheet', 'read', 'SELF'),
+        ('timesheet', 'write', 'SELF'),
+        ('leave', 'read', 'SELF'),
+        ('leave', 'submit', 'SELF'),
+        ('expense', 'read', 'SELF'),
+        ('expense', 'submit', 'SELF'),
+        ('travel', 'read', 'SELF'),
+        ('travel', 'submit', 'SELF'),
+        ('payroll', 'read', 'SELF'),
+        ('tax', 'read', 'SELF'),
+        ('tax', 'submit', 'SELF'),
+        ('notification', 'read', 'SELF'),
+        ('benefits', 'self', 'SELF'),
+        ('onboarding', 'self', 'SELF'),
+        ('grievance', 'self', 'SELF'),
+        ('assets', 'self', 'SELF')
+),
+employee_derived_roles(role_name) AS (
+    VALUES
+        ('EMPLOYEE'),
+        ('MANAGER'),
+        ('HR'),
+        ('PAYROLL')
+),
+role_overrides(role_name, resource, action, scope_type) AS (
+    VALUES
+        ('MANAGER', 'employee', 'read', 'TEAM'),
+        ('MANAGER', 'attendance', 'read', 'TEAM'),
+        ('MANAGER', 'attendance', 'regularize', 'TEAM'),
+        ('MANAGER', 'timesheet', 'read', 'TEAM'),
+        ('MANAGER', 'timesheet', 'approve', 'TEAM'),
+        ('MANAGER', 'leave', 'read', 'TEAM'),
+        ('MANAGER', 'leave', 'approve', 'TEAM'),
+        ('MANAGER', 'expense', 'read', 'TEAM'),
+        ('MANAGER', 'expense', 'approve', 'TEAM'),
+        ('MANAGER', 'travel', 'read', 'TEAM'),
+        ('MANAGER', 'travel', 'approve', 'TEAM'),
+
+        ('HR', 'employee', 'read', 'ALL'),
+        ('HR', 'employee', 'write', 'ALL'),
+        ('HR', 'employee', 'manage', 'ALL'),
+        ('HR', 'attendance', 'read', 'ALL'),
+        ('HR', 'attendance', 'regularize', 'ALL'),
+        ('HR', 'attendance', 'punch_policy', 'ALL'),
+        ('HR', 'timesheet', 'read', 'ALL'),
+        ('HR', 'timesheet', 'approve', 'ALL'),
+        ('HR', 'timesheet', 'manage', 'ALL'),
+        ('HR', 'leave', 'read', 'ALL'),
+        ('HR', 'leave', 'approve', 'ALL'),
+        ('HR', 'leave', 'manage', 'ALL'),
+        ('HR', 'expense', 'read', 'ALL'),
+        ('HR', 'expense', 'approve', 'ALL'),
+        ('HR', 'expense', 'manage', 'ALL'),
+        ('HR', 'travel', 'read', 'ALL'),
+        ('HR', 'travel', 'approve', 'ALL'),
+        ('HR', 'travel', 'manage', 'ALL'),
+        ('HR', 'workflow', 'manage', 'ALL'),
+        ('HR', 'notification', 'manage', 'ALL'),
+        ('HR', 'benefits', 'manage', 'ALL'),
+        ('HR', 'recruitment', 'manage', 'ALL'),
+        ('HR', 'onboarding', 'manage', 'ALL'),
+        ('HR', 'performance', 'manage', 'ALL'),
+        ('HR', 'learning', 'manage', 'ALL'),
+        ('HR', 'assets', 'manage', 'ALL'),
+        ('HR', 'grievance', 'manage', 'ALL'),
+        ('HR', 'succession', 'manage', 'ALL'),
+        ('HR', 'compensation', 'manage', 'ALL'),
+        ('HR', 'analytics', 'read', 'ALL'),
+
+        ('PAYROLL', 'payroll', 'read', 'ALL'),
+        ('PAYROLL', 'payroll', 'manage', 'ALL'),
+        ('PAYROLL', 'payroll', 'statutory_export', 'ALL'),
+        ('PAYROLL', 'tax', 'read', 'ALL'),
+        ('PAYROLL', 'tax', 'approve', 'ALL'),
+        ('PAYROLL', 'tax', 'manage', 'ALL'),
+        ('PAYROLL', 'expense', 'read', 'ALL'),
+        ('PAYROLL', 'expense', 'approve', 'ALL'),
+        ('PAYROLL', 'expense', 'pay', 'ALL')
+),
+grant_candidates(role_name, resource, action, scope_type, precedence) AS (
+    SELECT
+        employee_derived_roles.role_name,
+        employee_grants.resource,
+        employee_grants.action,
+        employee_grants.scope_type,
+        1
+    FROM employee_derived_roles
+    CROSS JOIN employee_grants
+
+    UNION ALL
+
+    SELECT
+        role_overrides.role_name,
+        role_overrides.resource,
+        role_overrides.action,
+        role_overrides.scope_type,
+        2
+    FROM role_overrides
+
+    UNION ALL
+
+    SELECT
+        'ADMIN',
+        LOWER(TRIM(permission.resource)),
+        LOWER(TRIM(permission.action)),
+        CASE
+            WHEN LOWER(TRIM(permission.action)) = 'self' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'attendance'
+             AND LOWER(TRIM(permission.action)) = 'punch_self' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'timesheet'
+             AND LOWER(TRIM(permission.action)) = 'write' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'leave'
+             AND LOWER(TRIM(permission.action)) = 'submit' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'expense'
+             AND LOWER(TRIM(permission.action)) = 'submit' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'travel'
+             AND LOWER(TRIM(permission.action)) = 'submit' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'tax'
+             AND LOWER(TRIM(permission.action)) = 'submit' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'notification'
+             AND LOWER(TRIM(permission.action)) = 'read' THEN 'SELF'
+            ELSE 'ALL'
+        END,
+        3
+    FROM "${schema}".permission AS permission
+),
+canonical_permission_matrix(role_name, resource, action, scope_type) AS (
+    SELECT DISTINCT ON (
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action
+    )
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action,
+        grant_candidates.scope_type
+    FROM grant_candidates
+    ORDER BY
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action,
+        grant_candidates.precedence DESC
+)
+INSERT INTO canonical_permission_matrix (role_name, resource, action, scope_type)
+SELECT
+    canonical_permission_matrix.role_name,
+    canonical_permission_matrix.resource,
+    canonical_permission_matrix.action,
+    canonical_permission_matrix.scope_type
+FROM canonical_permission_matrix;
+
+DELETE FROM "${schema}".role_permission AS role_permission
+USING "${schema}".role AS canonical_role, tenant_context
+WHERE role_permission.role_id = canonical_role.id
+  AND canonical_role.tenant_id = tenant_context.tenant_id
+  AND UPPER(TRIM(canonical_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN');
+
+DELETE FROM "${schema}".permission_scope AS permission_scope
+USING "${schema}".role AS canonical_role, tenant_context
+WHERE permission_scope.role_id = canonical_role.id
+  AND canonical_role.tenant_id = tenant_context.tenant_id
+  AND UPPER(TRIM(canonical_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN');
+
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT
+    canonical_role.id,
+    permission.id
+FROM canonical_permission_matrix
+JOIN "${schema}".role AS canonical_role
+  ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+JOIN tenant_context
+  ON tenant_context.tenant_id = canonical_role.tenant_id
+JOIN "${schema}".permission AS permission
+  ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+ AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+INSERT INTO "${schema}".permission_scope (
+    id,
+    tenant_id,
+    role_id,
+    resource,
+    action,
+    scope_type
+)
+SELECT
+    gen_random_uuid(),
+    canonical_role.tenant_id,
+    canonical_role.id,
+    canonical_permission_matrix.resource,
+    canonical_permission_matrix.action,
+    canonical_permission_matrix.scope_type
+FROM canonical_permission_matrix
+JOIN "${schema}".role AS canonical_role
+  ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+JOIN tenant_context
+  ON tenant_context.tenant_id = canonical_role.tenant_id
+JOIN "${schema}".permission AS permission
+  ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+ AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action;
+        ]]></sql>
+
+        <sql><![CDATA[
+DELETE FROM "${schema}".user_session AS user_session
+USING "${schema}"."user" AS tenant_user, tenant_context
+WHERE user_session.user_id = tenant_user.id
+  AND tenant_user.tenant_id = tenant_context.tenant_id;
+        ]]></sql>
+
+        <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}"."user" AS tenant_user
+        JOIN "${schema}".employee AS employee
+          ON employee.user_id = tenant_user.id
+         AND employee.tenant_id = tenant_user.tenant_id
+        WHERE tenant_user.is_active = true
+          AND tenant_user.is_deleted = false
+          AND employee.is_deleted = false
+          AND UPPER(TRIM(employee.status)) IN ('ACTIVE', 'PROBATION')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "${schema}".user_role AS user_role
+              JOIN "${schema}".role AS canonical_role
+                ON canonical_role.id = user_role.role_id
+              WHERE user_role.user_id = tenant_user.id
+                AND canonical_role.tenant_id = tenant_user.tenant_id
+                AND canonical_role.is_deleted = false
+                AND UPPER(TRIM(canonical_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN')
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'canonical RBAC migration would leave an active employee user without a canonical role in schema %',
+            '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".user_role AS user_role
+        JOIN resolved_role_mapping
+          ON user_role.role_id = resolved_role_mapping.legacy_role_id
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left user_role rows referencing mapped legacy roles in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".workflow_step AS workflow_step
+        JOIN resolved_role_mapping
+          ON workflow_step.approver_role_id = resolved_role_mapping.legacy_role_id
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left workflow_step rows referencing mapped legacy roles in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".approval_rule AS approval_rule
+        JOIN resolved_role_mapping
+          ON approval_rule.approver_role_id = resolved_role_mapping.legacy_role_id
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left approval_rule rows referencing mapped legacy roles in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".expense_policy AS expense_policy
+        JOIN resolved_role_mapping
+          ON expense_policy.role_id = resolved_role_mapping.legacy_role_id
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left expense_policy rows referencing mapped legacy roles in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".announcement AS announcement
+        JOIN legacy_role_mapping
+          ON UPPER(TRIM(announcement.target_audience)) = 'ROLE:' || legacy_role_mapping.legacy_name
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left announcement audiences referencing mapped legacy role names in schema %', '${schema}';
+    END IF;
+END $$;
+        ]]></sql>
+
+        <sql><![CDATA[
+DELETE FROM "${schema}".role AS legacy_role
+USING resolved_role_mapping AS legacy_role_mapping
+WHERE legacy_role.id = legacy_role_mapping.legacy_role_id
+  AND UPPER(TRIM(legacy_role.name)) IN (
+      'DEMO_STAFF',
+      'LINE_MANAGER',
+      'HR_ADMIN',
+      'ACCOUNTING_APPROVER',
+      'TENANT_ADMIN'
+  );
+        ]]></sql>
+
+        <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}"."user" AS tenant_user
+        JOIN "${schema}".employee AS employee
+          ON employee.user_id = tenant_user.id
+         AND employee.tenant_id = tenant_user.tenant_id
+        WHERE tenant_user.is_active = true
+          AND tenant_user.is_deleted = false
+          AND employee.is_deleted = false
+          AND UPPER(TRIM(employee.status)) IN ('ACTIVE', 'PROBATION')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "${schema}".user_role AS user_role
+              JOIN "${schema}".role AS canonical_role
+                ON canonical_role.id = user_role.role_id
+              WHERE user_role.user_id = tenant_user.id
+                AND canonical_role.tenant_id = tenant_user.tenant_id
+                AND canonical_role.is_deleted = false
+                AND UPPER(TRIM(canonical_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN')
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'canonical RBAC migration left an ACTIVE or PROBATION employee user without a canonical role in schema %',
+            '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".announcement AS announcement
+        JOIN legacy_role_mapping
+          ON UPPER(TRIM(announcement.target_audience)) = 'ROLE:' || legacy_role_mapping.legacy_name
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration final verification found a mapped legacy announcement audience in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".role AS legacy_role
+        WHERE UPPER(TRIM(legacy_role.name)) IN (
+            'DEMO_STAFF',
+            'LINE_MANAGER',
+            'HR_ADMIN',
+            'ACCOUNTING_APPROVER',
+            'TENANT_ADMIN'
+        )
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration failed to remove every mapped legacy role in schema %', '${schema}';
+    END IF;
+
+    IF (
+        SELECT COUNT(*)
+        FROM "${schema}".role AS canonical_role
+        JOIN tenant_context
+          ON tenant_context.tenant_id = canonical_role.tenant_id
+        WHERE UPPER(TRIM(canonical_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN')
+    ) <> 5 THEN
+        RAISE EXCEPTION 'canonical RBAC migration did not leave exactly five canonical role rows in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".role AS canonical_role
+        JOIN tenant_context
+          ON tenant_context.tenant_id = canonical_role.tenant_id
+        WHERE UPPER(TRIM(canonical_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN')
+          AND (
+              canonical_role.name <> UPPER(TRIM(canonical_role.name))
+              OR canonical_role.is_system_role = false
+              OR canonical_role.is_deleted = true
+          )
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left a canonical role non-system, deleted, or non-normalized in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM target_permission_catalog
+        LEFT JOIN "${schema}".permission AS permission
+          ON LOWER(TRIM(permission.resource)) = target_permission_catalog.resource
+         AND LOWER(TRIM(permission.action)) = target_permission_catalog.action
+        LEFT JOIN kabipay_ops.module AS module
+          ON module.id = permission.module_id
+        WHERE permission.id IS NULL
+           OR UPPER(TRIM(module.code)) <> target_permission_catalog.module_code
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration did not create exactly owned required permissions in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM canonical_permission_matrix
+        JOIN "${schema}".role AS canonical_role
+          ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+        JOIN tenant_context
+          ON tenant_context.tenant_id = canonical_role.tenant_id
+        JOIN "${schema}".permission AS permission
+          ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+         AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action
+        LEFT JOIN "${schema}".role_permission AS role_permission
+          ON role_permission.role_id = canonical_role.id
+         AND role_permission.permission_id = permission.id
+        WHERE role_permission.role_id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left a canonical role grant missing in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".role_permission AS role_permission
+        JOIN "${schema}".role AS canonical_role
+          ON canonical_role.id = role_permission.role_id
+        JOIN tenant_context
+          ON tenant_context.tenant_id = canonical_role.tenant_id
+        JOIN "${schema}".permission AS permission
+          ON permission.id = role_permission.permission_id
+        LEFT JOIN canonical_permission_matrix
+          ON canonical_permission_matrix.role_name = UPPER(TRIM(canonical_role.name))
+         AND canonical_permission_matrix.resource = LOWER(TRIM(permission.resource))
+         AND canonical_permission_matrix.action = LOWER(TRIM(permission.action))
+        WHERE UPPER(TRIM(canonical_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN')
+          AND canonical_permission_matrix.role_name IS NULL
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left an extra canonical role grant in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM canonical_permission_matrix
+        JOIN "${schema}".role AS canonical_role
+          ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+        JOIN tenant_context
+          ON tenant_context.tenant_id = canonical_role.tenant_id
+        JOIN "${schema}".permission AS permission
+          ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+         AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action
+        LEFT JOIN "${schema}".permission_scope AS permission_scope
+          ON permission_scope.role_id = canonical_role.id
+         AND LOWER(TRIM(permission_scope.resource)) = canonical_permission_matrix.resource
+         AND LOWER(TRIM(permission_scope.action)) = canonical_permission_matrix.action
+         AND UPPER(TRIM(permission_scope.scope_type)) = canonical_permission_matrix.scope_type
+        WHERE permission_scope.id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left a canonical permission scope missing or incorrect in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".permission_scope AS permission_scope
+        JOIN "${schema}".role AS canonical_role
+          ON canonical_role.id = permission_scope.role_id
+        JOIN tenant_context
+          ON tenant_context.tenant_id = canonical_role.tenant_id
+        LEFT JOIN canonical_permission_matrix
+          ON canonical_permission_matrix.role_name = UPPER(TRIM(canonical_role.name))
+         AND canonical_permission_matrix.resource = LOWER(TRIM(permission_scope.resource))
+         AND canonical_permission_matrix.action = LOWER(TRIM(permission_scope.action))
+         AND canonical_permission_matrix.scope_type = UPPER(TRIM(permission_scope.scope_type))
+        WHERE UPPER(TRIM(canonical_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN')
+          AND canonical_permission_matrix.role_name IS NULL
+    ) THEN
+        RAISE EXCEPTION 'canonical RBAC migration left an extra or incorrect canonical permission scope in schema %', '${schema}';
+    END IF;
+END $$;
+        ]]></sql>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,8 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
 $migrationPath = Join-Path $PSScriptRoot '..\changelog\migrations\0063_attendance_management\attendance_management.xml'
+$canonicalMigrationPath = Join-Path $PSScriptRoot '..\changelog\migrations\0067_canonical_rbac_authorization\canonical_rbac_authorization.xml'
 $masterPath = Join-Path $PSScriptRoot '..\changelog\tenant.changelog-master.xml'
 $seedPath = Join-Path $PSScriptRoot 'seed-demo-data.ps1'
+$bootstrapPath = Join-Path $PSScriptRoot 'bootstrap-tenant-admins.ps1'
 
 function Assert-True {
     param(
@@ -32,7 +34,7 @@ function Get-NormalizedSqlStatements {
     })
 }
 
-function Assert-ExactRegularizeRoles {
+function Assert-HistoricalRegularizeRoles {
     param(
         [string]$GrantSql,
         [string]$GrantName
@@ -42,7 +44,7 @@ function Assert-ExactRegularizeRoles {
         $GrantSql,
         "UPPER\(\s*TRIM\(\s*tenant_role\.name\s*\)\s*\)\s*IN\(\s*(?<roles>[^)]*)\)"
     )
-    Assert-True $rolePredicate.Success "$GrantName must filter active_admin_roles by an explicit role-name set"
+    Assert-True $rolePredicate.Success "$GrantName must preserve the historical 0063 compatibility role-name set"
     $actualRoles = @([regex]::Matches($rolePredicate.Groups['roles'].Value, "'(?<role>[A-Z_]+)'") | ForEach-Object {
         $_.Groups['role'].Value
     } | Sort-Object -Unique)
@@ -50,7 +52,7 @@ function Assert-ExactRegularizeRoles {
     Assert-True (
         $actualRoles.Count -eq $expectedRoles.Count -and
         [string]::Join(',', $actualRoles) -eq [string]::Join(',', $expectedRoles)
-    ) "$GrantName must target exactly HR_ADMIN, TENANT_ADMIN, and ORG_ADMIN"
+    ) "$GrantName must preserve exactly the historical HR_ADMIN, TENANT_ADMIN, and ORG_ADMIN compatibility set"
 }
 
 function Get-PowerShellAst {
@@ -67,9 +69,65 @@ function Get-PowerShellAst {
     return $ast
 }
 
+function Get-CanonicalRbacConfig {
+    param(
+        [string]$Path,
+        [string]$WriterLabel
+    )
+
+    $ast = Get-PowerShellAst -Path $Path
+    $assignments = @($ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+        $node.Left.VariablePath.UserPath -eq 'CanonicalRbac'
+    }, $true))
+    Assert-True ($assignments.Count -eq 1) "$WriterLabel must define exactly one `$CanonicalRbac data structure"
+    try {
+        return & ([scriptblock]::Create($assignments[0].Right.Extent.Text))
+    } catch {
+        throw "$WriterLabel `$CanonicalRbac must be a self-contained PowerShell data expression: $($_.Exception.Message)"
+    }
+}
+
+function Assert-CanonicalAttendanceOutcomes {
+    param(
+        [object]$Config,
+        [string]$WriterLabel
+    )
+
+    $grantMap = @{}
+    foreach ($grant in $Config.Grants) {
+        $grantMap["$($grant.Role):$($grant.Resource):$($grant.Action)".ToUpperInvariant()] = $grant.Scope.ToUpperInvariant()
+    }
+    foreach ($expectedGrant in @(
+        @{ Key = 'EMPLOYEE:ATTENDANCE:READ'; Scope = 'SELF' },
+        @{ Key = 'EMPLOYEE:ATTENDANCE:PUNCH_SELF'; Scope = 'SELF' },
+        @{ Key = 'MANAGER:ATTENDANCE:READ'; Scope = 'TEAM' },
+        @{ Key = 'MANAGER:ATTENDANCE:REGULARIZE'; Scope = 'TEAM' },
+        @{ Key = 'HR:ATTENDANCE:READ'; Scope = 'ALL' },
+        @{ Key = 'HR:ATTENDANCE:REGULARIZE'; Scope = 'ALL' },
+        @{ Key = 'HR:ATTENDANCE:PUNCH_POLICY'; Scope = 'ALL' }
+    )) {
+        Assert-True $grantMap.ContainsKey($expectedGrant.Key) "$WriterLabel is missing canonical attendance grant $($expectedGrant.Key)"
+        Assert-True ($grantMap[$expectedGrant.Key] -eq $expectedGrant.Scope) "$WriterLabel $($expectedGrant.Key) must use $($expectedGrant.Scope) scope"
+    }
+
+    $adminSelfScopes = @($Config.AdminSelfScopes | ForEach-Object {
+        "$($_.Resource):$($_.Action)".ToUpperInvariant()
+    })
+    Assert-True ($adminSelfScopes -contains 'ATTENDANCE:PUNCH_SELF') "$WriterLabel ADMIN must keep attendance:punch_self at SELF"
+    Assert-True ($adminSelfScopes -notcontains 'ATTENDANCE:READ') "$WriterLabel ADMIN attendance:read must resolve to ALL"
+    Assert-True ($adminSelfScopes -notcontains 'ATTENDANCE:REGULARIZE') "$WriterLabel ADMIN attendance:regularize must resolve to ALL"
+    Assert-True ($adminSelfScopes -notcontains 'ATTENDANCE:PUNCH_POLICY') "$WriterLabel ADMIN attendance:punch_policy must resolve to ALL"
+}
+
 Assert-True (Test-Path -LiteralPath $migrationPath) 'attendance management migration file is missing'
+Assert-True (Test-Path -LiteralPath $canonicalMigrationPath) 'canonical RBAC migration 0067 is missing'
+Assert-True (Test-Path -LiteralPath $bootstrapPath) 'tenant-admin bootstrap writer is missing'
 
 [xml]$migration = Get-Content -Raw -LiteralPath $migrationPath
+[xml]$canonicalMigration = Get-Content -Raw -LiteralPath $canonicalMigrationPath
 [xml]$master = Get-Content -Raw -LiteralPath $masterPath
 
 $auditTable = @($migration.SelectNodes("//*[local-name()='createTable' and @tableName='attendance_adjustment_audit' and @schemaName='`${schema}']"))
@@ -157,12 +215,12 @@ Assert-True ($sql -match "module\.code\s*=\s*'ATTENDANCE'") 'regularize permissi
 Assert-True ($sql -match "subscription\.status\s*=\s*'ACTIVE'") 'regularize permission must be constrained to active subscriptions'
 $rolePermissionGrant = @($sqlStatements | Where-Object { $_ -match 'INSERT INTO\s+"?\$\{schema\}"?\.role_permission' })
 Assert-True ($rolePermissionGrant.Count -eq 1) 'regularize role permission grant is missing or ambiguous'
-Assert-ExactRegularizeRoles -GrantSql $rolePermissionGrant[0] -GrantName 'role permission grant'
+Assert-HistoricalRegularizeRoles -GrantSql $rolePermissionGrant[0] -GrantName 'historical 0063 role permission grant'
 Assert-True ($rolePermissionGrant[0] -match 'FROM\s+active_admin_roles\s+CROSS\s+JOIN\s+regularize_permission') 'role permission grant must consume only active_admin_roles and the regularize permission'
 
 $scopeGrant = @($sqlStatements | Where-Object { $_ -match 'INSERT INTO\s+"?\$\{schema\}"?\.permission_scope' })
 Assert-True ($scopeGrant.Count -eq 1) 'regularize scope grant is missing or ambiguous'
-Assert-ExactRegularizeRoles -GrantSql $scopeGrant[0] -GrantName 'permission scope grant'
+Assert-HistoricalRegularizeRoles -GrantSql $scopeGrant[0] -GrantName 'historical 0063 permission scope grant'
 Assert-True ($scopeGrant[0] -match "SELECT\s+gen_random_uuid\(\s*\)\s*,\s*active_admin_roles\.tenant_id\s*,\s*active_admin_roles\.id\s*,\s*'attendance'\s*,\s*'regularize'\s*,\s*'ALL'\s+FROM\s+active_admin_roles") 'regularize scope grant must assign ALL to active_admin_roles'
 Assert-True ($scopeGrant[0] -match "ON CONFLICT\(\s*role_id, resource, action\)\s*DO UPDATE SET scope_type = EXCLUDED\.scope_type") 'regularize scope must upsert the ALL scope'
 
@@ -176,27 +234,27 @@ Assert-True ($rollbackSql -match 'SELECT\s+1;') 'authorization rollback must be 
 $includeFiles = @($master.SelectNodes("//*[local-name()='include']") | ForEach-Object { $_.GetAttribute('file') })
 $previousIndex = [Array]::IndexOf($includeFiles, 'migrations/0062_private_file_cleanup_hardening/private_file_cleanup_hardening.xml')
 $currentIndex = [Array]::IndexOf($includeFiles, 'migrations/0063_attendance_management/attendance_management.xml')
+$canonicalIndex = [Array]::IndexOf($includeFiles, 'migrations/0067_canonical_rbac_authorization/canonical_rbac_authorization.xml')
 Assert-True ($previousIndex -ge 0 -and $currentIndex -eq ($previousIndex + 1)) '0063 must be registered immediately after 0062'
+Assert-True ($canonicalIndex -gt $currentIndex) '0067 canonical RBAC must run after historical 0063 compatibility grants'
 
-$seedAst = Get-PowerShellAst -Path $seedPath
-$assignments = @($seedAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true))
-foreach ($scopeVariable in @('ScopeAttendanceRegularizeAllId', 'ScopeAttendanceRegularizeTeamLmId')) {
-    $assignment = @($assignments | Where-Object { $_.Left.VariablePath.UserPath -eq $scopeVariable })
-    Assert-True ($assignment.Count -eq 1) "seed must define deterministic `$${scopeVariable}"
-    Assert-True ($assignment[0].Right.Extent.Text -match 'New-DeterministicUuid') "`$${scopeVariable} must be deterministic"
+$canonicalSql = Get-NormalizedSql -Document $canonicalMigration
+foreach ($canonicalOutcome in @(
+    "\(\s*'attendance'\s*,\s*'read'\s*,\s*'SELF'\s*\)",
+    "\(\s*'attendance'\s*,\s*'punch_self'\s*,\s*'SELF'\s*\)",
+    "\(\s*'MANAGER'\s*,\s*'attendance'\s*,\s*'read'\s*,\s*'TEAM'\s*\)",
+    "\(\s*'MANAGER'\s*,\s*'attendance'\s*,\s*'regularize'\s*,\s*'TEAM'\s*\)",
+    "\(\s*'HR'\s*,\s*'attendance'\s*,\s*'read'\s*,\s*'ALL'\s*\)",
+    "\(\s*'HR'\s*,\s*'attendance'\s*,\s*'regularize'\s*,\s*'ALL'\s*\)",
+    "\(\s*'HR'\s*,\s*'attendance'\s*,\s*'punch_policy'\s*,\s*'ALL'\s*\)"
+)) {
+    Assert-True ($canonicalSql -match $canonicalOutcome) "0067 must establish canonical attendance outcome: $canonicalOutcome"
 }
+Assert-True ($canonicalSql -match "SELECT\s*'ADMIN'.*?FROM\s+`"?\$\{schema\}`"?\.permission" ) '0067 ADMIN attendance authorization must derive from permission outcomes, not a role-name allowlist'
 
-$seedSqlNodes = @($seedAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true))
-$scopeInsert = @($seedSqlNodes | Where-Object { $_.Extent.Text -match 'INSERT\s+INTO\s+"\$Schema"\.permission_scope' })
-Assert-True ($scopeInsert.Count -ge 1) 'seed must contain a permission_scope insert'
-$seedSql = ($scopeInsert | ForEach-Object { $_.Extent.Text }) -join "`n"
-$seedHrAdminPattern = (@('$ScopeAttendanceRegularizeAllId', '$TenantId', '$RoleHrAdminId', 'attendance', 'regularize', 'ALL') | ForEach-Object {
-    "'$([regex]::Escape($_))'"
-}) -join '\s*,\s*'
-$seedLineManagerPattern = (@('$ScopeAttendanceRegularizeTeamLmId', '$TenantId', '$RoleLineManagerId', 'attendance', 'regularize', 'TEAM') | ForEach-Object {
-    "'$([regex]::Escape($_))'"
-}) -join '\s*,\s*'
-Assert-True ($seedSql -match $seedHrAdminPattern) 'seed must grant HR_ADMIN ALL attendance regularization'
-Assert-True ($seedSql -match $seedLineManagerPattern) 'seed must grant LINE_MANAGER TEAM attendance regularization explicitly'
+$seedConfig = Get-CanonicalRbacConfig -Path $seedPath -WriterLabel 'demo seed'
+$bootstrapConfig = Get-CanonicalRbacConfig -Path $bootstrapPath -WriterLabel 'tenant-admin bootstrap'
+Assert-CanonicalAttendanceOutcomes -Config $seedConfig -WriterLabel 'demo seed'
+Assert-CanonicalAttendanceOutcomes -Config $bootstrapConfig -WriterLabel 'tenant-admin bootstrap'
 
 Write-Host 'Attendance management migration contract passed.'

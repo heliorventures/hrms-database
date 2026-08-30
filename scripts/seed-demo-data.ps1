@@ -15,7 +15,7 @@
       run `kabipay-database/scripts/update-tenant-liquibase.ps1 -Schema <tenant_schema>` **before** (or after) seeding.
 
       Tenant plane ("$Schema"):
-        0000 foundation   : department (Engineering + Accounting), designation, users/employees; demo + line manager + staff + **accountant@kabipay.local** (ACCOUNTING_APPROVER — second-line expense/travel step in seeded workflows)
+        0000 foundation   : department (Engineering + Accounting), designation, users/employees; HR + manager + employee + payroll + admin personas with canonical RBAC
         0010 shift/attend : shift (DAY/NIGHT), attendance for today
         0011 leave        : leave_type (CL/SL), leave_request (PENDING)
         0012 payroll      : salary_component (BASIC/HRA/ARREAR), payroll_cycle (current month), demo payslip + TDS
@@ -33,7 +33,7 @@
         0022 assets       : asset_category, asset
         0023 grievance    : grievance_category, grievance_case
         0033 travel       : travel_request (PENDING, demo employee)
-        0025 workflow     : LEAVE + EXPENSE + TRAVEL_REQUEST + TIMESHEET definitions (multi-step approvals; expense/travel route to accounting role on step 2 in demo seeds)
+        0025 workflow     : LEAVE + EXPENSE + TRAVEL_REQUEST + TIMESHEET definitions (manager-aware approvals with canonical HR and PAYROLL fallbacks)
         0027 comm/audit   : announcement, notification
 
       Ops plane (kabipay_ops):
@@ -80,7 +80,7 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$TenantId,
+    [Parameter(Mandatory = $true)][Guid]$TenantId,
     [Parameter(Mandatory = $true)][ValidatePattern('^tenant_[a-z0-9_]{1,50}$')][string]$Schema,
     [string]$DbName,
     [string]$DbUser,
@@ -91,12 +91,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$CanonicalTenantId = $TenantId.ToString('D').ToLowerInvariant()
 
 $DatabaseDir = Split-Path -Parent $PSScriptRoot
 $DbEnv = Join-Path $DatabaseDir '.env'
 $RunSql = Join-Path $DatabaseDir 'run-sql.cjs'
+$RunSqlRaw = Join-Path $DatabaseDir 'run-sql-raw.cjs'
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "Node.js is required" }
 if (-not (Test-Path $RunSql)) { throw "Missing run-sql.cjs. From kabipay-database: npm install" }
+if (-not (Test-Path $RunSqlRaw)) { throw "Missing run-sql-raw.cjs. From hrms-database: npm install" }
 function Import-DotEnvFile {
     param([string]$Path)
     if (-not (Test-Path $Path)) { return }
@@ -164,53 +167,6 @@ $StaffEmployeeId     = New-DeterministicUuid -Seed "${Schema}:employee:staff"
 $AccountingUserId    = New-DeterministicUuid -Seed "${Schema}:user:accounting"
 $AccountingEmployeeId = New-DeterministicUuid -Seed "${Schema}:employee:accounting"
 $TenantAdminEmployeeId = New-DeterministicUuid -Seed "${Schema}:employee:tenant-admin"
-$RoleHrAdminId       = New-DeterministicUuid -Seed "${Schema}:role:HR_ADMIN"
-$RoleTenantAdminId   = New-DeterministicUuid -Seed "${Schema}:role:TENANT_ADMIN"
-$RoleLineManagerId   = New-DeterministicUuid -Seed "${Schema}:role:LINE_MANAGER"
-$RoleDemoStaffId     = New-DeterministicUuid -Seed "${Schema}:role:DEMO_STAFF"
-$RoleAccountingApproverId = New-DeterministicUuid -Seed "${Schema}:role:ACCOUNTING_APPROVER"
-$PermEmployeeWriteId = New-DeterministicUuid -Seed "${Schema}:perm:employee:write"
-$PermLeaveApproveId  = New-DeterministicUuid -Seed "${Schema}:perm:leave:approve"
-$PermLeaveManageId   = New-DeterministicUuid -Seed "${Schema}:perm:leave:manage"
-$PermExpenseApproveId = New-DeterministicUuid -Seed "${Schema}:perm:expense:approve"
-$PermExpenseManageId   = New-DeterministicUuid -Seed "${Schema}:perm:expense:manage"
-$PermExpensePayId = New-DeterministicUuid -Seed "${Schema}:perm:expense:pay"
-$PermTaxProofApproveId = New-DeterministicUuid -Seed "${Schema}:perm:tax:approve"
-$PermPayrollStatutoryId = New-DeterministicUuid -Seed "${Schema}:perm:payroll:statutory_export"
-$PermAttendancePunchPolicyId = New-DeterministicUuid -Seed "${Schema}:perm:attendance:punch_policy"
-$PermWorkflowManageId = New-DeterministicUuid -Seed "${Schema}:perm:workflow:manage"
-$PermRoleManageId = New-DeterministicUuid -Seed "${Schema}:perm:role:manage"
-$PermBenefitsManageId = New-DeterministicUuid -Seed "${Schema}:perm:benefits:manage"
-$PermBenefitsSelfId = New-DeterministicUuid -Seed "${Schema}:perm:benefits:self"
-$PermRecruitmentManageId = New-DeterministicUuid -Seed "${Schema}:perm:recruitment:manage"
-$PermOnboardingManageId = New-DeterministicUuid -Seed "${Schema}:perm:onboarding:manage"
-$PermOnboardingSelfId = New-DeterministicUuid -Seed "${Schema}:perm:onboarding:self"
-$PermPerformanceManageId = New-DeterministicUuid -Seed "${Schema}:perm:performance:manage"
-$PermLearningManageId = New-DeterministicUuid -Seed "${Schema}:perm:learning:manage"
-$PermAssetsManageId = New-DeterministicUuid -Seed "${Schema}:perm:assets:manage"
-$PermGrievanceManageId = New-DeterministicUuid -Seed "${Schema}:perm:grievance:manage"
-$PermGrievanceSelfId = New-DeterministicUuid -Seed "${Schema}:perm:grievance:self"
-$PermSuccessionManageId = New-DeterministicUuid -Seed "${Schema}:perm:succession:manage"
-$PermCompensationManageId = New-DeterministicUuid -Seed "${Schema}:perm:compensation:manage"
-$PermAnalyticsReadId = New-DeterministicUuid -Seed "${Schema}:perm:analytics:read"
-$PermAttendancePunchSelfId = New-DeterministicUuid -Seed "${Schema}:perm:attendance:punch_self"
-$PermAttendanceRegularizeId = New-DeterministicUuid -Seed "${Schema}:perm:attendance:regularize"
-$PermTimesheetApproveId = New-DeterministicUuid -Seed "${Schema}:perm:timesheet:approve"
-$PermTimesheetManageId = New-DeterministicUuid -Seed "${Schema}:perm:timesheet:manage"
-$PermNotificationManageId = New-DeterministicUuid -Seed "${Schema}:perm:notification:manage"
-$ScopeScopeEmployeeAllId  = New-DeterministicUuid -Seed "${Schema}:permission_scope:employee:write:ALL"
-$ScopeScopeLeaveAllId   = New-DeterministicUuid -Seed "${Schema}:permission_scope:leave:approve:ALL"
-$ScopeScopeLeaveTeamLmId = New-DeterministicUuid -Seed "${Schema}:permission_scope:leave:approve:TEAM:LM"
-$ScopeScopeExpenseAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:expense:approve:ALL"
-$ScopeScopeExpenseTeamLmId = New-DeterministicUuid -Seed "${Schema}:permission_scope:expense:approve:TEAM:LM"
-$ScopeScopeExpenseAcctAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:expense:approve:ALL:ACCOUNTING"
-$ScopeScopeAttendanceAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:attendance:read:ALL"
-$ScopeAttendancePunchPolicyAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:attendance:punch_policy:ALL"
-$ScopeAttendanceRegularizeAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:attendance:regularize:ALL"
-$ScopeAttendanceRegularizeTeamLmId = New-DeterministicUuid -Seed "${Schema}:permission_scope:attendance:regularize:TEAM:LINE_MANAGER"
-$ScopeWorkflowManageAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:workflow:manage:ALL"
-$ScopeTimesheetApproveAllId = New-DeterministicUuid -Seed "${Schema}:permission_scope:timesheet:approve:ALL"
-$ScopeTimesheetApproveTeamLmId = New-DeterministicUuid -Seed "${Schema}:permission_scope:timesheet:approve:TEAM:LM"
 
 # Shift / attendance (0010)
 $ShiftDayId          = New-DeterministicUuid -Seed "${Schema}:shift:day"
@@ -368,13 +324,161 @@ Write-Host ""
 # Re-run that command if you rotate the demo password.
 $PasswordHash = '$argon2id$v=19$m=19456,t=2,p=1$CDQNnKaKe519h5WXXU1DaA$IiZxOr7AvMrrMg0U2q2L1bD5CsBxDVWCHY42+CnLTXw'
 
+# One evaluated model owns the canonical role catalogue, permission catalogue,
+# direct grants, inheritance, and explicit scope rules used by every RBAC write.
+$CanonicalRbac = [pscustomobject]@{
+    Roles = @(
+        [pscustomobject]@{ Name = 'EMPLOYEE'; Inherits = ''; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical employee self-service role' }
+        [pscustomobject]@{ Name = 'MANAGER'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical people manager role' }
+        [pscustomobject]@{ Name = 'HR'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $true; Description = 'Canonical human resources role' }
+        [pscustomobject]@{ Name = 'PAYROLL'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical payroll and finance role' }
+        [pscustomobject]@{ Name = 'ADMIN'; Inherits = ''; AllPermissions = $true; BootstrapManaged = $true; Description = 'Canonical tenant administrator role' }
+    )
+    Permissions = @(
+        [pscustomobject]@{ Resource = 'employee'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own employee profile' }
+        [pscustomobject]@{ Resource = 'employee'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read employee records' }
+        [pscustomobject]@{ Resource = 'employee'; Action = 'write'; Module = 'EMPLOYEE'; Description = 'Create and update employee records' }
+        [pscustomobject]@{ Resource = 'employee'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage employee lifecycle' }
+        [pscustomobject]@{ Resource = 'notification'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read own notifications' }
+        [pscustomobject]@{ Resource = 'notification'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage tenant communications' }
+        [pscustomobject]@{ Resource = 'role'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage tenant role assignments' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'read'; Module = 'ATTENDANCE'; Description = 'Read attendance records' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'punch_self'; Module = 'ATTENDANCE'; Description = 'Record own attendance punches' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'regularize'; Module = 'ATTENDANCE'; Description = 'Regularize attendance records' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'punch_policy'; Module = 'ATTENDANCE'; Description = 'Manage attendance punch policy' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'read'; Module = 'ATTENDANCE'; Description = 'Read timesheets' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'write'; Module = 'ATTENDANCE'; Description = 'Write own timesheets' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'approve'; Module = 'ATTENDANCE'; Description = 'Approve timesheets' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'manage'; Module = 'ATTENDANCE'; Description = 'Manage timesheet configuration' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'read'; Module = 'LEAVE'; Description = 'Read leave records' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'submit'; Module = 'LEAVE'; Description = 'Submit own leave requests' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'approve'; Module = 'LEAVE'; Description = 'Approve leave requests' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'manage'; Module = 'LEAVE'; Description = 'Manage leave configuration' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'read'; Module = 'EXPENSE'; Description = 'Read expense claims' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'submit'; Module = 'EXPENSE'; Description = 'Submit own expense claims' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'approve'; Module = 'EXPENSE'; Description = 'Approve expense claims' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'manage'; Module = 'EXPENSE'; Description = 'Manage expense configuration' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'pay'; Module = 'EXPENSE'; Description = 'Manage expense payment lifecycle' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'read'; Module = 'EXPENSE'; Description = 'Read travel requests' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'submit'; Module = 'EXPENSE'; Description = 'Submit own travel requests' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'approve'; Module = 'EXPENSE'; Description = 'Approve travel requests' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'manage'; Module = 'EXPENSE'; Description = 'Manage travel configuration' }
+        [pscustomobject]@{ Resource = 'payroll'; Action = 'read'; Module = 'PAYROLL'; Description = 'Read payroll records' }
+        [pscustomobject]@{ Resource = 'payroll'; Action = 'manage'; Module = 'PAYROLL'; Description = 'Manage payroll processing' }
+        [pscustomobject]@{ Resource = 'payroll'; Action = 'statutory_export'; Module = 'PAYROLL'; Description = 'Export statutory payroll reports' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'read'; Module = 'TAX'; Description = 'Read tax records' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'submit'; Module = 'TAX'; Description = 'Submit own tax declarations' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'approve'; Module = 'TAX'; Description = 'Approve tax declarations' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'manage'; Module = 'TAX'; Description = 'Manage tax configuration' }
+        [pscustomobject]@{ Resource = 'workflow'; Action = 'manage'; Module = 'WORKFLOW'; Description = 'Manage approval workflows' }
+    )
+    Grants = @(
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'employee'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'attendance'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'attendance'; Action = 'punch_self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'timesheet'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'timesheet'; Action = 'write'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'leave'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'leave'; Action = 'submit'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'expense'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'expense'; Action = 'submit'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'travel'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'travel'; Action = 'submit'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'payroll'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'tax'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'tax'; Action = 'submit'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'notification'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'benefits'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'onboarding'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'grievance'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'assets'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'employee'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'attendance'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'attendance'; Action = 'regularize'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'timesheet'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'timesheet'; Action = 'approve'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'leave'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'leave'; Action = 'approve'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'expense'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'expense'; Action = 'approve'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'travel'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'travel'; Action = 'approve'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'employee'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'employee'; Action = 'write'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'employee'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'attendance'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'attendance'; Action = 'regularize'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'attendance'; Action = 'punch_policy'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'timesheet'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'timesheet'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'timesheet'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'leave'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'leave'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'leave'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'workflow'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'notification'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'benefits'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'recruitment'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'onboarding'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'performance'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'learning'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'assets'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'grievance'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'succession'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'compensation'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'analytics'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'statutory_export'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'pay'; Scope = 'ALL' }
+    )
+    AdminSelfScopes = @(
+        [pscustomobject]@{ Resource = '*'; Action = 'self' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'punch_self' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'write' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'submit' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'submit' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'submit' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'submit' }
+        [pscustomobject]@{ Resource = 'notification'; Action = 'read' }
+    )
+}
+$CanonicalRbacJson = $CanonicalRbac | ConvertTo-Json -Depth 8 -Compress
+$CanonicalRbacJsonSql = $CanonicalRbacJson.Replace("'", "''")
+
+# Every SQL batch, including raw batches, crosses this control-plane binding
+# assertion on the same runner connection before any batch statement executes.
+$TenantDatabaseGuardSql = @"
+SELECT 1 / CASE WHEN COUNT(*) = 1 THEN 1 ELSE 0 END AS seed_tenant_database_mapping_guard
+FROM kabipay_ops.tenant_database AS tenant_database
+WHERE tenant_database.tenant_id = '$CanonicalTenantId'::uuid
+  AND tenant_database.schema_name = '$Schema';
+"@
+
 function Invoke-TenantSql {
-    param([Parameter(Mandatory=$true)][string]$Sql, [string]$Label)
+    param(
+        [Parameter(Mandatory=$true)][string]$Sql,
+        [string]$Label,
+        [switch]$Raw
+    )
     if ($Label) { Write-Host "==> $Label" -ForegroundColor Cyan }
+    $GuardedSql = $TenantDatabaseGuardSql.TrimEnd() + [Environment]::NewLine + $Sql
     $tmp = [System.IO.Path]::GetTempFileName() + '.sql'
     try {
-        [System.IO.File]::WriteAllText($tmp, $Sql, [System.Text.UTF8Encoding]::new($false))
-        & node $RunSql -f $tmp
+        [System.IO.File]::WriteAllText($tmp, $GuardedSql, [System.Text.UTF8Encoding]::new($false))
+        $runner = if ($Raw) { $RunSqlRaw } else { $RunSql }
+        & node $runner -f $tmp
         if ($LASTEXITCODE -ne 0) { throw "Seed step '$Label' failed (exit $LASTEXITCODE)." }
     } finally {
         Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
@@ -385,24 +489,26 @@ function Invoke-TenantSql {
 # 1. FOUNDATION (unchanged)
 # =====================================================================
 $SqlFoundation = @"
+BEGIN;
+
 INSERT INTO "$Schema".department (id, tenant_id, name, code)
-VALUES ('$DepartmentId', '$TenantId', 'Engineering', 'ENG')
+VALUES ('$DepartmentId', '$CanonicalTenantId', 'Engineering', 'ENG')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema".department (id, tenant_id, name, code)
-VALUES ('$DepartmentAccountingId', '$TenantId', 'Accounting', 'ACC')
+VALUES ('$DepartmentAccountingId', '$CanonicalTenantId', 'Accounting', 'ACC')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema".designation (id, tenant_id, department_id, title, level, grade)
-VALUES ('$DesignationId', '$TenantId', '$DepartmentId', 'Software Engineer', 'IC2', 2)
+VALUES ('$DesignationId', '$CanonicalTenantId', '$DepartmentId', 'Software Engineer', 'IC2', 2)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema".designation (id, tenant_id, department_id, title, level, grade)
-VALUES ('$DesignationAccountingId', '$TenantId', '$DepartmentAccountingId', 'Senior Accountant', 'IC2', 3)
+VALUES ('$DesignationAccountingId', '$CanonicalTenantId', '$DepartmentAccountingId', 'Senior Accountant', 'IC2', 3)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
-VALUES ('$UserId', '$TenantId', 'demo@kabipay.local', 'demo@kabipay.local', '$PasswordHash', true, false)
+VALUES ('$UserId', '$CanonicalTenantId', 'demo@kabipay.local', 'demo@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true;
 
 INSERT INTO "$Schema".employee (
@@ -410,13 +516,13 @@ INSERT INTO "$Schema".employee (
     employee_code, first_name, last_name, employment_type, status,
     date_of_joining
 ) VALUES (
-    '$EmployeeId', '$TenantId', '$UserId', '$DepartmentId', '$DesignationId',
+    '$EmployeeId', '$CanonicalTenantId', '$UserId', '$DepartmentId', '$DesignationId',
     'EMP0001', 'Demo', 'Employee', 'PERMANENT', 'ACTIVE',
     CURRENT_DATE
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
-VALUES ('$ManagerUserId', '$TenantId', 'manager@kabipay.local', 'manager@kabipay.local', '$PasswordHash', true, false)
+VALUES ('$ManagerUserId', '$CanonicalTenantId', 'manager@kabipay.local', 'manager@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema".employee (
@@ -424,50 +530,29 @@ INSERT INTO "$Schema".employee (
     employee_code, first_name, last_name, employment_type, status,
     date_of_joining, reporting_manager_id
 ) VALUES (
-    '$ManagerEmployeeId', '$TenantId', '$ManagerUserId', '$DepartmentId', '$DesignationId',
+    '$ManagerEmployeeId', '$CanonicalTenantId', '$ManagerUserId', '$DepartmentId', '$DesignationId',
     'EMP0002', 'Line', 'Manager', 'PERMANENT', 'ACTIVE',
     CURRENT_DATE, NULL
 ) ON CONFLICT (id) DO NOTHING;
 
 UPDATE "$Schema".employee
 SET reporting_manager_id = '$ManagerEmployeeId', updated_at = NOW()
-WHERE id = '$EmployeeId' AND tenant_id = '$TenantId';
+WHERE id = '$EmployeeId' AND tenant_id = '$CanonicalTenantId';
 
 INSERT INTO "$Schema".employee_pan (
     id, tenant_id, employee_id, pan_number, is_primary, is_verified
 ) VALUES (
-    '$EmployeePanId', '$TenantId', '$EmployeeId', 'ABCDE1234F', true, false
+    '$EmployeePanId', '$CanonicalTenantId', '$EmployeeId', 'ABCDE1234F', true, false
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema".employment_history (
     id, tenant_id, employee_id, salary, effective_from, is_deleted
 ) VALUES (
-    '$EmploymentHistoryDemoId', '$TenantId', '$EmployeeId', 85000.0000, CURRENT_DATE - INTERVAL '1 year', false
+    '$EmploymentHistoryDemoId', '$CanonicalTenantId', '$EmployeeId', 85000.0000, CURRENT_DATE - INTERVAL '1 year', false
 ) ON CONFLICT (id) DO NOTHING;
 
--- RBAC: demo user can create/update employees (JWT permissions loaded at login)
-INSERT INTO "$Schema".role (id, tenant_id, name, description, is_system_role, is_deleted)
-VALUES ('$RoleHrAdminId', '$TenantId', 'HR_ADMIN', 'Employee directory admin', true, false)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".role (id, tenant_id, name, description, is_system_role, is_deleted)
-VALUES ('$RoleLineManagerId', '$TenantId', 'LINE_MANAGER', 'People manager — hierarchical approvals (team-scoped lists)', true, false)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".role (id, tenant_id, name, description, is_system_role, is_deleted)
-VALUES ('$RoleDemoStaffId', '$TenantId', 'DEMO_STAFF', 'Demo IC — self-service benefits, onboarding, grievance only', true, false)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".role (id, tenant_id, name, description, is_system_role, is_deleted)
-VALUES ('$RoleTenantAdminId', '$TenantId', 'TENANT_ADMIN', 'Tenant administrator — admin shell + HR configuration', true, false)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".role (id, tenant_id, name, description, is_system_role, is_deleted)
-VALUES ('$RoleAccountingApproverId', '$TenantId', 'ACCOUNTING_APPROVER', 'Accounting / finance second-line approver for expense and travel workflows', true, false)
-ON CONFLICT (id) DO NOTHING;
-
 INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
-VALUES ('$TenantAdminUserId', '$TenantId', 'tenant-admin@kabipay.local', 'tenant-admin@kabipay.local', '$PasswordHash', true, false)
+VALUES ('$TenantAdminUserId', '$CanonicalTenantId', 'tenant-admin@kabipay.local', 'tenant-admin@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true;
 
 INSERT INTO "$Schema".employee (
@@ -475,13 +560,13 @@ INSERT INTO "$Schema".employee (
     employee_code, first_name, last_name, employment_type, status,
     date_of_joining, reporting_manager_id
 ) VALUES (
-    '$TenantAdminEmployeeId', '$TenantId', '$TenantAdminUserId', '$DepartmentId', '$DesignationId',
+    '$TenantAdminEmployeeId', '$CanonicalTenantId', '$TenantAdminUserId', '$DepartmentId', '$DesignationId',
     'EMP0998', 'Tenant', 'Administrator', 'PERMANENT', 'ACTIVE',
     CURRENT_DATE, '$ManagerEmployeeId'
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
-VALUES ('$AccountingUserId', '$TenantId', 'accountant@kabipay.local', 'accountant@kabipay.local', '$PasswordHash', true, false)
+VALUES ('$AccountingUserId', '$CanonicalTenantId', 'accountant@kabipay.local', 'accountant@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true;
 
 INSERT INTO "$Schema".employee (
@@ -489,13 +574,13 @@ INSERT INTO "$Schema".employee (
     employee_code, first_name, last_name, employment_type, status,
     date_of_joining, reporting_manager_id
 ) VALUES (
-    '$AccountingEmployeeId', '$TenantId', '$AccountingUserId', '$DepartmentAccountingId', '$DesignationAccountingId',
+    '$AccountingEmployeeId', '$CanonicalTenantId', '$AccountingUserId', '$DepartmentAccountingId', '$DesignationAccountingId',
     'EMP0004', 'Finance', 'Reviewer', 'PERMANENT', 'ACTIVE',
     CURRENT_DATE, '$ManagerEmployeeId'
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "$Schema"."user" (id, tenant_id, username, email, password_hash, is_active, mfa_enabled)
-VALUES ('$StaffUserId', '$TenantId', 'staff@kabipay.local', 'staff@kabipay.local', '$PasswordHash', true, false)
+VALUES ('$StaffUserId', '$CanonicalTenantId', 'staff@kabipay.local', 'staff@kabipay.local', '$PasswordHash', true, false)
 ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true;
 
 INSERT INTO "$Schema".employee (
@@ -503,354 +588,387 @@ INSERT INTO "$Schema".employee (
     employee_code, first_name, last_name, employment_type, status,
     date_of_joining, reporting_manager_id
 ) VALUES (
-    '$StaffEmployeeId', '$TenantId', '$StaffUserId', '$DepartmentId', '$DesignationId',
+    '$StaffEmployeeId', '$CanonicalTenantId', '$StaffUserId', '$DepartmentId', '$DesignationId',
     'EMP0003', 'Staff', 'Member', 'PERMANENT', 'ACTIVE',
     CURRENT_DATE, '$ManagerEmployeeId'
 ) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermEmployeeWriteId', 'employee', 'write', '$ModuleEmployeeId', 'Create and update employee records')
-ON CONFLICT (id) DO NOTHING;
+CREATE TEMP TABLE canonical_rbac_config (
+    payload JSONB NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO canonical_rbac_config (payload)
+VALUES ('$CanonicalRbacJsonSql'::jsonb);
+
+CREATE TEMP TABLE canonical_role_definitions (
+    role_name VARCHAR(255) PRIMARY KEY,
+    inherits_role_name VARCHAR(255),
+    all_permissions BOOLEAN NOT NULL,
+    bootstrap_managed BOOLEAN NOT NULL,
+    description VARCHAR(500) NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO canonical_role_definitions (
+    role_name,
+    inherits_role_name,
+    all_permissions,
+    bootstrap_managed,
+    description
+)
+SELECT
+    UPPER(TRIM(role_item ->> 'Name')),
+    NULLIF(UPPER(TRIM(role_item ->> 'Inherits')), ''),
+    COALESCE((role_item ->> 'AllPermissions')::boolean, false),
+    COALESCE((role_item ->> 'BootstrapManaged')::boolean, false),
+    role_item ->> 'Description'
+FROM canonical_rbac_config
+CROSS JOIN LATERAL jsonb_array_elements(payload -> 'Roles') AS role_item;
+
+CREATE TEMP TABLE canonical_managed_roles (
+    role_name VARCHAR(255) PRIMARY KEY
+) ON COMMIT DROP;
+
+INSERT INTO canonical_managed_roles (role_name)
+SELECT role_name
+FROM canonical_role_definitions;
+
+CREATE TEMP TABLE canonical_permission_catalog (
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    module_code VARCHAR(100) NOT NULL,
+    description VARCHAR(500) NOT NULL,
+    PRIMARY KEY (resource, action)
+) ON COMMIT DROP;
+
+INSERT INTO canonical_permission_catalog (resource, action, module_code, description)
+SELECT
+    LOWER(TRIM(permission_item ->> 'Resource')),
+    LOWER(TRIM(permission_item ->> 'Action')),
+    UPPER(TRIM(permission_item ->> 'Module')),
+    permission_item ->> 'Description'
+FROM canonical_rbac_config
+CROSS JOIN LATERAL jsonb_array_elements(payload -> 'Permissions') AS permission_item;
+
+CREATE TEMP TABLE canonical_direct_grants (
+    role_name VARCHAR(255) NOT NULL,
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    scope_type VARCHAR(20) NOT NULL,
+    PRIMARY KEY (role_name, resource, action)
+) ON COMMIT DROP;
+
+INSERT INTO canonical_direct_grants (role_name, resource, action, scope_type)
+SELECT
+    UPPER(TRIM(grant_item ->> 'Role')),
+    LOWER(TRIM(grant_item ->> 'Resource')),
+    LOWER(TRIM(grant_item ->> 'Action')),
+    UPPER(TRIM(grant_item ->> 'Scope'))
+FROM canonical_rbac_config
+CROSS JOIN LATERAL jsonb_array_elements(payload -> 'Grants') AS grant_item;
+
+CREATE TEMP TABLE canonical_admin_self_scopes (
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    PRIMARY KEY (resource, action)
+) ON COMMIT DROP;
+
+INSERT INTO canonical_admin_self_scopes (resource, action)
+SELECT
+    LOWER(TRIM(scope_item ->> 'Resource')),
+    LOWER(TRIM(scope_item ->> 'Action'))
+FROM canonical_rbac_config
+CROSS JOIN LATERAL jsonb_array_elements(payload -> 'AdminSelfScopes') AS scope_item;
+
+DO `$`$
+DECLARE
+    ambiguous_roles TEXT;
+    invalid_modules TEXT;
+    ambiguous_permissions TEXT;
+BEGIN
+    SELECT STRING_AGG(duplicate_role.role_name, ', ' ORDER BY duplicate_role.role_name)
+    INTO ambiguous_roles
+    FROM (
+        SELECT UPPER(TRIM(tenant_role.name)) AS role_name
+        FROM "$Schema".role AS tenant_role
+        JOIN canonical_managed_roles
+          ON canonical_managed_roles.role_name = UPPER(TRIM(tenant_role.name))
+        WHERE tenant_role.tenant_id = '$CanonicalTenantId'
+        GROUP BY UPPER(TRIM(tenant_role.name))
+        HAVING COUNT(*) > 1
+    ) AS duplicate_role;
+
+    IF ambiguous_roles IS NOT NULL THEN
+        RAISE EXCEPTION 'canonical seed found duplicate normalized canonical roles: %', ambiguous_roles;
+    END IF;
+
+    SELECT STRING_AGG(module_check.module_code, ', ' ORDER BY module_check.module_code)
+    INTO invalid_modules
+    FROM (
+        SELECT canonical_permission_catalog.module_code
+        FROM canonical_permission_catalog
+        LEFT JOIN kabipay_ops.module AS module
+          ON UPPER(TRIM(module.code)) = canonical_permission_catalog.module_code
+        GROUP BY canonical_permission_catalog.module_code
+        HAVING COUNT(module.id) <> 1
+    ) AS module_check;
+
+    IF invalid_modules IS NOT NULL THEN
+        RAISE EXCEPTION 'canonical seed requires exactly one module row for: %', invalid_modules;
+    END IF;
+
+    SELECT STRING_AGG(permission_check.permission_code, ', ' ORDER BY permission_check.permission_code)
+    INTO ambiguous_permissions
+    FROM (
+        SELECT
+            LOWER(TRIM(permission.resource)) || ':' || LOWER(TRIM(permission.action)) AS permission_code
+        FROM "$Schema".permission AS permission
+        GROUP BY LOWER(TRIM(permission.resource)), LOWER(TRIM(permission.action))
+        HAVING COUNT(*) > 1
+    ) AS permission_check;
+
+    IF ambiguous_permissions IS NOT NULL THEN
+        RAISE EXCEPTION 'canonical seed found ambiguous permission codes: %', ambiguous_permissions;
+    END IF;
+END `$`$;
+
+INSERT INTO "$Schema".role (
+    id,
+    tenant_id,
+    name,
+    description,
+    is_system_role,
+    is_deleted,
+    deleted_at,
+    deleted_by
+)
+SELECT
+    gen_random_uuid(),
+    '$CanonicalTenantId',
+    canonical_role_definitions.role_name,
+    canonical_role_definitions.description,
+    true,
+    false,
+    NULL,
+    NULL
+FROM canonical_role_definitions
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM "$Schema".role AS existing_role
+    WHERE existing_role.tenant_id = '$CanonicalTenantId'
+      AND UPPER(TRIM(existing_role.name)) = canonical_role_definitions.role_name
+);
+
+UPDATE "$Schema".role AS canonical_role
+SET name = canonical_role_definitions.role_name,
+    description = canonical_role_definitions.description,
+    is_system_role = true,
+    is_deleted = false,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW()
+FROM canonical_role_definitions
+WHERE canonical_role.tenant_id = '$CanonicalTenantId'
+  AND UPPER(TRIM(canonical_role.name)) = canonical_role_definitions.role_name;
+
+UPDATE "$Schema".permission AS permission
+SET resource = canonical_permission_catalog.resource,
+    action = canonical_permission_catalog.action,
+    module_id = module.id,
+    description = canonical_permission_catalog.description,
+    updated_at = NOW()
+FROM canonical_permission_catalog
+JOIN kabipay_ops.module AS module
+  ON UPPER(TRIM(module.code)) = canonical_permission_catalog.module_code
+WHERE LOWER(TRIM(permission.resource)) = canonical_permission_catalog.resource
+  AND LOWER(TRIM(permission.action)) = canonical_permission_catalog.action;
 
 INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermLeaveApproveId', 'leave', 'approve', '$ModuleLeaveId', 'Approve or reject leave requests')
-ON CONFLICT (id) DO NOTHING;
+SELECT
+    gen_random_uuid(),
+    canonical_permission_catalog.resource,
+    canonical_permission_catalog.action,
+    module.id,
+    canonical_permission_catalog.description
+FROM canonical_permission_catalog
+JOIN kabipay_ops.module AS module
+  ON UPPER(TRIM(module.code)) = canonical_permission_catalog.module_code
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM "$Schema".permission AS existing_permission
+    WHERE LOWER(TRIM(existing_permission.resource)) = canonical_permission_catalog.resource
+      AND LOWER(TRIM(existing_permission.action)) = canonical_permission_catalog.action
+)
+ON CONFLICT (resource, action, module_id) DO UPDATE
+SET description = EXCLUDED.description,
+    updated_at = NOW();
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermLeaveManageId', 'leave', 'manage', '$ModuleLeaveId', 'Configure leave types, policies, balances, and holiday calendars')
-ON CONFLICT (id) DO NOTHING;
+CREATE TEMP TABLE canonical_permission_matrix (
+    role_name VARCHAR(255) NOT NULL,
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    scope_type VARCHAR(20) NOT NULL,
+    PRIMARY KEY (role_name, resource, action)
+) ON COMMIT DROP;
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermExpenseApproveId', 'expense', 'approve', '$ModuleExpenseId', 'Approve or reject expense claims')
-ON CONFLICT (id) DO NOTHING;
+WITH grant_candidates(role_name, resource, action, scope_type, precedence) AS (
+    SELECT
+        canonical_direct_grants.role_name,
+        canonical_direct_grants.resource,
+        canonical_direct_grants.action,
+        canonical_direct_grants.scope_type,
+        2
+    FROM canonical_direct_grants
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermExpenseManageId', 'expense', 'manage', '$ModuleExpenseId', 'Configure expense categories and caps')
-ON CONFLICT (id) DO NOTHING;
+    UNION ALL
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermExpensePayId', 'expense', 'pay', '$ModuleExpenseId', 'Mark expense reimbursements as paid or update payment lifecycle')
-ON CONFLICT (id) DO NOTHING;
+    SELECT
+        canonical_role_definitions.role_name,
+        inherited_grant.resource,
+        inherited_grant.action,
+        inherited_grant.scope_type,
+        1
+    FROM canonical_role_definitions
+    JOIN canonical_direct_grants AS inherited_grant
+      ON inherited_grant.role_name = canonical_role_definitions.inherits_role_name
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermTaxProofApproveId', 'tax', 'approve', '$ModuleTaxId', 'Approve tax deduction proofs (declared vs actuals)')
-ON CONFLICT (id) DO NOTHING;
+    UNION ALL
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermPayrollStatutoryId', 'payroll', 'statutory_export', '$ModulePayrollId', 'Export statutory payroll reports (e.g. India TDS summary CSV)')
-ON CONFLICT (id) DO NOTHING;
+    SELECT
+        canonical_role_definitions.role_name,
+        LOWER(TRIM(permission.resource)),
+        LOWER(TRIM(permission.action)),
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM canonical_admin_self_scopes
+                WHERE (
+                    canonical_admin_self_scopes.resource = '*'
+                    AND canonical_admin_self_scopes.action = LOWER(TRIM(permission.action))
+                ) OR (
+                    canonical_admin_self_scopes.resource = LOWER(TRIM(permission.resource))
+                    AND canonical_admin_self_scopes.action = LOWER(TRIM(permission.action))
+                )
+            ) THEN 'SELF'
+            ELSE 'ALL'
+        END,
+        3
+    FROM canonical_role_definitions
+    CROSS JOIN "$Schema".permission AS permission
+    WHERE canonical_role_definitions.all_permissions = true
+),
+ranked_grants AS (
+    SELECT DISTINCT ON (
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action
+    )
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action,
+        grant_candidates.scope_type
+    FROM grant_candidates
+    JOIN canonical_managed_roles
+      ON canonical_managed_roles.role_name = grant_candidates.role_name
+    ORDER BY
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action,
+        grant_candidates.precedence DESC
+)
+INSERT INTO canonical_permission_matrix (role_name, resource, action, scope_type)
+SELECT
+    ranked_grants.role_name,
+    ranked_grants.resource,
+    ranked_grants.action,
+    ranked_grants.scope_type
+FROM ranked_grants
+JOIN "$Schema".permission AS permission
+  ON LOWER(TRIM(permission.resource)) = ranked_grants.resource
+ AND LOWER(TRIM(permission.action)) = ranked_grants.action;
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermAttendancePunchPolicyId', 'attendance', 'punch_policy', '$ModuleAttendanceId', 'Configure geofence / IP punch policy for the tenant')
-ON CONFLICT (id) DO NOTHING;
+DELETE FROM "$Schema".role_permission AS role_permission
+USING "$Schema".role AS canonical_role, canonical_managed_roles
+WHERE role_permission.role_id = canonical_role.id
+  AND canonical_role.tenant_id = '$CanonicalTenantId'
+  AND UPPER(TRIM(canonical_role.name)) = canonical_managed_roles.role_name;
 
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermWorkflowManageId', 'workflow', 'manage', '$ModuleWorkflowId', 'Create or edit workflow definitions and steps')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermRoleManageId', 'role', 'manage', '$ModuleEmployeeId', 'Assign tenant roles, permissions, and data scopes')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermBenefitsManageId', 'benefits', 'manage', '$ModuleEmployeeId', 'Configure benefit types/plans (HR)')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermBenefitsSelfId', 'benefits', 'self', '$ModuleEmployeeId', 'View offerings and enroll in benefits')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermRecruitmentManageId', 'recruitment', 'manage', '$ModuleRecruitId', 'Manage job postings and applications')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermOnboardingManageId', 'onboarding', 'manage', '$ModuleEmployeeId', 'Tenant-wide onboarding and offboarding console')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermOnboardingSelfId', 'onboarding', 'self', '$ModuleEmployeeId', 'Own onboarding checklist and separation filing')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermPerformanceManageId', 'performance', 'manage', '$ModuleEmployeeId', 'Performance cycles and goals administration')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermLearningManageId', 'learning', 'manage', '$ModuleEmployeeId', 'LMS skills and courses administration')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermAssetsManageId', 'assets', 'manage', '$ModuleEmployeeId', 'Asset categories and assignments')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermGrievanceManageId', 'grievance', 'manage', '$ModuleEmployeeId', 'Tenant-wide grievance cases')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermGrievanceSelfId', 'grievance', 'self', '$ModuleEmployeeId', 'File grievances and view own cases')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermSuccessionManageId', 'succession', 'manage', '$ModuleEmployeeId', 'Succession competencies and talent pools')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermCompensationManageId', 'compensation', 'manage', '$ModulePayrollId', 'Salary bands and compensation review cycles')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermAnalyticsReadId', 'analytics', 'read', '$ModuleEmployeeId', 'Insights dashboards, workforce snapshots, report catalog')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermAttendancePunchSelfId', 'attendance', 'punch_self', '$ModuleAttendanceId', 'Live punch in/out and own punch-day summary')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermAttendanceRegularizeId', 'attendance', 'regularize', '$ModuleAttendanceId', 'Manual attendance corrections beyond employee self-service window')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermTimesheetApproveId', 'timesheet', 'approve', '$ModuleAttendanceId', 'Approve or reject weekly timesheet submissions')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermTimesheetManageId', 'timesheet', 'manage', '$ModuleAttendanceId', 'Configure timesheet projects, tasks, and lock policy')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".permission (id, resource, action, module_id, description)
-VALUES ('$PermNotificationManageId', 'notification', 'manage', '$ModuleEmployeeId', 'Announcements, direct in-app notifications, and deletes')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermEmployeeWriteId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermLeaveApproveId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
+DELETE FROM "$Schema".permission_scope AS permission_scope
+USING "$Schema".role AS canonical_role, canonical_managed_roles
+WHERE permission_scope.role_id = canonical_role.id
+  AND canonical_role.tenant_id = '$CanonicalTenantId'
+  AND UPPER(TRIM(canonical_role.name)) = canonical_managed_roles.role_name;
 
 INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermExpenseApproveId')
+SELECT
+    canonical_role.id,
+    permission.id
+FROM canonical_permission_matrix
+JOIN "$Schema".role AS canonical_role
+  ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+ AND canonical_role.tenant_id = '$CanonicalTenantId'
+JOIN "$Schema".permission AS permission
+  ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+ AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermExpenseManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
+INSERT INTO "$Schema".permission_scope (
+    id,
+    tenant_id,
+    role_id,
+    resource,
+    action,
+    scope_type
+)
+SELECT
+    gen_random_uuid(),
+    '$CanonicalTenantId',
+    canonical_role.id,
+    canonical_permission_matrix.resource,
+    canonical_permission_matrix.action,
+    canonical_permission_matrix.scope_type
+FROM canonical_permission_matrix
+JOIN "$Schema".role AS canonical_role
+  ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+ AND canonical_role.tenant_id = '$CanonicalTenantId';
 
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermTaxProofApproveId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
+CREATE TEMP TABLE seeded_persona_assignments (
+    user_id UUID PRIMARY KEY,
+    role_name VARCHAR(255) NOT NULL
+) ON COMMIT DROP;
 
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermPayrollStatutoryId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
+WITH seeded_persona_roles(user_id, role_name) AS (
+    VALUES
+        ('$StaffUserId', 'EMPLOYEE'),
+        ('$ManagerUserId', 'MANAGER'),
+        ('$UserId', 'HR'),
+        ('$AccountingUserId', 'PAYROLL'),
+        ('$TenantAdminUserId', 'ADMIN')
+)
+INSERT INTO seeded_persona_assignments (user_id, role_name)
+SELECT user_id::uuid, role_name
+FROM seeded_persona_roles;
 
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermAttendancePunchPolicyId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermAttendancePunchSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermWorkflowManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermRoleManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermLeaveManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermBenefitsManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermRecruitmentManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermOnboardingManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermPerformanceManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermLearningManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermAssetsManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermGrievanceManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermSuccessionManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermCompensationManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermAnalyticsReadId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermTimesheetApproveId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermTimesheetManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermNotificationManageId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleHrAdminId', '$PermAttendanceRegularizeId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermTimesheetApproveId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermAttendanceRegularizeId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermLeaveApproveId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermExpenseApproveId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleAccountingApproverId', '$PermExpenseApproveId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleAccountingApproverId', '$PermExpensePayId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleAccountingApproverId', '$PermAttendancePunchSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermBenefitsSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermOnboardingSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermGrievanceSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermAnalyticsReadId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleLineManagerId', '$PermAttendancePunchSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleDemoStaffId', '$PermBenefitsSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleDemoStaffId', '$PermOnboardingSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleDemoStaffId', '$PermGrievanceSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-VALUES ('$RoleDemoStaffId', '$PermAttendancePunchSelfId')
-ON CONFLICT (role_id, permission_id) DO NOTHING;
+DELETE FROM "$Schema".user_role AS user_role
+USING seeded_persona_assignments, "$Schema".role AS canonical_role, canonical_role_definitions
+WHERE user_role.user_id = seeded_persona_assignments.user_id
+  AND canonical_role.id = user_role.role_id
+  AND canonical_role.tenant_id = '$CanonicalTenantId'
+  AND UPPER(TRIM(canonical_role.name)) = canonical_role_definitions.role_name
+  AND canonical_role_definitions.role_name <> seeded_persona_assignments.role_name;
 
 INSERT INTO "$Schema".user_role (user_id, role_id)
-VALUES ('$StaffUserId', '$RoleDemoStaffId')
+SELECT
+    seeded_persona_assignments.user_id,
+    canonical_role.id
+FROM seeded_persona_assignments
+JOIN "$Schema".role AS canonical_role
+  ON canonical_role.tenant_id = '$CanonicalTenantId'
+ AND UPPER(TRIM(canonical_role.name)) = seeded_persona_assignments.role_name
 ON CONFLICT (user_id, role_id) DO NOTHING;
 
-INSERT INTO "$Schema".user_role (user_id, role_id)
-VALUES ('$UserId', '$RoleHrAdminId')
-ON CONFLICT (user_id, role_id) DO NOTHING;
-
-INSERT INTO "$Schema".user_role (user_id, role_id)
-VALUES ('$ManagerUserId', '$RoleLineManagerId')
-ON CONFLICT (user_id, role_id) DO NOTHING;
-
-INSERT INTO "$Schema".user_role (user_id, role_id)
-VALUES ('$AccountingUserId', '$RoleAccountingApproverId')
-ON CONFLICT (user_id, role_id) DO NOTHING;
-
-INSERT INTO "$Schema".role_permission (role_id, permission_id)
-SELECT '$RoleTenantAdminId', rp.permission_id
-FROM "$Schema".role_permission rp
-WHERE rp.role_id = '$RoleHrAdminId'
-ON CONFLICT (role_id, permission_id) DO NOTHING;
-
-DELETE FROM "$Schema".role_permission rp
-USING "$Schema".role r
-WHERE rp.role_id = r.id
-  AND rp.permission_id = '$PermExpensePayId'
-  AND r.tenant_id = '$TenantId'
-  AND UPPER(TRIM(r.name)) IN ('HR_ADMIN', 'TENANT_ADMIN', 'ORG_ADMIN', 'LINE_MANAGER', 'MANAGER');
-
-INSERT INTO "$Schema".user_role (user_id, role_id)
-VALUES ('$TenantAdminUserId', '$RoleTenantAdminId')
-ON CONFLICT (user_id, role_id) DO NOTHING;
-
--- Workflow steps use `assert_user_has_role(HR_ADMIN)`; assign HR_ADMIN explicitly (not implied by TENANT_ADMIN alone).
-INSERT INTO "$Schema".user_role (user_id, role_id)
-VALUES ('$TenantAdminUserId', '$RoleHrAdminId')
-ON CONFLICT (user_id, role_id) DO NOTHING;
-
-INSERT INTO "$Schema".permission_scope (id, tenant_id, role_id, resource, action, scope_type)
-SELECT gen_random_uuid(), '$TenantId', '$RoleTenantAdminId', ps.resource, ps.action, ps.scope_type
-FROM "$Schema".permission_scope ps
-WHERE ps.tenant_id = '$TenantId' AND ps.role_id = '$RoleHrAdminId'
-ON CONFLICT (role_id, resource, action) DO NOTHING;
-
--- Gap H: data scope for list filters (employee / leave) — ALL for admin role
-INSERT INTO "$Schema".permission_scope (id, tenant_id, role_id, resource, action, scope_type)
-VALUES
-  ('$ScopeScopeEmployeeAllId', '$TenantId', '$RoleHrAdminId', 'employee', 'write', 'ALL'),
-  ('$ScopeScopeLeaveAllId',    '$TenantId', '$RoleHrAdminId', 'leave',   'approve', 'ALL'),
-  ('$ScopeScopeExpenseAllId',  '$TenantId', '$RoleHrAdminId', 'expense', 'approve', 'ALL'),
-  ('$ScopeScopeAttendanceAllId', '$TenantId', '$RoleHrAdminId', 'attendance', 'read', 'ALL'),
-  ('$ScopeAttendancePunchPolicyAllId', '$TenantId', '$RoleHrAdminId', 'attendance', 'punch_policy', 'ALL'),
-  ('$ScopeAttendanceRegularizeAllId', '$TenantId', '$RoleHrAdminId', 'attendance', 'regularize', 'ALL'),
-  ('$ScopeAttendanceRegularizeTeamLmId', '$TenantId', '$RoleLineManagerId', 'attendance', 'regularize', 'TEAM'),
-  ('$ScopeWorkflowManageAllId', '$TenantId', '$RoleHrAdminId', 'workflow', 'manage', 'ALL'),
-  ('$ScopeTimesheetApproveAllId', '$TenantId', '$RoleHrAdminId', 'timesheet', 'approve', 'ALL'),
-  ('$ScopeTimesheetApproveTeamLmId', '$TenantId', '$RoleLineManagerId', 'timesheet', 'approve', 'TEAM'),
-  ('$ScopeScopeLeaveTeamLmId', '$TenantId', '$RoleLineManagerId', 'leave', 'approve', 'TEAM'),
-  ('$ScopeScopeExpenseTeamLmId', '$TenantId', '$RoleLineManagerId', 'expense', 'approve', 'TEAM'),
-  ('$ScopeScopeExpenseAcctAllId', '$TenantId', '$RoleAccountingApproverId', 'expense', 'approve', 'ALL')
-ON CONFLICT (role_id, resource, action) DO NOTHING;
+COMMIT;
 "@
-Invoke-TenantSql -Label "0000 foundation (department, designation, user, employee)" -Sql $SqlFoundation
+Invoke-TenantSql -Label "0000 foundation (department, designation, user, employee, canonical RBAC)" -Sql $SqlFoundation -Raw
 
 # =====================================================================
 # 2. SHIFT / ATTENDANCE (0010)
@@ -1396,7 +1514,13 @@ INSERT INTO "$Schema".workflow_step (
     approver_type, approver_role_id, can_skip, sla_hours
 ) VALUES (
     '$WorkflowStep1Id', '$TenantId', '$WorkflowId', 1, 'Manager or HR approval',
-    'REPORTING_MANAGER_OR_ROLE', '$RoleHrAdminId', false, NULL
+    'REPORTING_MANAGER_OR_ROLE', (
+        SELECT canonical_role.id
+        FROM "$Schema".role AS canonical_role
+        WHERE canonical_role.tenant_id = '$TenantId'
+          AND UPPER(TRIM(canonical_role.name)) = 'HR'
+          AND canonical_role.is_deleted = false
+    ), false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
     sequence_order = EXCLUDED.sequence_order,
     step_name = EXCLUDED.step_name,
@@ -1438,7 +1562,13 @@ INSERT INTO "$Schema".workflow_step (
     approver_type, approver_role_id, can_skip, sla_hours
 ) VALUES (
     '$ExpenseWorkflowStep1Id', '$TenantId', '$ExpenseWorkflowId', 1, 'Manager or HR approval',
-    'REPORTING_MANAGER_OR_ROLE', '$RoleHrAdminId', false, NULL
+    'REPORTING_MANAGER_OR_ROLE', (
+        SELECT canonical_role.id
+        FROM "$Schema".role AS canonical_role
+        WHERE canonical_role.tenant_id = '$TenantId'
+          AND UPPER(TRIM(canonical_role.name)) = 'HR'
+          AND canonical_role.is_deleted = false
+    ), false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
     sequence_order = EXCLUDED.sequence_order,
     step_name = EXCLUDED.step_name,
@@ -1453,7 +1583,13 @@ INSERT INTO "$Schema".workflow_step (
     approver_type, approver_role_id, can_skip, sla_hours
 ) VALUES (
     '$ExpenseWorkflowStep2Id', '$TenantId', '$ExpenseWorkflowId', 2, 'Accounting verification',
-    'ROLE', '$RoleAccountingApproverId', false, NULL
+    'ROLE', (
+        SELECT canonical_role.id
+        FROM "$Schema".role AS canonical_role
+        WHERE canonical_role.tenant_id = '$TenantId'
+          AND UPPER(TRIM(canonical_role.name)) = 'PAYROLL'
+          AND canonical_role.is_deleted = false
+    ), false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
     sequence_order = EXCLUDED.sequence_order,
     step_name = EXCLUDED.step_name,
@@ -1486,7 +1622,13 @@ INSERT INTO "$Schema".workflow_step (
     approver_type, approver_role_id, can_skip, sla_hours
 ) VALUES (
     '$TravelWorkflowStep1Id', '$TenantId', '$TravelWorkflowId', 1, 'Reporting manager or HR',
-    'REPORTING_MANAGER_OR_ROLE', '$RoleHrAdminId', false, NULL
+    'REPORTING_MANAGER_OR_ROLE', (
+        SELECT canonical_role.id
+        FROM "$Schema".role AS canonical_role
+        WHERE canonical_role.tenant_id = '$TenantId'
+          AND UPPER(TRIM(canonical_role.name)) = 'HR'
+          AND canonical_role.is_deleted = false
+    ), false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
     sequence_order = EXCLUDED.sequence_order,
     step_name = EXCLUDED.step_name,
@@ -1501,7 +1643,13 @@ INSERT INTO "$Schema".workflow_step (
     approver_type, approver_role_id, can_skip, sla_hours
 ) VALUES (
     '$TravelWorkflowStep2Id', '$TenantId', '$TravelWorkflowId', 2, 'Accounting clearance',
-    'ROLE', '$RoleAccountingApproverId', false, NULL
+    'ROLE', (
+        SELECT canonical_role.id
+        FROM "$Schema".role AS canonical_role
+        WHERE canonical_role.tenant_id = '$TenantId'
+          AND UPPER(TRIM(canonical_role.name)) = 'PAYROLL'
+          AND canonical_role.is_deleted = false
+    ), false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
     sequence_order = EXCLUDED.sequence_order,
     step_name = EXCLUDED.step_name,
@@ -1536,7 +1684,13 @@ INSERT INTO "$Schema".workflow_step (
 ) VALUES (
     '$TimesheetWorkflowStep1Id', '$TenantId', '$TimesheetWorkflowId', 1,
     'Reporting manager or HR',
-    'REPORTING_MANAGER_OR_ROLE', '$RoleHrAdminId', false, NULL
+    'REPORTING_MANAGER_OR_ROLE', (
+        SELECT canonical_role.id
+        FROM "$Schema".role AS canonical_role
+        WHERE canonical_role.tenant_id = '$TenantId'
+          AND UPPER(TRIM(canonical_role.name)) = 'HR'
+          AND canonical_role.is_deleted = false
+    ), false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
     sequence_order = EXCLUDED.sequence_order,
     step_name = EXCLUDED.step_name,
@@ -1750,10 +1904,11 @@ Write-Host ""
 Write-Host "Seed complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "Demo tenant logins (password ChangeMe!123):" -ForegroundColor Yellow
-Write-Host '  demo@kabipay.local          - HR_ADMIN + employee (full HR + self-service + attendance:punch_self)'
-Write-Host '  tenant-admin@kabipay.local  - TENANT_ADMIN + HR_ADMIN row (workflow fallbacks + admin shell)'
-Write-Host '  manager@kabipay.local       - LINE_MANAGER (approvals + analytics:read + attendance:punch_self)'
-Write-Host '  staff@kabipay.local         - DEMO_STAFF (benefits:self, onboarding:self, grievance:self, attendance:punch_self)'
+Write-Host '  demo@kabipay.local          - HR (human resources + employee self-service)'
+Write-Host '  tenant-admin@kabipay.local  - ADMIN (tenant administration + employee self-service)'
+Write-Host '  manager@kabipay.local       - MANAGER (team approvals + employee self-service)'
+Write-Host '  staff@kabipay.local         - EMPLOYEE (employee self-service)'
+Write-Host '  accountant@kabipay.local    - PAYROLL (payroll, tax, and expense payment operations)'
 Write-Host ""
 Write-Host "Try the employee query once kabipay-employee is running:" -ForegroundColor Yellow
 Write-Host '  PowerShell:'

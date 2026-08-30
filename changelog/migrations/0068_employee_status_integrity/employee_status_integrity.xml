@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0068-001-employee-status-integrity" author="kabipay-dev">
+        <comment>Normalize known employee statuses and enforce the canonical employment-status domain.</comment>
+
+        <sql splitStatements="false"><![CDATA[
+DO $$
+DECLARE
+    invalid_statuses TEXT;
+BEGIN
+    SELECT string_agg(quote_literal(invalid_status.status), ', ' ORDER BY invalid_status.status)
+      INTO invalid_statuses
+      FROM (
+          SELECT DISTINCT status
+            FROM "${schema}".employee
+           WHERE UPPER(BTRIM(status)) NOT IN (
+               'ACTIVE',
+               'PROBATION',
+               'INACTIVE',
+               'ON_LEAVE',
+               'SUSPENDED',
+               'TERMINATED'
+           )
+      ) AS invalid_status;
+
+    IF invalid_statuses IS NOT NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '23514',
+            MESSAGE = format(
+                'unknown employee status values in schema %s: %s. Allowed statuses: ACTIVE, PROBATION, INACTIVE, ON_LEAVE, SUSPENDED, TERMINATED',
+                '${schema}',
+                invalid_statuses
+            );
+    END IF;
+END $$;
+        ]]></sql>
+
+        <sql><![CDATA[
+UPDATE "${schema}".employee
+   SET status = UPPER(BTRIM(status))
+ WHERE UPPER(BTRIM(status)) IN (
+           'ACTIVE',
+           'PROBATION',
+           'INACTIVE',
+           'ON_LEAVE',
+           'SUSPENDED',
+           'TERMINATED'
+       )
+   AND status <> UPPER(BTRIM(status));
+        ]]></sql>
+
+        <sql><![CDATA[
+ALTER TABLE "${schema}".employee
+    ADD CONSTRAINT ck_employee_status_canonical
+    CHECK (status IN (
+        'ACTIVE',
+        'PROBATION',
+        'INACTIVE',
+        'ON_LEAVE',
+        'SUSPENDED',
+        'TERMINATED'
+    ));
+        ]]></sql>
+
+        <rollback>
+            <sql><![CDATA[
+ALTER TABLE "${schema}".employee
+    DROP CONSTRAINT IF EXISTS ck_employee_status_canonical;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

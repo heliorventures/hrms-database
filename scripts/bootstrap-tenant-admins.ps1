@@ -12,10 +12,10 @@
       - TemporaryPassword: bootstrap password. Existing users are not reset on re-run.
 
     The script creates:
-      - HR_ADMIN and TENANT_ADMIN roles when missing.
-      - EMPLOYEE core module/subscription when missing.
-      - Admin permission catalog rows and role_permission links.
-      - ALL permission_scope rows required for HR/admin list visibility.
+      - Canonical HR and ADMIN roles when missing.
+      - An active EMPLOYEE core subscription.
+      - Canonical permission catalog rows, role grants, and explicit scopes.
+      - Exact HR and ADMIN authorization matrices matching migration 0067.
       - One active linked employee row per new admin user.
 
     Requires:
@@ -106,6 +106,139 @@ if ([string]::IsNullOrWhiteSpace($PasswordHash)) {
     $PasswordHash = '$argon2id$v=19$m=19456,t=2,p=1$CDQNnKaKe519h5WXXU1DaA$IiZxOr7AvMrrMg0U2q2L1bD5CsBxDVWCHY42+CnLTXw'
 }
 
+# One evaluated model owns the canonical role catalogue, permission catalogue,
+# direct grants, inheritance, and explicit scope rules used by every RBAC write.
+$CanonicalRbac = [pscustomobject]@{
+    Roles = @(
+        [pscustomobject]@{ Name = 'EMPLOYEE'; Inherits = ''; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical employee self-service role' }
+        [pscustomobject]@{ Name = 'MANAGER'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical people manager role' }
+        [pscustomobject]@{ Name = 'HR'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $true; Description = 'Canonical human resources role' }
+        [pscustomobject]@{ Name = 'PAYROLL'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical payroll and finance role' }
+        [pscustomobject]@{ Name = 'ADMIN'; Inherits = ''; AllPermissions = $true; BootstrapManaged = $true; Description = 'Canonical tenant administrator role' }
+    )
+    Permissions = @(
+        [pscustomobject]@{ Resource = 'employee'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own employee profile' }
+        [pscustomobject]@{ Resource = 'employee'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read employee records' }
+        [pscustomobject]@{ Resource = 'employee'; Action = 'write'; Module = 'EMPLOYEE'; Description = 'Create and update employee records' }
+        [pscustomobject]@{ Resource = 'employee'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage employee lifecycle' }
+        [pscustomobject]@{ Resource = 'notification'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read own notifications' }
+        [pscustomobject]@{ Resource = 'notification'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage tenant communications' }
+        [pscustomobject]@{ Resource = 'role'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage tenant role assignments' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'read'; Module = 'ATTENDANCE'; Description = 'Read attendance records' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'punch_self'; Module = 'ATTENDANCE'; Description = 'Record own attendance punches' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'regularize'; Module = 'ATTENDANCE'; Description = 'Regularize attendance records' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'punch_policy'; Module = 'ATTENDANCE'; Description = 'Manage attendance punch policy' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'read'; Module = 'ATTENDANCE'; Description = 'Read timesheets' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'write'; Module = 'ATTENDANCE'; Description = 'Write own timesheets' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'approve'; Module = 'ATTENDANCE'; Description = 'Approve timesheets' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'manage'; Module = 'ATTENDANCE'; Description = 'Manage timesheet configuration' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'read'; Module = 'LEAVE'; Description = 'Read leave records' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'submit'; Module = 'LEAVE'; Description = 'Submit own leave requests' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'approve'; Module = 'LEAVE'; Description = 'Approve leave requests' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'manage'; Module = 'LEAVE'; Description = 'Manage leave configuration' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'read'; Module = 'EXPENSE'; Description = 'Read expense claims' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'submit'; Module = 'EXPENSE'; Description = 'Submit own expense claims' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'approve'; Module = 'EXPENSE'; Description = 'Approve expense claims' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'manage'; Module = 'EXPENSE'; Description = 'Manage expense configuration' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'pay'; Module = 'EXPENSE'; Description = 'Manage expense payment lifecycle' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'read'; Module = 'EXPENSE'; Description = 'Read travel requests' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'submit'; Module = 'EXPENSE'; Description = 'Submit own travel requests' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'approve'; Module = 'EXPENSE'; Description = 'Approve travel requests' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'manage'; Module = 'EXPENSE'; Description = 'Manage travel configuration' }
+        [pscustomobject]@{ Resource = 'payroll'; Action = 'read'; Module = 'PAYROLL'; Description = 'Read payroll records' }
+        [pscustomobject]@{ Resource = 'payroll'; Action = 'manage'; Module = 'PAYROLL'; Description = 'Manage payroll processing' }
+        [pscustomobject]@{ Resource = 'payroll'; Action = 'statutory_export'; Module = 'PAYROLL'; Description = 'Export statutory payroll reports' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'read'; Module = 'TAX'; Description = 'Read tax records' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'submit'; Module = 'TAX'; Description = 'Submit own tax declarations' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'approve'; Module = 'TAX'; Description = 'Approve tax declarations' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'manage'; Module = 'TAX'; Description = 'Manage tax configuration' }
+        [pscustomobject]@{ Resource = 'workflow'; Action = 'manage'; Module = 'WORKFLOW'; Description = 'Manage approval workflows' }
+    )
+    Grants = @(
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'employee'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'attendance'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'attendance'; Action = 'punch_self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'timesheet'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'timesheet'; Action = 'write'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'leave'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'leave'; Action = 'submit'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'expense'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'expense'; Action = 'submit'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'travel'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'travel'; Action = 'submit'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'payroll'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'tax'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'tax'; Action = 'submit'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'notification'; Action = 'read'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'benefits'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'onboarding'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'grievance'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'assets'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'employee'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'attendance'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'attendance'; Action = 'regularize'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'timesheet'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'timesheet'; Action = 'approve'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'leave'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'leave'; Action = 'approve'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'expense'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'expense'; Action = 'approve'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'travel'; Action = 'read'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'MANAGER'; Resource = 'travel'; Action = 'approve'; Scope = 'TEAM' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'employee'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'employee'; Action = 'write'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'employee'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'attendance'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'attendance'; Action = 'regularize'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'attendance'; Action = 'punch_policy'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'timesheet'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'timesheet'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'timesheet'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'leave'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'leave'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'leave'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'workflow'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'notification'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'benefits'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'recruitment'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'onboarding'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'performance'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'learning'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'assets'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'grievance'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'succession'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'compensation'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'analytics'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'statutory_export'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'pay'; Scope = 'ALL' }
+    )
+    AdminSelfScopes = @(
+        [pscustomobject]@{ Resource = '*'; Action = 'self' }
+        [pscustomobject]@{ Resource = 'attendance'; Action = 'punch_self' }
+        [pscustomobject]@{ Resource = 'timesheet'; Action = 'write' }
+        [pscustomobject]@{ Resource = 'leave'; Action = 'submit' }
+        [pscustomobject]@{ Resource = 'expense'; Action = 'submit' }
+        [pscustomobject]@{ Resource = 'travel'; Action = 'submit' }
+        [pscustomobject]@{ Resource = 'tax'; Action = 'submit' }
+        [pscustomobject]@{ Resource = 'notification'; Action = 'read' }
+    )
+}
+$CanonicalRbacJson = $CanonicalRbac | ConvertTo-Json -Depth 8 -Compress
+$CanonicalRbacJsonSql = $CanonicalRbacJson.Replace("'", "''")
+
 $normalizedTenantCode = $TenantCode.Trim().ToLowerInvariant()
 $prefix = (($normalizedTenantCode -replace '[^a-z0-9]', '').ToUpperInvariant())
 if ($prefix.Length -gt 3) { $prefix = $prefix.Substring(0, 3) }
@@ -138,12 +271,127 @@ if ($admins.Count -eq 0) {
     throw 'At least one non-empty admin username is required.'
 }
 
-$adminsJson = ($admins | ConvertTo-Json -Compress)
+$adminsJson = ConvertTo-Json -InputObject ([object[]]$admins) -Compress
 $adminsJsonSql = $adminsJson.Replace("'", "''")
 $tenantCodeSql = $normalizedTenantCode.Replace("'", "''")
 $passwordHashSql = $PasswordHash.Replace("'", "''")
 
 $sql = @"
+BEGIN;
+
+CREATE TEMP TABLE canonical_rbac_config (
+    payload JSONB NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO canonical_rbac_config (payload)
+VALUES ('$CanonicalRbacJsonSql'::jsonb);
+
+CREATE TEMP TABLE canonical_role_definitions (
+    role_name VARCHAR(255) PRIMARY KEY,
+    inherits_role_name VARCHAR(255),
+    all_permissions BOOLEAN NOT NULL,
+    bootstrap_managed BOOLEAN NOT NULL,
+    description VARCHAR(500) NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO canonical_role_definitions (
+    role_name,
+    inherits_role_name,
+    all_permissions,
+    bootstrap_managed,
+    description
+)
+SELECT
+    UPPER(TRIM(role_item ->> 'Name')),
+    NULLIF(UPPER(TRIM(role_item ->> 'Inherits')), ''),
+    COALESCE((role_item ->> 'AllPermissions')::boolean, false),
+    COALESCE((role_item ->> 'BootstrapManaged')::boolean, false),
+    role_item ->> 'Description'
+FROM canonical_rbac_config
+CROSS JOIN LATERAL jsonb_array_elements(payload -> 'Roles') AS role_item;
+
+CREATE TEMP TABLE canonical_managed_roles (
+    role_name VARCHAR(255) PRIMARY KEY
+) ON COMMIT DROP;
+
+INSERT INTO canonical_managed_roles (role_name)
+SELECT role_name
+FROM canonical_role_definitions
+WHERE bootstrap_managed = true;
+
+CREATE TEMP TABLE canonical_permission_catalog (
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    module_code VARCHAR(100) NOT NULL,
+    description VARCHAR(500) NOT NULL,
+    PRIMARY KEY (resource, action)
+) ON COMMIT DROP;
+
+INSERT INTO canonical_permission_catalog (resource, action, module_code, description)
+SELECT
+    LOWER(TRIM(permission_item ->> 'Resource')),
+    LOWER(TRIM(permission_item ->> 'Action')),
+    UPPER(TRIM(permission_item ->> 'Module')),
+    permission_item ->> 'Description'
+FROM canonical_rbac_config
+CROSS JOIN LATERAL jsonb_array_elements(payload -> 'Permissions') AS permission_item;
+
+CREATE TEMP TABLE canonical_direct_grants (
+    role_name VARCHAR(255) NOT NULL,
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    scope_type VARCHAR(20) NOT NULL,
+    PRIMARY KEY (role_name, resource, action)
+) ON COMMIT DROP;
+
+INSERT INTO canonical_direct_grants (role_name, resource, action, scope_type)
+SELECT
+    UPPER(TRIM(grant_item ->> 'Role')),
+    LOWER(TRIM(grant_item ->> 'Resource')),
+    LOWER(TRIM(grant_item ->> 'Action')),
+    UPPER(TRIM(grant_item ->> 'Scope'))
+FROM canonical_rbac_config
+CROSS JOIN LATERAL jsonb_array_elements(payload -> 'Grants') AS grant_item;
+
+CREATE TEMP TABLE canonical_admin_self_scopes (
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    PRIMARY KEY (resource, action)
+) ON COMMIT DROP;
+
+INSERT INTO canonical_admin_self_scopes (resource, action)
+SELECT
+    LOWER(TRIM(scope_item ->> 'Resource')),
+    LOWER(TRIM(scope_item ->> 'Action'))
+FROM canonical_rbac_config
+CROSS JOIN LATERAL jsonb_array_elements(payload -> 'AdminSelfScopes') AS scope_item;
+
+CREATE TEMP TABLE canonical_managed_role_ids (
+    role_name VARCHAR(255) PRIMARY KEY,
+    role_id UUID NOT NULL
+) ON COMMIT DROP;
+
+CREATE TEMP TABLE canonical_bootstrap_admin_role (
+    role_name VARCHAR(255) PRIMARY KEY
+) ON COMMIT DROP;
+
+WITH bootstrap_admin_role(role_name) AS (
+    VALUES ('ADMIN')
+)
+INSERT INTO canonical_bootstrap_admin_role (role_name)
+SELECT bootstrap_admin_role.role_name
+FROM bootstrap_admin_role
+JOIN canonical_managed_roles
+  ON canonical_managed_roles.role_name = bootstrap_admin_role.role_name;
+
+CREATE TEMP TABLE canonical_permission_matrix (
+    role_name VARCHAR(255) NOT NULL,
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    scope_type VARCHAR(20) NOT NULL,
+    PRIMARY KEY (role_name, resource, action)
+) ON COMMIT DROP;
+
 DO `$`$
 DECLARE
     v_tenant_slug text := '$tenantCodeSql';
@@ -151,75 +399,290 @@ DECLARE
     v_admins jsonb := '$adminsJsonSql'::jsonb;
     v_tenant_id uuid;
     v_schema text;
-    v_role_tenant_admin uuid;
-    v_role_hr_admin uuid;
     v_module_employee_id uuid;
     v_user_id uuid;
     v_employee_id uuid;
-    v_role_id uuid;
     v_admin record;
+    v_ambiguous_roles text;
+    v_invalid_modules text;
+    v_ambiguous_permissions text;
 BEGIN
-    SELECT t.id, td.schema_name
+    SELECT tenant.id, tenant_database.schema_name
       INTO v_tenant_id, v_schema
-      FROM kabipay_ops.tenant t
-      JOIN kabipay_ops.tenant_database td ON td.tenant_id = t.id
-     WHERE t.subdomain = v_tenant_slug
-       AND t.status = 'ACTIVE'
-       AND td.is_active = true
+      FROM kabipay_ops.tenant AS tenant
+      JOIN kabipay_ops.tenant_database AS tenant_database
+        ON tenant_database.tenant_id = tenant.id
+     WHERE tenant.subdomain = v_tenant_slug
+       AND tenant.status = 'ACTIVE'
+       AND tenant_database.is_active = true
      LIMIT 1;
 
     IF v_tenant_id IS NULL OR v_schema IS NULL THEN
         RAISE EXCEPTION 'Active tenant/database mapping not found for %', v_tenant_slug;
     END IF;
 
-    EXECUTE format('SELECT id FROM %I.role WHERE tenant_id = `$1 AND name = `$2 AND is_deleted = false', v_schema)
-       INTO v_role_tenant_admin
-      USING v_tenant_id, 'TENANT_ADMIN';
+    EXECUTE format(
+        'SELECT STRING_AGG(duplicate_role.role_name, '', '' ORDER BY duplicate_role.role_name)
+           FROM (
+               SELECT UPPER(TRIM(tenant_role.name)) AS role_name
+                 FROM %I.role AS tenant_role
+                 JOIN canonical_managed_roles
+                   ON canonical_managed_roles.role_name = UPPER(TRIM(tenant_role.name))
+                WHERE tenant_role.tenant_id = `$1
+                GROUP BY UPPER(TRIM(tenant_role.name))
+               HAVING COUNT(*) > 1
+           ) AS duplicate_role',
+        v_schema
+    )
+    INTO v_ambiguous_roles
+    USING v_tenant_id;
 
-    IF v_role_tenant_admin IS NULL THEN
-        v_role_tenant_admin := gen_random_uuid();
-        EXECUTE format(
-            'INSERT INTO %I.role (id, tenant_id, name, description, is_system_role, is_deleted)
-             VALUES (`$1, `$2, `$3, `$4, true, false)',
-            v_schema
-        )
-        USING v_role_tenant_admin, v_tenant_id, 'TENANT_ADMIN', 'Tenant administrator - admin shell and HR configuration';
+    IF v_ambiguous_roles IS NOT NULL THEN
+        RAISE EXCEPTION 'canonical bootstrap found duplicate normalized managed roles: %', v_ambiguous_roles;
     END IF;
 
-    EXECUTE format('SELECT id FROM %I.role WHERE tenant_id = `$1 AND name = `$2 AND is_deleted = false', v_schema)
-       INTO v_role_hr_admin
-      USING v_tenant_id, 'HR_ADMIN';
+    SELECT STRING_AGG(module_check.module_code, ', ' ORDER BY module_check.module_code)
+      INTO v_invalid_modules
+      FROM (
+          SELECT canonical_permission_catalog.module_code
+            FROM canonical_permission_catalog
+            LEFT JOIN kabipay_ops.module AS module
+              ON UPPER(TRIM(module.code)) = canonical_permission_catalog.module_code
+           GROUP BY canonical_permission_catalog.module_code
+          HAVING COUNT(module.id) <> 1
+      ) AS module_check;
 
-    IF v_role_hr_admin IS NULL THEN
-        v_role_hr_admin := gen_random_uuid();
-        EXECUTE format(
-            'INSERT INTO %I.role (id, tenant_id, name, description, is_system_role, is_deleted)
-             VALUES (`$1, `$2, `$3, `$4, true, false)',
-            v_schema
-        )
-        USING v_role_hr_admin, v_tenant_id, 'HR_ADMIN', 'Employee directory and HR operations administrator';
+    IF v_invalid_modules IS NOT NULL THEN
+        RAISE EXCEPTION 'canonical bootstrap requires exactly one module row for: %', v_invalid_modules;
     END IF;
 
-    SELECT id
+    EXECUTE format(
+        'SELECT STRING_AGG(permission_check.permission_code, '', '' ORDER BY permission_check.permission_code)
+           FROM (
+               SELECT LOWER(TRIM(permission.resource)) || '':'' || LOWER(TRIM(permission.action)) AS permission_code
+                 FROM %I.permission AS permission
+                GROUP BY LOWER(TRIM(permission.resource)), LOWER(TRIM(permission.action))
+               HAVING COUNT(*) > 1
+           ) AS permission_check',
+        v_schema
+    )
+    INTO v_ambiguous_permissions;
+
+    IF v_ambiguous_permissions IS NOT NULL THEN
+        RAISE EXCEPTION 'canonical bootstrap found ambiguous permission codes: %', v_ambiguous_permissions;
+    END IF;
+
+    EXECUTE format(
+        'INSERT INTO %I.role (
+             id, tenant_id, name, description, is_system_role, is_deleted, deleted_at, deleted_by
+         )
+         SELECT gen_random_uuid(), `$1, role_definition.role_name, role_definition.description,
+                true, false, NULL, NULL
+           FROM canonical_role_definitions AS role_definition
+           JOIN canonical_managed_roles
+             ON canonical_managed_roles.role_name = role_definition.role_name
+          WHERE NOT EXISTS (
+              SELECT 1
+                FROM %I.role AS existing_role
+               WHERE existing_role.tenant_id = `$1
+                 AND UPPER(TRIM(existing_role.name)) = role_definition.role_name
+          )',
+        v_schema,
+        v_schema
+    )
+    USING v_tenant_id;
+
+    EXECUTE format(
+        'UPDATE %I.role AS canonical_role
+            SET name = role_definition.role_name,
+                description = role_definition.description,
+                is_system_role = true,
+                is_deleted = false,
+                deleted_at = NULL,
+                deleted_by = NULL,
+                updated_at = NOW()
+           FROM canonical_role_definitions AS role_definition
+           JOIN canonical_managed_roles
+             ON canonical_managed_roles.role_name = role_definition.role_name
+          WHERE canonical_role.tenant_id = `$1
+            AND UPPER(TRIM(canonical_role.name)) = role_definition.role_name',
+        v_schema
+    )
+    USING v_tenant_id;
+
+    EXECUTE format(
+        'INSERT INTO canonical_managed_role_ids (role_name, role_id)
+         SELECT canonical_managed_roles.role_name, canonical_role.id
+           FROM canonical_managed_roles
+           JOIN %I.role AS canonical_role
+             ON UPPER(TRIM(canonical_role.name)) = canonical_managed_roles.role_name
+            AND canonical_role.tenant_id = `$1',
+        v_schema
+    )
+    USING v_tenant_id;
+
+    EXECUTE format(
+        'UPDATE %I.permission AS permission
+            SET resource = canonical_permission_catalog.resource,
+                action = canonical_permission_catalog.action,
+                module_id = module.id,
+                description = canonical_permission_catalog.description,
+                updated_at = NOW()
+           FROM canonical_permission_catalog
+           JOIN kabipay_ops.module AS module
+             ON UPPER(TRIM(module.code)) = canonical_permission_catalog.module_code
+          WHERE LOWER(TRIM(permission.resource)) = canonical_permission_catalog.resource
+            AND LOWER(TRIM(permission.action)) = canonical_permission_catalog.action',
+        v_schema
+    );
+
+    EXECUTE format(
+        'INSERT INTO %I.permission (id, resource, action, module_id, description)
+         SELECT gen_random_uuid(),
+                canonical_permission_catalog.resource,
+                canonical_permission_catalog.action,
+                module.id,
+                canonical_permission_catalog.description
+           FROM canonical_permission_catalog
+           JOIN kabipay_ops.module AS module
+             ON UPPER(TRIM(module.code)) = canonical_permission_catalog.module_code
+          WHERE NOT EXISTS (
+              SELECT 1
+                FROM %I.permission AS existing_permission
+               WHERE LOWER(TRIM(existing_permission.resource)) = canonical_permission_catalog.resource
+                 AND LOWER(TRIM(existing_permission.action)) = canonical_permission_catalog.action
+          )
+         ON CONFLICT (resource, action, module_id) DO UPDATE
+             SET description = EXCLUDED.description,
+                 updated_at = NOW()',
+        v_schema,
+        v_schema
+    );
+
+    EXECUTE format(
+        'WITH grant_candidates(role_name, resource, action, scope_type, precedence) AS (
+             SELECT canonical_direct_grants.role_name,
+                    canonical_direct_grants.resource,
+                    canonical_direct_grants.action,
+                    canonical_direct_grants.scope_type,
+                    2
+               FROM canonical_direct_grants
+
+             UNION ALL
+
+             SELECT canonical_role_definitions.role_name,
+                    inherited_grant.resource,
+                    inherited_grant.action,
+                    inherited_grant.scope_type,
+                    1
+               FROM canonical_role_definitions
+               JOIN canonical_direct_grants AS inherited_grant
+                 ON inherited_grant.role_name = canonical_role_definitions.inherits_role_name
+
+             UNION ALL
+
+             SELECT canonical_role_definitions.role_name,
+                    LOWER(TRIM(permission.resource)),
+                    LOWER(TRIM(permission.action)),
+                    CASE
+                        WHEN EXISTS (
+                            SELECT 1
+                              FROM canonical_admin_self_scopes
+                             WHERE (
+                                 canonical_admin_self_scopes.resource = ''*''
+                                 AND canonical_admin_self_scopes.action = LOWER(TRIM(permission.action))
+                             ) OR (
+                                 canonical_admin_self_scopes.resource = LOWER(TRIM(permission.resource))
+                                 AND canonical_admin_self_scopes.action = LOWER(TRIM(permission.action))
+                             )
+                        ) THEN ''SELF''
+                        ELSE ''ALL''
+                    END,
+                    3
+               FROM canonical_role_definitions
+               CROSS JOIN %I.permission AS permission
+              WHERE canonical_role_definitions.all_permissions = true
+         ),
+         ranked_grants AS (
+             SELECT DISTINCT ON (
+                 grant_candidates.role_name,
+                 grant_candidates.resource,
+                 grant_candidates.action
+             )
+                 grant_candidates.role_name,
+                 grant_candidates.resource,
+                 grant_candidates.action,
+                 grant_candidates.scope_type
+               FROM grant_candidates
+               JOIN canonical_managed_roles
+                 ON canonical_managed_roles.role_name = grant_candidates.role_name
+              ORDER BY grant_candidates.role_name,
+                       grant_candidates.resource,
+                       grant_candidates.action,
+                       grant_candidates.precedence DESC
+         )
+         INSERT INTO canonical_permission_matrix (role_name, resource, action, scope_type)
+         SELECT ranked_grants.role_name,
+                ranked_grants.resource,
+                ranked_grants.action,
+                ranked_grants.scope_type
+           FROM ranked_grants
+           JOIN %I.permission AS permission
+             ON LOWER(TRIM(permission.resource)) = ranked_grants.resource
+            AND LOWER(TRIM(permission.action)) = ranked_grants.action',
+        v_schema,
+        v_schema
+    );
+
+    EXECUTE format(
+        'DELETE FROM %I.role_permission AS role_permission
+          USING canonical_managed_role_ids
+          WHERE role_permission.role_id = canonical_managed_role_ids.role_id',
+        v_schema
+    );
+
+    EXECUTE format(
+        'DELETE FROM %I.permission_scope AS permission_scope
+          USING canonical_managed_role_ids
+          WHERE permission_scope.role_id = canonical_managed_role_ids.role_id',
+        v_schema
+    );
+
+    EXECUTE format(
+        'INSERT INTO %I.role_permission (role_id, permission_id)
+         SELECT canonical_managed_role_ids.role_id, permission.id
+           FROM canonical_permission_matrix
+           JOIN canonical_managed_role_ids
+             ON canonical_managed_role_ids.role_name = canonical_permission_matrix.role_name
+           JOIN %I.permission AS permission
+             ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+            AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action
+         ON CONFLICT (role_id, permission_id) DO NOTHING',
+        v_schema,
+        v_schema
+    );
+
+    EXECUTE format(
+        'INSERT INTO %I.permission_scope (
+             id, tenant_id, role_id, resource, action, scope_type
+         )
+         SELECT gen_random_uuid(),
+                `$1,
+                canonical_managed_role_ids.role_id,
+                canonical_permission_matrix.resource,
+                canonical_permission_matrix.action,
+                canonical_permission_matrix.scope_type
+           FROM canonical_permission_matrix
+           JOIN canonical_managed_role_ids
+             ON canonical_managed_role_ids.role_name = canonical_permission_matrix.role_name',
+        v_schema
+    )
+    USING v_tenant_id;
+
+    SELECT module.id
       INTO v_module_employee_id
-      FROM kabipay_ops.module
-     WHERE code = 'EMPLOYEE'
-     LIMIT 1;
-
-    IF v_module_employee_id IS NULL THEN
-        v_module_employee_id := gen_random_uuid();
-        INSERT INTO kabipay_ops.module (id, code, name, category, description, is_active, display_order, is_core)
-        VALUES (
-            v_module_employee_id,
-            'EMPLOYEE',
-            'Employee Core',
-            'CORE',
-            'Master employee records and HR administration.',
-            true,
-            10,
-            true
-        );
-    END IF;
+      FROM kabipay_ops.module AS module
+     WHERE UPPER(TRIM(module.code)) = 'EMPLOYEE';
 
     INSERT INTO kabipay_ops.tenant_subscription (
         id, tenant_id, module_id, status, activated_at,
@@ -235,77 +698,6 @@ BEGIN
            deleted_at = NULL,
            deleted_by = NULL,
            updated_at = NOW();
-
-    EXECUTE format(
-        'WITH permission_seed(resource, action, description) AS (
-             VALUES
-               (''analytics'', ''read'', ''Insights dashboards and report catalog''),
-               (''assets'', ''manage'', ''Asset categories and assignments''),
-               (''attendance'', ''punch_policy'', ''Attendance punch policy configuration''),
-               (''attendance'', ''regularize'', ''Manual attendance corrections''),
-               (''benefits'', ''manage'', ''Benefit plan administration''),
-               (''compensation'', ''manage'', ''Compensation administration''),
-               (''employee'', ''write'', ''Create and update employee records''),
-               (''expense'', ''approve'', ''Approve or reject expense claims''),
-               (''expense'', ''manage'', ''Configure expense categories and policies''),
-               (''expense'', ''pay'', ''Mark reimbursements as paid''),
-               (''grievance'', ''manage'', ''Tenant-wide grievance administration''),
-               (''leave'', ''approve'', ''Approve or reject leave requests''),
-               (''leave'', ''manage'', ''Configure leave settings''),
-               (''learning'', ''manage'', ''Learning administration''),
-               (''notification'', ''manage'', ''Announcements and direct notifications''),
-               (''onboarding'', ''manage'', ''Onboarding and offboarding administration''),
-               (''payroll'', ''statutory_export'', ''Payroll statutory exports''),
-               (''performance'', ''manage'', ''Performance administration''),
-               (''recruitment'', ''manage'', ''Recruitment administration''),
-               (''role'', ''manage'', ''Assign tenant roles, permissions, and scopes''),
-               (''succession'', ''manage'', ''Succession planning administration''),
-               (''tax'', ''approve'', ''Tax proof approval''),
-               (''timesheet'', ''approve'', ''Approve weekly timesheets''),
-               (''timesheet'', ''manage'', ''Timesheet configuration''),
-               (''workflow'', ''manage'', ''Workflow administration'')
-         )
-         INSERT INTO %I.permission (id, resource, action, module_id, description)
-         SELECT gen_random_uuid(), resource, action, `$1, description
-           FROM permission_seed
-         ON CONFLICT (resource, action, module_id) DO UPDATE
-            SET description = EXCLUDED.description',
-        v_schema
-    )
-    USING v_module_employee_id;
-
-    FOREACH v_role_id IN ARRAY ARRAY[v_role_tenant_admin, v_role_hr_admin]
-    LOOP
-        EXECUTE format(
-            'INSERT INTO %I.role_permission (role_id, permission_id)
-             SELECT `$1, p.id
-               FROM %I.permission p
-              WHERE p.module_id = `$2
-             ON CONFLICT (role_id, permission_id) DO NOTHING',
-            v_schema,
-            v_schema
-        )
-        USING v_role_id, v_module_employee_id;
-
-        EXECUTE format(
-            'INSERT INTO %I.permission_scope (id, tenant_id, role_id, resource, action, scope_type)
-             SELECT gen_random_uuid(), `$1, `$2, seed.resource, seed.action, ''ALL''
-               FROM (
-                 VALUES
-                   (''employee'', ''write''),
-                   (''leave'', ''approve''),
-                   (''expense'', ''approve''),
-                   (''attendance'', ''read''),
-                   (''workflow'', ''manage''),
-                   (''timesheet'', ''approve''),
-                   (''role'', ''manage'')
-               ) AS seed(resource, action)
-             ON CONFLICT (role_id, resource, action) DO UPDATE
-                SET scope_type = EXCLUDED.scope_type',
-            v_schema
-        )
-        USING v_tenant_id, v_role_id;
-    END LOOP;
 
     FOR v_admin IN
         SELECT *
@@ -371,16 +763,36 @@ BEGIN
         END IF;
 
         EXECUTE format(
-            'INSERT INTO %I.user_role (user_id, role_id)
-             VALUES (`$1, `$2), (`$1, `$3)
+            'WITH removed_other_canonical_roles AS (
+                 DELETE FROM %I.user_role AS user_role
+                  USING %I.role AS canonical_role, canonical_role_definitions
+                  WHERE user_role.user_id = `$1
+                    AND canonical_role.id = user_role.role_id
+                    AND canonical_role.tenant_id = `$2
+                    AND UPPER(TRIM(canonical_role.name)) = canonical_role_definitions.role_name
+                    AND canonical_role_definitions.role_name <> (
+                        SELECT canonical_bootstrap_admin_role.role_name
+                        FROM canonical_bootstrap_admin_role
+                    )
+                 RETURNING user_role.user_id
+             )
+             INSERT INTO %I.user_role (user_id, role_id)
+             SELECT `$1, canonical_managed_role_ids.role_id
+               FROM canonical_managed_role_ids
+               JOIN canonical_bootstrap_admin_role
+                 ON canonical_bootstrap_admin_role.role_name = canonical_managed_role_ids.role_name
              ON CONFLICT (user_id, role_id) DO NOTHING',
+            v_schema,
+            v_schema,
             v_schema
         )
-        USING v_user_id, v_role_tenant_admin, v_role_hr_admin;
+        USING v_user_id, v_tenant_id;
     END LOOP;
 
     RAISE NOTICE 'Bootstrapped % admin user(s) for tenant %, schema %', jsonb_array_length(v_admins), v_tenant_id, v_schema;
 END `$`$;
+
+COMMIT;
 "@
 
 $tmp = [System.IO.Path]::GetTempFileName() + '.sql'
