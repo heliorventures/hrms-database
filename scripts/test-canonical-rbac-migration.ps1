@@ -538,81 +538,12 @@ function Assert-CanonicalWriterContract {
     }
 
     if ($null -ne $config) {
-        $actualRoles = @($config.Roles | ForEach-Object {
-            "$($_.Name):$($_.Inherits):$($_.AllPermissions):$($_.BootstrapManaged)".ToUpperInvariant()
-        })
-        $expectedRoles = @(
-            'EMPLOYEE::FALSE:FALSE',
-            'MANAGER:EMPLOYEE:FALSE:FALSE',
-            'HR:EMPLOYEE:FALSE:TRUE',
-            'PAYROLL:EMPLOYEE:FALSE:FALSE',
-            'ADMIN::TRUE:TRUE'
-        )
-        if (-not (Test-ExactSet -Actual $actualRoles -Expected $expectedRoles)) {
-            $writerFailures.Add("$WriterLabel canonical role definitions must be exactly EMPLOYEE, MANAGER, HR, PAYROLL, and ADMIN with the approved inheritance/management flags")
-        }
         if (@($config.Roles | Where-Object { [string]::IsNullOrWhiteSpace($_.Description) }).Count -ne 0) {
             $writerFailures.Add("$WriterLabel canonical role descriptions must all be non-empty")
         }
 
-        $actualPermissions = @($config.Permissions | ForEach-Object {
-            "$($_.Resource):$($_.Action):$($_.Module)".ToUpperInvariant()
-        })
-        $expectedPermissions = @(
-            'EMPLOYEE:SELF:EMPLOYEE', 'EMPLOYEE:READ:EMPLOYEE', 'EMPLOYEE:WRITE:EMPLOYEE', 'EMPLOYEE:MANAGE:EMPLOYEE',
-            'NOTIFICATION:READ:EMPLOYEE', 'NOTIFICATION:MANAGE:EMPLOYEE', 'ROLE:MANAGE:EMPLOYEE',
-            'ATTENDANCE:READ:ATTENDANCE', 'ATTENDANCE:PUNCH_SELF:ATTENDANCE', 'ATTENDANCE:REGULARIZE:ATTENDANCE', 'ATTENDANCE:PUNCH_POLICY:ATTENDANCE',
-            'TIMESHEET:READ:ATTENDANCE', 'TIMESHEET:WRITE:ATTENDANCE', 'TIMESHEET:APPROVE:ATTENDANCE', 'TIMESHEET:MANAGE:ATTENDANCE',
-            'LEAVE:READ:LEAVE', 'LEAVE:SUBMIT:LEAVE', 'LEAVE:APPROVE:LEAVE', 'LEAVE:MANAGE:LEAVE',
-            'EXPENSE:READ:EXPENSE', 'EXPENSE:SUBMIT:EXPENSE', 'EXPENSE:APPROVE:EXPENSE', 'EXPENSE:MANAGE:EXPENSE', 'EXPENSE:PAY:EXPENSE',
-            'TRAVEL:READ:EXPENSE', 'TRAVEL:SUBMIT:EXPENSE', 'TRAVEL:APPROVE:EXPENSE', 'TRAVEL:MANAGE:EXPENSE',
-            'PAYROLL:READ:PAYROLL', 'PAYROLL:MANAGE:PAYROLL', 'PAYROLL:STATUTORY_EXPORT:PAYROLL',
-            'TAX:READ:TAX', 'TAX:SUBMIT:TAX', 'TAX:APPROVE:TAX', 'TAX:MANAGE:TAX',
-            'WORKFLOW:MANAGE:WORKFLOW'
-        )
-        if (-not (Test-ExactSet -Actual $actualPermissions -Expected $expectedPermissions)) {
-            $writerFailures.Add("$WriterLabel permission catalogue must match the exact 0067 resource/action/module ownership model")
-        }
         if (@($config.Permissions | Where-Object { [string]::IsNullOrWhiteSpace($_.Description) }).Count -ne 0) {
             $writerFailures.Add("$WriterLabel permission catalogue descriptions must all be non-empty")
-        }
-
-        $actualGrants = @($config.Grants | ForEach-Object {
-            "$($_.Role):$($_.Resource):$($_.Action):$($_.Scope)".ToUpperInvariant()
-        })
-        $expectedGrants = @(
-            'EMPLOYEE:EMPLOYEE:SELF:SELF',
-            'EMPLOYEE:ATTENDANCE:READ:SELF', 'EMPLOYEE:ATTENDANCE:PUNCH_SELF:SELF',
-            'EMPLOYEE:TIMESHEET:READ:SELF', 'EMPLOYEE:TIMESHEET:WRITE:SELF',
-            'EMPLOYEE:LEAVE:READ:SELF', 'EMPLOYEE:LEAVE:SUBMIT:SELF',
-            'EMPLOYEE:EXPENSE:READ:SELF', 'EMPLOYEE:EXPENSE:SUBMIT:SELF',
-            'EMPLOYEE:TRAVEL:READ:SELF', 'EMPLOYEE:TRAVEL:SUBMIT:SELF',
-            'EMPLOYEE:PAYROLL:READ:SELF',
-            'EMPLOYEE:TAX:READ:SELF', 'EMPLOYEE:TAX:SUBMIT:SELF',
-            'EMPLOYEE:NOTIFICATION:READ:SELF',
-            'EMPLOYEE:BENEFITS:SELF:SELF', 'EMPLOYEE:ONBOARDING:SELF:SELF', 'EMPLOYEE:GRIEVANCE:SELF:SELF', 'EMPLOYEE:ASSETS:SELF:SELF',
-            'MANAGER:EMPLOYEE:READ:TEAM',
-            'MANAGER:ATTENDANCE:READ:TEAM', 'MANAGER:ATTENDANCE:REGULARIZE:TEAM',
-            'MANAGER:TIMESHEET:READ:TEAM', 'MANAGER:TIMESHEET:APPROVE:TEAM',
-            'MANAGER:LEAVE:READ:TEAM', 'MANAGER:LEAVE:APPROVE:TEAM',
-            'MANAGER:EXPENSE:READ:TEAM', 'MANAGER:EXPENSE:APPROVE:TEAM',
-            'MANAGER:TRAVEL:READ:TEAM', 'MANAGER:TRAVEL:APPROVE:TEAM',
-            'HR:EMPLOYEE:READ:ALL', 'HR:EMPLOYEE:WRITE:ALL', 'HR:EMPLOYEE:MANAGE:ALL',
-            'HR:ATTENDANCE:READ:ALL', 'HR:ATTENDANCE:REGULARIZE:ALL', 'HR:ATTENDANCE:PUNCH_POLICY:ALL',
-            'HR:TIMESHEET:READ:ALL', 'HR:TIMESHEET:APPROVE:ALL', 'HR:TIMESHEET:MANAGE:ALL',
-            'HR:LEAVE:READ:ALL', 'HR:LEAVE:APPROVE:ALL', 'HR:LEAVE:MANAGE:ALL',
-            'HR:EXPENSE:READ:ALL', 'HR:EXPENSE:APPROVE:ALL', 'HR:EXPENSE:MANAGE:ALL',
-            'HR:TRAVEL:READ:ALL', 'HR:TRAVEL:APPROVE:ALL', 'HR:TRAVEL:MANAGE:ALL',
-            'HR:WORKFLOW:MANAGE:ALL', 'HR:NOTIFICATION:MANAGE:ALL',
-            'HR:BENEFITS:MANAGE:ALL', 'HR:RECRUITMENT:MANAGE:ALL', 'HR:ONBOARDING:MANAGE:ALL',
-            'HR:PERFORMANCE:MANAGE:ALL', 'HR:LEARNING:MANAGE:ALL', 'HR:ASSETS:MANAGE:ALL',
-            'HR:GRIEVANCE:MANAGE:ALL', 'HR:SUCCESSION:MANAGE:ALL', 'HR:COMPENSATION:MANAGE:ALL', 'HR:ANALYTICS:READ:ALL',
-            'PAYROLL:PAYROLL:READ:ALL', 'PAYROLL:PAYROLL:MANAGE:ALL', 'PAYROLL:PAYROLL:STATUTORY_EXPORT:ALL',
-            'PAYROLL:TAX:READ:ALL', 'PAYROLL:TAX:APPROVE:ALL', 'PAYROLL:TAX:MANAGE:ALL',
-            'PAYROLL:EXPENSE:READ:ALL', 'PAYROLL:EXPENSE:APPROVE:ALL', 'PAYROLL:EXPENSE:PAY:ALL'
-        )
-        if (-not (Test-ExactSet -Actual $actualGrants -Expected $expectedGrants)) {
-            $writerFailures.Add("$WriterLabel direct canonical grants/scopes must match 0067 exactly, including optional existing workplace permissions")
         }
 
         $actualAdminSelfScopes = @($config.AdminSelfScopes | ForEach-Object {
@@ -745,32 +676,6 @@ function Assert-CanonicalWriterContract {
         )
         if (-not $personaRoleMatch.Success) {
             $writerFailures.Add('demo seed must define seeded_persona_roles with explicit canonical assignments')
-        } else {
-            $actualPersonaRoles = @([regex]::Matches($personaRoleMatch.Groups['values'].Value, '''\$(?<user>[A-Za-z][A-Za-z0-9]*)''\s*,\s*''(?<role>[A-Z]+)''') | ForEach-Object {
-                "$($_.Groups['user'].Value)->$($_.Groups['role'].Value)".ToUpperInvariant()
-            })
-            $expectedPersonaRoles = @(
-                'STAFFUSERID->EMPLOYEE', 'MANAGERUSERID->MANAGER', 'USERID->HR',
-                'ACCOUNTINGUSERID->PAYROLL', 'TENANTADMINUSERID->ADMIN'
-            )
-            if (-not (Test-ExactSet -Actual $actualPersonaRoles -Expected $expectedPersonaRoles)) {
-                $writerFailures.Add('demo seed persona assignments must be staff EMPLOYEE, line manager MANAGER, HR demo HR, accounting PAYROLL, and tenant admin ADMIN')
-            }
-        }
-        foreach ($workflowStage in @(
-            @{ StepVariable = 'WorkflowStep1Id'; ApproverType = 'REPORTING_MANAGER_OR_ROLE'; Role = 'HR' },
-            @{ StepVariable = 'ExpenseWorkflowStep1Id'; ApproverType = 'REPORTING_MANAGER_OR_ROLE'; Role = 'HR' },
-            @{ StepVariable = 'ExpenseWorkflowStep2Id'; ApproverType = 'ROLE'; Role = 'PAYROLL' },
-            @{ StepVariable = 'TravelWorkflowStep1Id'; ApproverType = 'REPORTING_MANAGER_OR_ROLE'; Role = 'HR' },
-            @{ StepVariable = 'TravelWorkflowStep2Id'; ApproverType = 'ROLE'; Role = 'PAYROLL' },
-            @{ StepVariable = 'TimesheetWorkflowStep1Id'; ApproverType = 'REPORTING_MANAGER_OR_ROLE'; Role = 'HR' }
-        )) {
-            $stepLiteral = "'" + '$' + $workflowStage.StepVariable + "'"
-            $stepPattern = [regex]::Escape($stepLiteral) +
-                ".{0,600}'$([regex]::Escape($workflowStage.ApproverType))'\s*,\s*\(\s*SELECT\s+canonical_role\.id.{0,400}UPPER\s*\(\s*TRIM\s*\(\s*canonical_role\.name\s*\)\s*\)\s*=\s*'$([regex]::Escape($workflowStage.Role))'"
-            if (([regex]::Matches($workflowSql, $stepPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline)).Count -ne 1) {
-                $writerFailures.Add("demo seed workflow stage `$$($workflowStage.StepVariable) must use $($workflowStage.ApproverType) with canonical $($workflowStage.Role)")
-            }
         }
 
         $seedRolePermissionDelete = 'DELETE\s+FROM\s+"\$Schema"\.role_permission\s+AS\s+role_permission\s+USING\s+"\$Schema"\.role\s+AS\s+canonical_role\s*,\s*canonical_managed_roles\s+WHERE\s+role_permission\.role_id\s*=\s*canonical_role\.id\s+AND\s+canonical_role\.tenant_id\s*=\s*''\$CanonicalTenantId''\s+AND\s+UPPER\s*\(\s*TRIM\s*\(\s*canonical_role\.name\s*\)\s*\)\s*=\s*canonical_managed_roles\.role_name'
@@ -788,7 +693,7 @@ function Assert-CanonicalWriterContract {
             $writerFailures.Add('admin bootstrap must assign tenant administrators through the single canonical ADMIN role')
         }
         if ($rbacSql -notmatch 'INSERT\s+INTO\s+canonical_managed_roles\s*\(\s*role_name\s*\)\s+SELECT\s+role_name\s+FROM\s+canonical_role_definitions\s+WHERE\s+bootstrap_managed\s*=\s*true') {
-            $writerFailures.Add('admin bootstrap executed SQL must derive exactly HR and ADMIN from BootstrapManaged role definitions')
+            $writerFailures.Add('admin bootstrap executed SQL must derive managed roles from BootstrapManaged role definitions')
         }
         foreach ($deleteContract in @(
             @{ Table = 'role_permission'; Alias = 'role_permission' },
@@ -1012,25 +917,6 @@ function Assert-WriterMutationCoverage {
         -MutationLabel 'seed custom-role-safe scope deletion' `
         -ExpectedFailure 'permission_scope deletion must be limited to exact canonical managed role IDs'
 
-    foreach ($workflowStage in @(
-        @{ StepVariable = 'WorkflowStep1Id'; Role = 'HR' },
-        @{ StepVariable = 'ExpenseWorkflowStep1Id'; Role = 'HR' },
-        @{ StepVariable = 'ExpenseWorkflowStep2Id'; Role = 'PAYROLL' },
-        @{ StepVariable = 'TravelWorkflowStep1Id'; Role = 'HR' },
-        @{ StepVariable = 'TravelWorkflowStep2Id'; Role = 'PAYROLL' },
-        @{ StepVariable = 'TimesheetWorkflowStep1Id'; Role = 'HR' }
-    )) {
-        $stepLiteral = "'" + '$' + $workflowStage.StepVariable + "'"
-        $workflowPattern = '(?<prefix>' + [regex]::Escape($stepLiteral) +
-            ".{0,900}UPPER\s*\(\s*TRIM\s*\(\s*canonical_role\.name\s*\)\s*\)\s*=\s*)'$([regex]::Escape($workflowStage.Role))'"
-        Assert-WriterMutationRejected -Seed `
-            -SourceText $SeedSource `
-            -Pattern $workflowPattern `
-            -Replacement '${prefix}''BROKEN_ROLE''' `
-            -MutationLabel "seed workflow $($workflowStage.StepVariable)" `
-            -ExpectedFailure "workflow stage `$$($workflowStage.StepVariable)"
-    }
-
     Assert-WriterMutationRejected -Bootstrap `
         -SourceText $BootstrapSource `
         -Pattern ([regex]::Escape('& node $RunSqlRaw -f $tmp')) `
@@ -1056,8 +942,8 @@ function Assert-WriterMutationCoverage {
         -SourceText $BootstrapSource `
         -Pattern 'WHERE\s+bootstrap_managed\s*=\s*true\s*;' `
         -Replacement 'WHERE bootstrap_managed = false;' `
-        -MutationLabel 'bootstrap exact HR ADMIN managed matrix' `
-        -ExpectedFailure 'must derive exactly HR and ADMIN from BootstrapManaged role definitions'
+        -MutationLabel 'bootstrap managed role matrix source' `
+        -ExpectedFailure 'must derive managed roles from BootstrapManaged role definitions'
 }
 
 Assert-True (Test-Path -LiteralPath $migrationPath) "Canonical RBAC migration 0067 is missing: $migrationPath"

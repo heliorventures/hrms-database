@@ -110,14 +110,13 @@ if ([string]::IsNullOrWhiteSpace($PasswordHash)) {
 # direct grants, inheritance, and explicit scope rules used by every RBAC write.
 $CanonicalRbac = [pscustomobject]@{
     Roles = @(
-        [pscustomobject]@{ Name = 'EMPLOYEE'; Inherits = ''; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical employee self-service role' }
-        [pscustomobject]@{ Name = 'MANAGER'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical people manager role' }
+        [pscustomobject]@{ Name = 'EMPLOYEE'; Inherits = ''; AllPermissions = $false; BootstrapManaged = $true; Description = 'Canonical employee self-service role' }
+        [pscustomobject]@{ Name = 'MANAGER'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $true; Description = 'Canonical people manager role' }
         [pscustomobject]@{ Name = 'HR'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $true; Description = 'Canonical human resources role' }
-        [pscustomobject]@{ Name = 'PAYROLL'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical payroll and finance role' }
         [pscustomobject]@{ Name = 'ADMIN'; Inherits = ''; AllPermissions = $true; BootstrapManaged = $true; Description = 'Canonical tenant administrator role' }
     )
     Permissions = @(
-        [pscustomobject]@{ Resource = 'employee'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own employee profile' }
+        [pscustomobject]@{ Resource = 'employee_directory'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read the safe company employee directory projection' }
         [pscustomobject]@{ Resource = 'employee'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read employee records' }
         [pscustomobject]@{ Resource = 'employee'; Action = 'write'; Module = 'EMPLOYEE'; Description = 'Create and update employee records' }
         [pscustomobject]@{ Resource = 'employee'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage employee lifecycle' }
@@ -155,7 +154,8 @@ $CanonicalRbac = [pscustomobject]@{
         [pscustomobject]@{ Resource = 'workflow'; Action = 'manage'; Module = 'WORKFLOW'; Description = 'Manage approval workflows' }
     )
     Grants = @(
-        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'employee'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'employee_directory'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'employee'; Action = 'read'; Scope = 'SELF' }
         [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'attendance'; Action = 'read'; Scope = 'SELF' }
         [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'attendance'; Action = 'punch_self'; Scope = 'SELF' }
         [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'timesheet'; Action = 'read'; Scope = 'SELF' }
@@ -200,9 +200,16 @@ $CanonicalRbac = [pscustomobject]@{
         [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'read'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'approve'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'pay'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'read'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'approve'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'payroll'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'payroll'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'payroll'; Action = 'statutory_export'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'tax'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'tax'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'tax'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'workflow'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'notification'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'benefits'; Action = 'manage'; Scope = 'ALL' }
@@ -215,15 +222,6 @@ $CanonicalRbac = [pscustomobject]@{
         [pscustomobject]@{ Role = 'HR'; Resource = 'succession'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'compensation'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'analytics'; Action = 'read'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'read'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'manage'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'statutory_export'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'read'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'approve'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'manage'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'read'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'approve'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'pay'; Scope = 'ALL' }
     )
     AdminSelfScopes = @(
         [pscustomobject]@{ Resource = '*'; Action = 'self' }

@@ -1,0 +1,700 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0069-001-permission-contract-convergence" author="kabipay-dev" runInTransaction="true">
+        <comment>Separate company-directory, employee-profile, and payroll-sensitive authority while converging the canonical role bundles.</comment>
+
+        <sql splitStatements="false"><![CDATA[
+LOCK TABLE "${schema}"."user" IN SHARE MODE NOWAIT;
+LOCK TABLE "${schema}".employee IN SHARE MODE NOWAIT;
+LOCK TABLE "${schema}".user_role IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+LOCK TABLE
+    "${schema}".role,
+    "${schema}".permission,
+    "${schema}".role_permission,
+    "${schema}".permission_scope,
+    "${schema}".user_session,
+    "${schema}".workflow_step,
+    "${schema}".approval_rule,
+    "${schema}".expense_policy,
+    "${schema}".announcement
+IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+LOCK TABLE kabipay_ops.module, kabipay_ops.tenant_database IN SHARE MODE NOWAIT;
+
+CREATE TEMP TABLE tenant_context (
+    tenant_id UUID PRIMARY KEY
+) ON COMMIT DROP;
+
+INSERT INTO tenant_context (tenant_id)
+SELECT tenant_database.tenant_id
+FROM kabipay_ops.tenant_database AS tenant_database
+WHERE tenant_database.schema_name = '${schema}';
+
+CREATE TEMP TABLE canonical_roles (
+    name VARCHAR(255) PRIMARY KEY
+) ON COMMIT DROP;
+
+INSERT INTO canonical_roles (name)
+VALUES
+    ('EMPLOYEE'),
+    ('MANAGER'),
+    ('HR'),
+    ('ADMIN');
+
+DO $$
+DECLARE
+    tenant_count INTEGER;
+    employee_module_count INTEGER;
+    ambiguous_roles TEXT;
+    ambiguous_permissions TEXT;
+BEGIN
+    SELECT COUNT(*) INTO tenant_count FROM tenant_context;
+    IF tenant_count <> 1 THEN
+        RAISE EXCEPTION 'permission convergence expected one tenant for schema %, found %', '${schema}', tenant_count;
+    END IF;
+
+    SELECT COUNT(*)
+      INTO employee_module_count
+      FROM kabipay_ops.module
+     WHERE UPPER(TRIM(code)) = 'EMPLOYEE';
+    IF employee_module_count <> 1 THEN
+        RAISE EXCEPTION 'permission convergence expected one EMPLOYEE module, found %', employee_module_count;
+    END IF;
+
+    SELECT STRING_AGG(normalized_role.name, ', ' ORDER BY normalized_role.name)
+      INTO ambiguous_roles
+      FROM (
+          SELECT UPPER(TRIM(tenant_role.name)) AS name
+          FROM "${schema}".role AS tenant_role
+          JOIN tenant_context ON tenant_context.tenant_id = tenant_role.tenant_id
+          WHERE UPPER(TRIM(tenant_role.name)) IN ('EMPLOYEE', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN')
+          GROUP BY UPPER(TRIM(tenant_role.name))
+          HAVING COUNT(*) > 1
+      ) AS normalized_role;
+    IF ambiguous_roles IS NOT NULL THEN
+        RAISE EXCEPTION 'permission convergence found ambiguous canonical role names in schema %: %', '${schema}', ambiguous_roles;
+    END IF;
+
+    SELECT STRING_AGG(normalized_permission.permission_name, ', ' ORDER BY normalized_permission.permission_name)
+      INTO ambiguous_permissions
+      FROM (
+          SELECT LOWER(TRIM(permission.resource)) || ':' || LOWER(TRIM(permission.action)) AS permission_name
+          FROM "${schema}".permission AS permission
+          WHERE (LOWER(TRIM(permission.resource)), LOWER(TRIM(permission.action))) IN (
+              ('employee', 'self'),
+              ('employee', 'read'),
+              ('employee_directory', 'read')
+          )
+          GROUP BY LOWER(TRIM(permission.resource)), LOWER(TRIM(permission.action))
+          HAVING COUNT(*) > 1
+      ) AS normalized_permission;
+    IF ambiguous_permissions IS NOT NULL THEN
+        RAISE EXCEPTION 'permission convergence found ambiguous permissions in schema %: %', '${schema}', ambiguous_permissions;
+    END IF;
+
+    IF (
+        SELECT COUNT(*)
+        FROM "${schema}".role AS tenant_role
+        JOIN tenant_context ON tenant_context.tenant_id = tenant_role.tenant_id
+        JOIN canonical_roles ON canonical_roles.name = UPPER(TRIM(tenant_role.name))
+        WHERE tenant_role.is_deleted = false
+    ) <> 4 THEN
+        RAISE EXCEPTION 'permission convergence requires active EMPLOYEE, MANAGER, HR, and ADMIN roles in schema %', '${schema}';
+    END IF;
+END $$;
+
+INSERT INTO "${schema}".permission (
+    id,
+    module_id,
+    resource,
+    action,
+    description
+)
+SELECT
+    gen_random_uuid(),
+    module.id,
+    'employee_directory',
+    'read',
+    'Read the safe company employee directory projection'
+FROM kabipay_ops.module AS module
+WHERE UPPER(TRIM(module.code)) = 'EMPLOYEE'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM "${schema}".permission AS existing_permission
+      WHERE LOWER(TRIM(existing_permission.resource)) = 'employee_directory'
+        AND LOWER(TRIM(existing_permission.action)) = 'read'
+  );
+
+CREATE TEMP TABLE permission_ids (
+    permission_name VARCHAR(100) PRIMARY KEY,
+    permission_id UUID
+) ON COMMIT DROP;
+
+INSERT INTO permission_ids (permission_name, permission_id)
+SELECT
+    expected_permission.permission_name,
+    permission.id
+FROM (
+    VALUES
+        ('employee:self', 'employee', 'self'),
+        ('employee:read', 'employee', 'read'),
+        ('employee_directory:read', 'employee_directory', 'read')
+) AS expected_permission(permission_name, resource, action)
+LEFT JOIN "${schema}".permission AS permission
+  ON LOWER(TRIM(permission.resource)) = expected_permission.resource
+ AND LOWER(TRIM(permission.action)) = expected_permission.action;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM permission_ids
+        WHERE permission_name IN ('employee:read', 'employee_directory:read')
+          AND permission_id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'permission convergence could not resolve employee:read and employee_directory:read in schema %', '${schema}';
+    END IF;
+END $$;
+
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT
+    self_grant.role_id,
+    employee_read.permission_id
+FROM "${schema}".role_permission AS self_grant
+JOIN permission_ids AS employee_self
+  ON employee_self.permission_name = 'employee:self'
+ AND employee_self.permission_id = self_grant.permission_id
+JOIN permission_ids AS employee_read
+  ON employee_read.permission_name = 'employee:read'
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+WITH scope_candidates AS (
+    SELECT
+        permission_scope.tenant_id,
+        permission_scope.role_id,
+        UPPER(TRIM(permission_scope.scope_type)) AS scope_type
+    FROM "${schema}".permission_scope AS permission_scope
+    WHERE LOWER(TRIM(permission_scope.resource)) = 'employee'
+      AND LOWER(TRIM(permission_scope.action)) IN ('self', 'read')
+
+    UNION ALL
+
+    SELECT
+        tenant_role.tenant_id,
+        self_grant.role_id,
+        'SELF'
+    FROM "${schema}".role_permission AS self_grant
+    JOIN permission_ids AS employee_self
+      ON employee_self.permission_name = 'employee:self'
+     AND employee_self.permission_id = self_grant.permission_id
+    JOIN "${schema}".role AS tenant_role
+      ON tenant_role.id = self_grant.role_id
+),
+widest_scope AS (
+    SELECT DISTINCT ON (scope_candidates.role_id)
+        scope_candidates.tenant_id,
+        scope_candidates.role_id,
+        scope_candidates.scope_type
+    FROM scope_candidates
+    ORDER BY
+        scope_candidates.role_id,
+        CASE scope_candidates.scope_type
+            WHEN 'SELF' THEN 1
+            WHEN 'TEAM' THEN 2
+            WHEN 'DEPARTMENT' THEN 3
+            WHEN 'ALL' THEN 4
+            ELSE 0
+        END DESC
+)
+INSERT INTO "${schema}".permission_scope (
+    id,
+    tenant_id,
+    role_id,
+    resource,
+    action,
+    scope_type
+)
+SELECT
+    gen_random_uuid(),
+    widest_scope.tenant_id,
+    widest_scope.role_id,
+    'employee',
+    'read',
+    widest_scope.scope_type
+FROM widest_scope
+ON CONFLICT (role_id, resource, action)
+DO UPDATE SET scope_type = EXCLUDED.scope_type;
+
+DELETE FROM "${schema}".permission_scope AS retired_scope
+WHERE LOWER(TRIM(retired_scope.resource)) = 'employee'
+  AND LOWER(TRIM(retired_scope.action)) = 'self';
+
+DELETE FROM "${schema}".role_permission AS retired_grant
+USING permission_ids AS employee_self
+WHERE employee_self.permission_name = 'employee:self'
+  AND employee_self.permission_id = retired_grant.permission_id;
+
+DELETE FROM "${schema}".permission AS retired_permission
+WHERE LOWER(TRIM(retired_permission.resource)) = 'employee'
+  AND LOWER(TRIM(retired_permission.action)) = 'self';
+
+CREATE TEMP TABLE role_mapping (
+    legacy_name VARCHAR(255) PRIMARY KEY,
+    canonical_name VARCHAR(255) NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO role_mapping (legacy_name, canonical_name)
+VALUES ('PAYROLL', 'HR');
+
+CREATE TEMP TABLE resolved_role_mapping (
+    legacy_role_id UUID PRIMARY KEY,
+    canonical_role_id UUID NOT NULL,
+    legacy_name VARCHAR(255) NOT NULL,
+    canonical_name VARCHAR(255) NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO resolved_role_mapping (
+    legacy_role_id,
+    canonical_role_id,
+    legacy_name,
+    canonical_name
+)
+SELECT
+    legacy_role.id,
+    canonical_role.id,
+    role_mapping.legacy_name,
+    role_mapping.canonical_name
+FROM role_mapping
+JOIN "${schema}".role AS legacy_role
+  ON UPPER(TRIM(legacy_role.name)) = role_mapping.legacy_name
+JOIN "${schema}".role AS canonical_role
+  ON canonical_role.tenant_id = legacy_role.tenant_id
+ AND UPPER(TRIM(canonical_role.name)) = role_mapping.canonical_name
+JOIN tenant_context
+  ON tenant_context.tenant_id = legacy_role.tenant_id;
+
+INSERT INTO "${schema}".user_role (user_id, role_id, assigned_at)
+SELECT
+    legacy_user_role.user_id,
+    resolved_role_mapping.canonical_role_id,
+    legacy_user_role.assigned_at
+FROM "${schema}".user_role AS legacy_user_role
+JOIN resolved_role_mapping
+  ON resolved_role_mapping.legacy_role_id = legacy_user_role.role_id
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+DELETE FROM "${schema}".user_role AS legacy_user_role
+USING resolved_role_mapping
+WHERE legacy_user_role.role_id = resolved_role_mapping.legacy_role_id;
+
+UPDATE "${schema}".workflow_step AS workflow_step
+SET approver_role_id = resolved_role_mapping.canonical_role_id
+FROM resolved_role_mapping
+WHERE workflow_step.approver_role_id = resolved_role_mapping.legacy_role_id;
+
+UPDATE "${schema}".approval_rule AS approval_rule
+SET approver_role_id = resolved_role_mapping.canonical_role_id
+FROM resolved_role_mapping
+WHERE approval_rule.approver_role_id = resolved_role_mapping.legacy_role_id;
+
+UPDATE "${schema}".expense_policy AS expense_policy
+SET role_id = resolved_role_mapping.canonical_role_id
+FROM resolved_role_mapping
+WHERE expense_policy.role_id = resolved_role_mapping.legacy_role_id;
+
+UPDATE "${schema}".announcement AS announcement
+SET target_audience = 'ROLE:' || role_mapping.canonical_name
+FROM role_mapping
+WHERE UPPER(TRIM(announcement.target_audience)) = 'ROLE:' || role_mapping.legacy_name;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".user_role AS user_role
+        JOIN resolved_role_mapping ON resolved_role_mapping.legacy_role_id = user_role.role_id
+    ) OR EXISTS (
+        SELECT 1
+        FROM "${schema}".workflow_step AS workflow_step
+        JOIN resolved_role_mapping ON resolved_role_mapping.legacy_role_id = workflow_step.approver_role_id
+    ) OR EXISTS (
+        SELECT 1
+        FROM "${schema}".approval_rule AS approval_rule
+        JOIN resolved_role_mapping ON resolved_role_mapping.legacy_role_id = approval_rule.approver_role_id
+    ) OR EXISTS (
+        SELECT 1
+        FROM "${schema}".expense_policy AS expense_policy
+        JOIN resolved_role_mapping ON resolved_role_mapping.legacy_role_id = expense_policy.role_id
+    ) THEN
+        RAISE EXCEPTION 'permission convergence left a PAYROLL role foreign-key consumer in schema %', '${schema}';
+    END IF;
+END $$;
+
+DELETE FROM "${schema}".role AS retired_role
+USING resolved_role_mapping
+WHERE retired_role.id = resolved_role_mapping.legacy_role_id
+  AND UPPER(TRIM(retired_role.name)) = 'PAYROLL';
+
+CREATE TEMP TABLE canonical_permission_matrix (
+    role_name VARCHAR(255) NOT NULL,
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    scope_type VARCHAR(20) NOT NULL,
+    PRIMARY KEY (role_name, resource, action)
+) ON COMMIT DROP;
+
+WITH employee_grants(resource, action, scope_type) AS (
+    VALUES
+        ('employee_directory', 'read', 'ALL'),
+        ('employee', 'read', 'SELF'),
+        ('attendance', 'read', 'SELF'),
+        ('attendance', 'punch_self', 'SELF'),
+        ('timesheet', 'read', 'SELF'),
+        ('timesheet', 'write', 'SELF'),
+        ('leave', 'read', 'SELF'),
+        ('leave', 'submit', 'SELF'),
+        ('expense', 'read', 'SELF'),
+        ('expense', 'submit', 'SELF'),
+        ('travel', 'read', 'SELF'),
+        ('travel', 'submit', 'SELF'),
+        ('payroll', 'read', 'SELF'),
+        ('tax', 'read', 'SELF'),
+        ('tax', 'submit', 'SELF'),
+        ('notification', 'read', 'SELF'),
+        ('benefits', 'self', 'SELF'),
+        ('onboarding', 'self', 'SELF'),
+        ('grievance', 'self', 'SELF'),
+        ('assets', 'self', 'SELF')
+),
+employee_derived_roles(role_name) AS (
+    VALUES
+        ('EMPLOYEE'),
+        ('MANAGER'),
+        ('HR')
+),
+role_overrides(role_name, resource, action, scope_type) AS (
+    VALUES
+        ('MANAGER', 'employee', 'read', 'TEAM'),
+        ('MANAGER', 'attendance', 'read', 'TEAM'),
+        ('MANAGER', 'attendance', 'regularize', 'TEAM'),
+        ('MANAGER', 'timesheet', 'read', 'TEAM'),
+        ('MANAGER', 'timesheet', 'approve', 'TEAM'),
+        ('MANAGER', 'leave', 'read', 'TEAM'),
+        ('MANAGER', 'leave', 'approve', 'TEAM'),
+        ('MANAGER', 'expense', 'read', 'TEAM'),
+        ('MANAGER', 'expense', 'approve', 'TEAM'),
+        ('MANAGER', 'travel', 'read', 'TEAM'),
+        ('MANAGER', 'travel', 'approve', 'TEAM'),
+
+        ('HR', 'employee', 'read', 'ALL'),
+        ('HR', 'employee', 'write', 'ALL'),
+        ('HR', 'employee', 'manage', 'ALL'),
+        ('HR', 'attendance', 'read', 'ALL'),
+        ('HR', 'attendance', 'regularize', 'ALL'),
+        ('HR', 'attendance', 'punch_policy', 'ALL'),
+        ('HR', 'timesheet', 'read', 'ALL'),
+        ('HR', 'timesheet', 'approve', 'ALL'),
+        ('HR', 'timesheet', 'manage', 'ALL'),
+        ('HR', 'leave', 'read', 'ALL'),
+        ('HR', 'leave', 'approve', 'ALL'),
+        ('HR', 'leave', 'manage', 'ALL'),
+        ('HR', 'expense', 'read', 'ALL'),
+        ('HR', 'expense', 'approve', 'ALL'),
+        ('HR', 'expense', 'manage', 'ALL'),
+        ('HR', 'expense', 'pay', 'ALL'),
+        ('HR', 'travel', 'read', 'ALL'),
+        ('HR', 'travel', 'approve', 'ALL'),
+        ('HR', 'travel', 'manage', 'ALL'),
+        ('HR', 'payroll', 'read', 'ALL'),
+        ('HR', 'payroll', 'manage', 'ALL'),
+        ('HR', 'payroll', 'statutory_export', 'ALL'),
+        ('HR', 'tax', 'read', 'ALL'),
+        ('HR', 'tax', 'approve', 'ALL'),
+        ('HR', 'tax', 'manage', 'ALL'),
+        ('HR', 'workflow', 'manage', 'ALL'),
+        ('HR', 'notification', 'manage', 'ALL'),
+        ('HR', 'benefits', 'manage', 'ALL'),
+        ('HR', 'recruitment', 'manage', 'ALL'),
+        ('HR', 'onboarding', 'manage', 'ALL'),
+        ('HR', 'performance', 'manage', 'ALL'),
+        ('HR', 'learning', 'manage', 'ALL'),
+        ('HR', 'assets', 'manage', 'ALL'),
+        ('HR', 'grievance', 'manage', 'ALL'),
+        ('HR', 'succession', 'manage', 'ALL'),
+        ('HR', 'compensation', 'manage', 'ALL'),
+        ('HR', 'analytics', 'read', 'ALL')
+),
+grant_candidates(role_name, resource, action, scope_type, precedence) AS (
+    SELECT
+        employee_derived_roles.role_name,
+        employee_grants.resource,
+        employee_grants.action,
+        employee_grants.scope_type,
+        1
+    FROM employee_derived_roles
+    CROSS JOIN employee_grants
+
+    UNION ALL
+
+    SELECT
+        role_overrides.role_name,
+        role_overrides.resource,
+        role_overrides.action,
+        role_overrides.scope_type,
+        2
+    FROM role_overrides
+
+    UNION ALL
+
+    SELECT
+        'ADMIN',
+        LOWER(TRIM(permission.resource)),
+        LOWER(TRIM(permission.action)),
+        CASE
+            WHEN LOWER(TRIM(permission.action)) = 'self' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'attendance'
+             AND LOWER(TRIM(permission.action)) = 'punch_self' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'timesheet'
+             AND LOWER(TRIM(permission.action)) = 'write' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'leave'
+             AND LOWER(TRIM(permission.action)) = 'submit' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'expense'
+             AND LOWER(TRIM(permission.action)) = 'submit' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'travel'
+             AND LOWER(TRIM(permission.action)) = 'submit' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'tax'
+             AND LOWER(TRIM(permission.action)) = 'submit' THEN 'SELF'
+            WHEN LOWER(TRIM(permission.resource)) = 'notification'
+             AND LOWER(TRIM(permission.action)) = 'read' THEN 'SELF'
+            ELSE 'ALL'
+        END,
+        3
+    FROM "${schema}".permission AS permission
+),
+ranked_grants AS (
+    SELECT DISTINCT ON (
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action
+    )
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action,
+        grant_candidates.scope_type
+    FROM grant_candidates
+    ORDER BY
+        grant_candidates.role_name,
+        grant_candidates.resource,
+        grant_candidates.action,
+        grant_candidates.precedence DESC
+)
+INSERT INTO canonical_permission_matrix (role_name, resource, action, scope_type)
+SELECT
+    ranked_grants.role_name,
+    ranked_grants.resource,
+    ranked_grants.action,
+    ranked_grants.scope_type
+FROM ranked_grants;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM canonical_permission_matrix
+        LEFT JOIN "${schema}".permission AS permission
+          ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+         AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action
+        WHERE permission.id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'permission convergence cannot build the default-role matrix because a required permission is absent in schema %', '${schema}';
+    END IF;
+END $$;
+
+DELETE FROM "${schema}".role_permission AS role_permission
+USING "${schema}".role AS canonical_role, tenant_context, canonical_roles
+WHERE role_permission.role_id = canonical_role.id
+  AND canonical_role.tenant_id = tenant_context.tenant_id
+  AND UPPER(TRIM(canonical_role.name)) = canonical_roles.name;
+
+DELETE FROM "${schema}".permission_scope AS permission_scope
+USING "${schema}".role AS canonical_role, tenant_context, canonical_roles
+WHERE permission_scope.role_id = canonical_role.id
+  AND canonical_role.tenant_id = tenant_context.tenant_id
+  AND UPPER(TRIM(canonical_role.name)) = canonical_roles.name;
+
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT
+    canonical_role.id,
+    permission.id
+FROM canonical_permission_matrix
+JOIN "${schema}".role AS canonical_role
+  ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+JOIN tenant_context
+  ON tenant_context.tenant_id = canonical_role.tenant_id
+JOIN "${schema}".permission AS permission
+  ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+ AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+INSERT INTO "${schema}".permission_scope (
+    id,
+    tenant_id,
+    role_id,
+    resource,
+    action,
+    scope_type
+)
+SELECT
+    gen_random_uuid(),
+    canonical_role.tenant_id,
+    canonical_role.id,
+    canonical_permission_matrix.resource,
+    canonical_permission_matrix.action,
+    canonical_permission_matrix.scope_type
+FROM canonical_permission_matrix
+JOIN "${schema}".role AS canonical_role
+  ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+JOIN tenant_context
+  ON tenant_context.tenant_id = canonical_role.tenant_id;
+
+DELETE FROM "${schema}".user_session AS user_session
+USING "${schema}"."user" AS tenant_user, tenant_context
+WHERE user_session.user_id = tenant_user.id
+  AND tenant_user.tenant_id = tenant_context.tenant_id;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".role AS remaining_role
+        JOIN tenant_context ON tenant_context.tenant_id = remaining_role.tenant_id
+        WHERE UPPER(TRIM(remaining_role.name)) = 'PAYROLL'
+    ) THEN
+        RAISE EXCEPTION 'permission convergence left the retired PAYROLL role in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".permission AS remaining_permission
+        WHERE LOWER(TRIM(remaining_permission.resource)) = 'employee'
+          AND LOWER(TRIM(remaining_permission.action)) = 'self'
+    ) THEN
+        RAISE EXCEPTION 'permission convergence left the retired employee:self permission in schema %', '${schema}';
+    END IF;
+
+    IF (
+        SELECT COUNT(*)
+        FROM "${schema}".role AS canonical_role
+        JOIN tenant_context ON tenant_context.tenant_id = canonical_role.tenant_id
+        JOIN canonical_roles ON canonical_roles.name = UPPER(TRIM(canonical_role.name))
+        WHERE canonical_role.is_deleted = false
+          AND canonical_role.is_system_role = true
+    ) <> 4 THEN
+        RAISE EXCEPTION 'permission convergence did not leave exactly four active system role bundles in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM canonical_permission_matrix
+        JOIN "${schema}".role AS canonical_role
+          ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+        JOIN tenant_context ON tenant_context.tenant_id = canonical_role.tenant_id
+        JOIN "${schema}".permission AS permission
+          ON LOWER(TRIM(permission.resource)) = canonical_permission_matrix.resource
+         AND LOWER(TRIM(permission.action)) = canonical_permission_matrix.action
+        LEFT JOIN "${schema}".role_permission AS role_permission
+          ON role_permission.role_id = canonical_role.id
+         AND role_permission.permission_id = permission.id
+        WHERE role_permission.role_id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'permission convergence left a required default-role permission missing in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".role_permission AS role_permission
+        JOIN "${schema}".role AS canonical_role ON canonical_role.id = role_permission.role_id
+        JOIN tenant_context ON tenant_context.tenant_id = canonical_role.tenant_id
+        JOIN canonical_roles ON canonical_roles.name = UPPER(TRIM(canonical_role.name))
+        JOIN "${schema}".permission AS permission ON permission.id = role_permission.permission_id
+        LEFT JOIN canonical_permission_matrix
+          ON canonical_permission_matrix.role_name = canonical_roles.name
+         AND canonical_permission_matrix.resource = LOWER(TRIM(permission.resource))
+         AND canonical_permission_matrix.action = LOWER(TRIM(permission.action))
+        WHERE canonical_permission_matrix.role_name IS NULL
+    ) THEN
+        RAISE EXCEPTION 'permission convergence left an extra default-role permission in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM canonical_permission_matrix
+        JOIN "${schema}".role AS canonical_role
+          ON UPPER(TRIM(canonical_role.name)) = canonical_permission_matrix.role_name
+        JOIN tenant_context ON tenant_context.tenant_id = canonical_role.tenant_id
+        LEFT JOIN "${schema}".permission_scope AS permission_scope
+          ON permission_scope.role_id = canonical_role.id
+         AND LOWER(TRIM(permission_scope.resource)) = canonical_permission_matrix.resource
+         AND LOWER(TRIM(permission_scope.action)) = canonical_permission_matrix.action
+         AND UPPER(TRIM(permission_scope.scope_type)) = canonical_permission_matrix.scope_type
+        WHERE permission_scope.id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'permission convergence left a required default-role permission scope missing in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".permission_scope AS permission_scope
+        JOIN "${schema}".role AS canonical_role ON canonical_role.id = permission_scope.role_id
+        JOIN tenant_context ON tenant_context.tenant_id = canonical_role.tenant_id
+        JOIN canonical_roles ON canonical_roles.name = UPPER(TRIM(canonical_role.name))
+        LEFT JOIN canonical_permission_matrix
+          ON canonical_permission_matrix.role_name = canonical_roles.name
+         AND canonical_permission_matrix.resource = LOWER(TRIM(permission_scope.resource))
+         AND canonical_permission_matrix.action = LOWER(TRIM(permission_scope.action))
+         AND canonical_permission_matrix.scope_type = UPPER(TRIM(permission_scope.scope_type))
+        WHERE canonical_permission_matrix.role_name IS NULL
+    ) THEN
+        RAISE EXCEPTION 'permission convergence left an extra or incorrect default-role scope in schema %', '${schema}';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}"."user" AS tenant_user
+        JOIN "${schema}".employee AS employee
+          ON employee.user_id = tenant_user.id
+         AND employee.tenant_id = tenant_user.tenant_id
+        WHERE tenant_user.is_active = true
+          AND tenant_user.is_deleted = false
+          AND employee.is_deleted = false
+          AND UPPER(TRIM(employee.status)) IN ('ACTIVE', 'PROBATION')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "${schema}".user_role AS user_role
+              JOIN "${schema}".role AS canonical_role ON canonical_role.id = user_role.role_id
+              JOIN canonical_roles ON canonical_roles.name = UPPER(TRIM(canonical_role.name))
+              WHERE user_role.user_id = tenant_user.id
+                AND canonical_role.tenant_id = tenant_user.tenant_id
+                AND canonical_role.is_deleted = false
+          )
+    ) THEN
+        RAISE EXCEPTION 'permission convergence left an active employee without a current canonical role in schema %', '${schema}';
+    END IF;
+END $$;
+        ]]></sql>
+
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    RAISE EXCEPTION '0069 permission convergence removes obsolete authorization identifiers and requires a forward corrective migration instead of rollback';
+END $$;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

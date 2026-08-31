@@ -15,7 +15,7 @@
       run `kabipay-database/scripts/update-tenant-liquibase.ps1 -Schema <tenant_schema>` **before** (or after) seeding.
 
       Tenant plane ("$Schema"):
-        0000 foundation   : department (Engineering + Accounting), designation, users/employees; HR + manager + employee + payroll + admin personas with canonical RBAC
+        0000 foundation   : department (Engineering + Accounting), designation, users/employees; HR + manager + employee + admin personas with canonical RBAC
         0010 shift/attend : shift (DAY/NIGHT), attendance for today
         0011 leave        : leave_type (CL/SL), leave_request (PENDING)
         0012 payroll      : salary_component (BASIC/HRA/ARREAR), payroll_cycle (current month), demo payslip + TDS
@@ -33,7 +33,7 @@
         0022 assets       : asset_category, asset
         0023 grievance    : grievance_category, grievance_case
         0033 travel       : travel_request (PENDING, demo employee)
-        0025 workflow     : LEAVE + EXPENSE + TRAVEL_REQUEST + TIMESHEET definitions (manager-aware approvals with canonical HR and PAYROLL fallbacks)
+        0025 workflow     : LEAVE + EXPENSE + TRAVEL_REQUEST + TIMESHEET definitions (manager-aware approvals with canonical HR fallbacks)
         0027 comm/audit   : announcement, notification
 
       Ops plane (kabipay_ops):
@@ -328,14 +328,13 @@ $PasswordHash = '$argon2id$v=19$m=19456,t=2,p=1$CDQNnKaKe519h5WXXU1DaA$IiZxOr7Av
 # direct grants, inheritance, and explicit scope rules used by every RBAC write.
 $CanonicalRbac = [pscustomobject]@{
     Roles = @(
-        [pscustomobject]@{ Name = 'EMPLOYEE'; Inherits = ''; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical employee self-service role' }
-        [pscustomobject]@{ Name = 'MANAGER'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical people manager role' }
+        [pscustomobject]@{ Name = 'EMPLOYEE'; Inherits = ''; AllPermissions = $false; BootstrapManaged = $true; Description = 'Canonical employee self-service role' }
+        [pscustomobject]@{ Name = 'MANAGER'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $true; Description = 'Canonical people manager role' }
         [pscustomobject]@{ Name = 'HR'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $true; Description = 'Canonical human resources role' }
-        [pscustomobject]@{ Name = 'PAYROLL'; Inherits = 'EMPLOYEE'; AllPermissions = $false; BootstrapManaged = $false; Description = 'Canonical payroll and finance role' }
         [pscustomobject]@{ Name = 'ADMIN'; Inherits = ''; AllPermissions = $true; BootstrapManaged = $true; Description = 'Canonical tenant administrator role' }
     )
     Permissions = @(
-        [pscustomobject]@{ Resource = 'employee'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own employee profile' }
+        [pscustomobject]@{ Resource = 'employee_directory'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read the safe company employee directory projection' }
         [pscustomobject]@{ Resource = 'employee'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read employee records' }
         [pscustomobject]@{ Resource = 'employee'; Action = 'write'; Module = 'EMPLOYEE'; Description = 'Create and update employee records' }
         [pscustomobject]@{ Resource = 'employee'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage employee lifecycle' }
@@ -373,7 +372,8 @@ $CanonicalRbac = [pscustomobject]@{
         [pscustomobject]@{ Resource = 'workflow'; Action = 'manage'; Module = 'WORKFLOW'; Description = 'Manage approval workflows' }
     )
     Grants = @(
-        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'employee'; Action = 'self'; Scope = 'SELF' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'employee_directory'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'employee'; Action = 'read'; Scope = 'SELF' }
         [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'attendance'; Action = 'read'; Scope = 'SELF' }
         [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'attendance'; Action = 'punch_self'; Scope = 'SELF' }
         [pscustomobject]@{ Role = 'EMPLOYEE'; Resource = 'timesheet'; Action = 'read'; Scope = 'SELF' }
@@ -418,9 +418,16 @@ $CanonicalRbac = [pscustomobject]@{
         [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'read'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'approve'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'expense'; Action = 'pay'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'read'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'approve'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'travel'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'payroll'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'payroll'; Action = 'manage'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'payroll'; Action = 'statutory_export'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'tax'; Action = 'read'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'tax'; Action = 'approve'; Scope = 'ALL' }
+        [pscustomobject]@{ Role = 'HR'; Resource = 'tax'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'workflow'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'notification'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'benefits'; Action = 'manage'; Scope = 'ALL' }
@@ -433,15 +440,6 @@ $CanonicalRbac = [pscustomobject]@{
         [pscustomobject]@{ Role = 'HR'; Resource = 'succession'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'compensation'; Action = 'manage'; Scope = 'ALL' }
         [pscustomobject]@{ Role = 'HR'; Resource = 'analytics'; Action = 'read'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'read'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'manage'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'payroll'; Action = 'statutory_export'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'read'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'approve'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'tax'; Action = 'manage'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'read'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'approve'; Scope = 'ALL' }
-        [pscustomobject]@{ Role = 'PAYROLL'; Resource = 'expense'; Action = 'pay'; Scope = 'ALL' }
     )
     AdminSelfScopes = @(
         [pscustomobject]@{ Resource = '*'; Action = 'self' }
@@ -941,7 +939,7 @@ WITH seeded_persona_roles(user_id, role_name) AS (
         ('$StaffUserId', 'EMPLOYEE'),
         ('$ManagerUserId', 'MANAGER'),
         ('$UserId', 'HR'),
-        ('$AccountingUserId', 'PAYROLL'),
+        ('$AccountingUserId', 'HR'),
         ('$TenantAdminUserId', 'ADMIN')
 )
 INSERT INTO seeded_persona_assignments (user_id, role_name)
@@ -1587,7 +1585,7 @@ INSERT INTO "$Schema".workflow_step (
         SELECT canonical_role.id
         FROM "$Schema".role AS canonical_role
         WHERE canonical_role.tenant_id = '$TenantId'
-          AND UPPER(TRIM(canonical_role.name)) = 'PAYROLL'
+          AND UPPER(TRIM(canonical_role.name)) = 'HR'
           AND canonical_role.is_deleted = false
     ), false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
@@ -1647,7 +1645,7 @@ INSERT INTO "$Schema".workflow_step (
         SELECT canonical_role.id
         FROM "$Schema".role AS canonical_role
         WHERE canonical_role.tenant_id = '$TenantId'
-          AND UPPER(TRIM(canonical_role.name)) = 'PAYROLL'
+          AND UPPER(TRIM(canonical_role.name)) = 'HR'
           AND canonical_role.is_deleted = false
     ), false, NULL
 ) ON CONFLICT (id) DO UPDATE SET
@@ -1908,7 +1906,7 @@ Write-Host '  demo@kabipay.local          - HR (human resources + employee self-
 Write-Host '  tenant-admin@kabipay.local  - ADMIN (tenant administration + employee self-service)'
 Write-Host '  manager@kabipay.local       - MANAGER (team approvals + employee self-service)'
 Write-Host '  staff@kabipay.local         - EMPLOYEE (employee self-service)'
-Write-Host '  accountant@kabipay.local    - PAYROLL (payroll, tax, and expense payment operations)'
+Write-Host '  accountant@kabipay.local    - HR (payroll, tax, and expense payment permissions)'
 Write-Host ""
 Write-Host "Try the employee query once kabipay-employee is running:" -ForegroundColor Yellow
 Write-Host '  PowerShell:'
