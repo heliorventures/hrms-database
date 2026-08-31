@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0068-002-employee-self-permission-backfill" author="kabipay-dev" runInTransaction="true">
+        <comment>Backfill employee self-service permissions required by the canonical role matrix using each resource's established module ownership.</comment>
+
+        <sql splitStatements="false"><![CDATA[
+LOCK TABLE "${schema}".permission IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+LOCK TABLE kabipay_ops.module IN SHARE MODE NOWAIT;
+
+CREATE TEMP TABLE required_self_permissions (
+    resource VARCHAR(100) PRIMARY KEY,
+    description VARCHAR(500) NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO required_self_permissions (resource, description)
+VALUES
+    ('benefits', 'Access own benefits'),
+    ('onboarding', 'Access own onboarding'),
+    ('grievance', 'Access own grievances');
+
+DO $$
+DECLARE
+    employee_module_count INTEGER;
+    ambiguous_self_permissions TEXT;
+BEGIN
+    SELECT COUNT(*)
+      INTO employee_module_count
+      FROM kabipay_ops.module AS employee_module
+     WHERE UPPER(TRIM(employee_module.code)) = 'EMPLOYEE';
+
+    IF employee_module_count <> 1 THEN
+        RAISE EXCEPTION
+            'employee self permission backfill expected one EMPLOYEE module for schema %, found %',
+            '${schema}',
+            employee_module_count;
+    END IF;
+
+    SELECT STRING_AGG(required_permission.resource || ':self', ', ' ORDER BY required_permission.resource)
+      INTO ambiguous_self_permissions
+      FROM required_self_permissions AS required_permission
+     WHERE (
+         SELECT COUNT(*)
+         FROM "${schema}".permission AS self_permission
+         WHERE LOWER(TRIM(self_permission.resource)) = required_permission.resource
+           AND LOWER(TRIM(self_permission.action)) = 'self'
+     ) > 1;
+
+    IF ambiguous_self_permissions IS NOT NULL THEN
+        RAISE EXCEPTION
+            'employee self permission backfill found ambiguous self permissions in schema %: %',
+            '${schema}',
+            ambiguous_self_permissions;
+    END IF;
+END $$;
+
+INSERT INTO "${schema}".permission (
+    id,
+    resource,
+    action,
+    module_id,
+    description
+)
+SELECT
+    gen_random_uuid(),
+    required_permission.resource,
+    'self',
+    employee_module.id,
+    required_permission.description
+FROM required_self_permissions AS required_permission
+CROSS JOIN kabipay_ops.module AS employee_module
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM "${schema}".permission AS existing_permission
+    WHERE LOWER(TRIM(existing_permission.resource)) = required_permission.resource
+      AND LOWER(TRIM(existing_permission.action)) = 'self'
+)
+  AND UPPER(TRIM(employee_module.code)) = 'EMPLOYEE';
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM required_self_permissions AS required_permission
+        CROSS JOIN kabipay_ops.module AS employee_module
+        LEFT JOIN "${schema}".permission AS self_permission
+          ON LOWER(TRIM(self_permission.resource)) = required_permission.resource
+         AND LOWER(TRIM(self_permission.action)) = 'self'
+        WHERE UPPER(TRIM(employee_module.code)) = 'EMPLOYEE'
+          AND (
+              self_permission.id IS NULL
+              OR self_permission.module_id <> employee_module.id
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'employee self permission backfill did not converge module ownership in schema %',
+            '${schema}';
+    END IF;
+END $$;
+        ]]></sql>
+
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    RAISE EXCEPTION '0068 employee self permission backfill requires a forward corrective migration instead of rollback';
+END $$;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

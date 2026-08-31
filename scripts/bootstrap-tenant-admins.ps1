@@ -123,6 +123,9 @@ $CanonicalRbac = [pscustomobject]@{
         [pscustomobject]@{ Resource = 'notification'; Action = 'read'; Module = 'EMPLOYEE'; Description = 'Read own notifications' }
         [pscustomobject]@{ Resource = 'notification'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage tenant communications' }
         [pscustomobject]@{ Resource = 'role'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage tenant role assignments' }
+        [pscustomobject]@{ Resource = 'benefits'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own benefits' }
+        [pscustomobject]@{ Resource = 'onboarding'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own onboarding' }
+        [pscustomobject]@{ Resource = 'grievance'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own grievances' }
         [pscustomobject]@{ Resource = 'attendance'; Action = 'read'; Module = 'ATTENDANCE'; Description = 'Read attendance records' }
         [pscustomobject]@{ Resource = 'attendance'; Action = 'punch_self'; Module = 'ATTENDANCE'; Description = 'Record own attendance punches' }
         [pscustomobject]@{ Resource = 'attendance'; Action = 'regularize'; Module = 'ATTENDANCE'; Description = 'Regularize attendance records' }

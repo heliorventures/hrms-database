@@ -83,6 +83,7 @@
     <include file="migrations/0066_lifecycle_validation_integrity/lifecycle_validation_integrity.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0067_canonical_rbac_authorization/canonical_rbac_authorization.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0068_employee_status_integrity/employee_status_integrity.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0068_permission_catalog_backfill/permission_catalog_backfill.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0069_permission_contract_convergence/permission_contract_convergence.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

@@ -2,10 +2,12 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $migrationPath = Join-Path $root 'changelog\migrations\0069_permission_contract_convergence\permission_contract_convergence.xml'
+$backfillPath = Join-Path $root 'changelog\migrations\0068_permission_catalog_backfill\permission_catalog_backfill.xml'
 $masterPath = Join-Path $root 'changelog\tenant.changelog-master.xml'
 $bootstrapPath = Join-Path $root 'scripts\bootstrap-tenant-admins.ps1'
 $seedPath = Join-Path $root 'scripts\seed-demo-data.ps1'
 $migrationInclude = 'migrations/0069_permission_contract_convergence/permission_contract_convergence.xml'
+$backfillInclude = 'migrations/0068_permission_catalog_backfill/permission_catalog_backfill.xml'
 $previousMigrationInclude = 'migrations/0068_employee_status_integrity/employee_status_integrity.xml'
 
 function Assert-True {
@@ -77,9 +79,27 @@ function Get-WriterContract {
 }
 
 Assert-True (Test-Path -LiteralPath $migrationPath) 'permission contract convergence migration file is missing'
+Assert-True (Test-Path -LiteralPath $backfillPath) 'permission catalog backfill migration file is missing'
 
 [xml]$migration = Get-Content -Raw -LiteralPath $migrationPath
+[xml]$backfill = Get-Content -Raw -LiteralPath $backfillPath
 [xml]$master = Get-Content -Raw -LiteralPath $masterPath
+
+$backfillChangeSets = @($backfill.SelectNodes("//*[local-name()='changeSet']"))
+Assert-True ($backfillChangeSets.Count -eq 1) 'permission catalog backfill must contain exactly one changeSet'
+Assert-True ($backfillChangeSets[0].GetAttribute('id') -eq '0068-002-employee-self-permission-backfill') 'permission catalog backfill changeSet id is incorrect'
+Assert-True ($backfillChangeSets[0].GetAttribute('runInTransaction') -eq 'true') 'permission catalog backfill must run in one transaction'
+Assert-True (@($backfillChangeSets[0].SelectNodes("./*[local-name()='rollback']")).Count -eq 1) 'permission catalog backfill must define rollback behavior'
+
+$backfillSql = Get-NormalizedSql -Document $backfill
+foreach ($resource in @('benefits', 'onboarding', 'grievance')) {
+    Assert-True ($backfillSql -match "'$resource'\s*,") "permission catalog backfill must declare $resource:self"
+}
+Assert-True ($backfillSql -match 'FROM\s+kabipay_ops\.module\s+AS\s+employee_module') 'permission catalog backfill must resolve module ownership from the ops module catalog'
+Assert-True ($backfillSql -match "UPPER\s*\(\s*TRIM\s*\(\s*employee_module\.code\s*\)\s*\)\s*=\s*'EMPLOYEE'") 'permission catalog backfill must assign the confirmed EMPLOYEE module'
+Assert-True ($backfillSql -match 'INSERT\s+INTO\s+"?\$\{schema\}"?\.permission.*SELECT.*employee_module\.id.*FROM\s+required_self_permissions') 'permission catalog backfill insert must use the resolved EMPLOYEE module ID'
+Assert-True ($backfillSql -notmatch 'manage_permission') 'permission catalog backfill must not depend on tenant seed data for module ownership'
+Assert-True ($backfillSql -match "LOWER\s*\(\s*TRIM\s*\(\s*existing_permission\.action\s*\)\s*\)\s*=\s*'self'") 'permission catalog backfill must be idempotent for existing self permissions'
 
 $changeSets = @($migration.SelectNodes("//*[local-name()='changeSet']"))
 Assert-True ($changeSets.Count -eq 1) 'permission contract convergence migration must contain exactly one changeSet'
@@ -90,10 +110,12 @@ Assert-True (@($changeSets[0].SelectNodes("./*[local-name()='rollback']")).Count
 $sql = Get-NormalizedSql -Document $migration
 $includes = @($master.SelectNodes("//*[local-name()='include']") | ForEach-Object { $_.GetAttribute('file') })
 $previousIndex = [array]::IndexOf($includes, $previousMigrationInclude)
+$backfillIndex = [array]::IndexOf($includes, $backfillInclude)
 $migrationIndex = [array]::IndexOf($includes, $migrationInclude)
 
 Assert-True ($previousIndex -ge 0) 'tenant master changelog must retain migration 0068'
-Assert-True ($migrationIndex -eq ($previousIndex + 1)) 'tenant master changelog must include migration 0069 immediately after 0068'
+Assert-True ($backfillIndex -eq ($previousIndex + 1)) 'tenant master changelog must include the permission catalog backfill immediately after migration 0068'
+Assert-True ($migrationIndex -eq ($backfillIndex + 1)) 'tenant master changelog must include migration 0069 immediately after the permission catalog backfill'
 Assert-True ($includes[-1] -eq $migrationInclude) '0069 must be the final tenant migration'
 
 Assert-True ($sql -match 'LOCK TABLE .*user_session.*workflow_step.*approval_rule.*expense_policy.*announcement.*NOWAIT') 'migration must lock every rewritten authorization consumer and user_session with NOWAIT'
@@ -136,7 +158,8 @@ $expectedPermissions = @(
     'TRAVEL:READ:EXPENSE', 'TRAVEL:SUBMIT:EXPENSE', 'TRAVEL:APPROVE:EXPENSE', 'TRAVEL:MANAGE:EXPENSE',
     'PAYROLL:READ:PAYROLL', 'PAYROLL:MANAGE:PAYROLL', 'PAYROLL:STATUTORY_EXPORT:PAYROLL',
     'TAX:READ:TAX', 'TAX:SUBMIT:TAX', 'TAX:APPROVE:TAX', 'TAX:MANAGE:TAX',
-    'WORKFLOW:MANAGE:WORKFLOW'
+    'WORKFLOW:MANAGE:WORKFLOW',
+    'BENEFITS:SELF:EMPLOYEE', 'ONBOARDING:SELF:EMPLOYEE', 'GRIEVANCE:SELF:EMPLOYEE'
 )
 $expectedGrants = @(
     'EMPLOYEE:EMPLOYEE_DIRECTORY:READ:ALL', 'EMPLOYEE:EMPLOYEE:READ:SELF',
