@@ -124,6 +124,12 @@ $CanonicalRbac = [pscustomobject]@{
         [pscustomobject]@{ Resource = 'notification'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage tenant communications' }
         [pscustomobject]@{ Resource = 'role'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage tenant role assignments' }
         [pscustomobject]@{ Resource = 'benefits'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own benefits' }
+        [pscustomobject]@{ Resource = 'benefits'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage benefits configuration' }
+        [pscustomobject]@{ Resource = 'recruitment'; Action = 'manage'; Module = 'RECRUITMENT'; Description = 'Manage recruitment configuration' }
+        [pscustomobject]@{ Resource = 'performance'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage performance configuration' }
+        [pscustomobject]@{ Resource = 'learning'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage learning configuration' }
+        [pscustomobject]@{ Resource = 'succession'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage succession configuration' }
+        [pscustomobject]@{ Resource = 'compensation'; Action = 'manage'; Module = 'EMPLOYEE'; Description = 'Manage compensation configuration' }
         [pscustomobject]@{ Resource = 'onboarding'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own onboarding' }
         [pscustomobject]@{ Resource = 'grievance'; Action = 'self'; Module = 'EMPLOYEE'; Description = 'Access own grievances' }
         [pscustomobject]@{ Resource = 'attendance'; Action = 'read'; Module = 'ATTENDANCE'; Description = 'Read attendance records' }

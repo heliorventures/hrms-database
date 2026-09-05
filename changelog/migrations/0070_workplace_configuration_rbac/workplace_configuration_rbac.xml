@@ -1,0 +1,430 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0070-001-workplace-configuration-rbac" author="kabipay-dev" runInTransaction="true">
+        <comment>Guarantee the six workplace configuration permissions and restrict them to active HR and ADMIN roles with exact ALL scope.</comment>
+
+        <sql splitStatements="false"><![CDATA[
+LOCK TABLE "${schema}"."user" IN SHARE MODE NOWAIT;
+LOCK TABLE
+    "${schema}".role,
+    "${schema}".permission,
+    "${schema}".role_permission,
+    "${schema}".permission_scope,
+    "${schema}".user_session
+IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+LOCK TABLE kabipay_ops.module, kabipay_ops.tenant_database IN SHARE MODE NOWAIT;
+
+CREATE TEMP TABLE workplace_permission_catalog (
+    resource VARCHAR(100) PRIMARY KEY,
+    action VARCHAR(50) NOT NULL,
+    module_code VARCHAR(100) NOT NULL,
+    description VARCHAR(500) NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO workplace_permission_catalog (resource, action, module_code, description)
+VALUES
+    ('benefits', 'manage', 'EMPLOYEE', 'Manage benefits configuration'),
+    ('recruitment', 'manage', 'RECRUITMENT', 'Manage recruitment configuration'),
+    ('performance', 'manage', 'EMPLOYEE', 'Manage performance configuration'),
+    ('learning', 'manage', 'EMPLOYEE', 'Manage learning configuration'),
+    ('succession', 'manage', 'EMPLOYEE', 'Manage succession configuration'),
+    ('compensation', 'manage', 'EMPLOYEE', 'Manage compensation configuration');
+
+CREATE TEMP TABLE workplace_rbac_matrix (
+    role_name VARCHAR(255) NOT NULL,
+    resource VARCHAR(100) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    scope_type VARCHAR(20) NOT NULL,
+    PRIMARY KEY (role_name, resource, action)
+) ON COMMIT DROP;
+
+INSERT INTO workplace_rbac_matrix (role_name, resource, action, scope_type)
+VALUES
+    ('HR', 'benefits', 'manage', 'ALL'),
+    ('HR', 'recruitment', 'manage', 'ALL'),
+    ('HR', 'performance', 'manage', 'ALL'),
+    ('HR', 'learning', 'manage', 'ALL'),
+    ('HR', 'succession', 'manage', 'ALL'),
+    ('HR', 'compensation', 'manage', 'ALL'),
+    ('ADMIN', 'benefits', 'manage', 'ALL'),
+    ('ADMIN', 'recruitment', 'manage', 'ALL'),
+    ('ADMIN', 'performance', 'manage', 'ALL'),
+    ('ADMIN', 'learning', 'manage', 'ALL'),
+    ('ADMIN', 'succession', 'manage', 'ALL'),
+    ('ADMIN', 'compensation', 'manage', 'ALL');
+
+CREATE TEMP TABLE tenant_context (
+    tenant_id UUID PRIMARY KEY
+) ON COMMIT DROP;
+
+INSERT INTO tenant_context (tenant_id)
+SELECT tenant_database.tenant_id
+FROM kabipay_ops.tenant_database AS tenant_database
+WHERE tenant_database.schema_name = '${schema}';
+
+DO $$
+DECLARE
+    tenant_count INTEGER;
+    active_role_count INTEGER;
+    ambiguous_roles TEXT;
+    ambiguous_permissions TEXT;
+    ambiguous_scopes TEXT;
+    invalid_modules TEXT;
+BEGIN
+    SELECT COUNT(*) INTO tenant_count FROM tenant_context;
+    IF tenant_count <> 1 THEN
+        RAISE EXCEPTION 'workplace RBAC expected one tenant_database row for schema %, found %', '${schema}', tenant_count;
+    END IF;
+
+    SELECT STRING_AGG(duplicate_role.role_name, ', ' ORDER BY duplicate_role.role_name)
+      INTO ambiguous_roles
+      FROM (
+          SELECT UPPER(TRIM(tenant_role.name)) AS role_name
+          FROM "${schema}".role AS tenant_role
+          JOIN tenant_context ON tenant_context.tenant_id = tenant_role.tenant_id
+          WHERE UPPER(TRIM(tenant_role.name)) IN ('HR', 'ADMIN')
+          GROUP BY UPPER(TRIM(tenant_role.name))
+          HAVING COUNT(*) > 1
+      ) AS duplicate_role;
+    IF ambiguous_roles IS NOT NULL THEN
+        RAISE EXCEPTION 'workplace RBAC found ambiguous HR or ADMIN roles in schema %: %', '${schema}', ambiguous_roles;
+    END IF;
+
+    SELECT COUNT(*)
+      INTO active_role_count
+      FROM "${schema}".role AS tenant_role
+      JOIN tenant_context ON tenant_context.tenant_id = tenant_role.tenant_id
+     WHERE UPPER(TRIM(tenant_role.name)) IN ('HR', 'ADMIN')
+       AND tenant_role.is_deleted = false;
+    IF active_role_count <> 2 THEN
+        RAISE EXCEPTION 'workplace RBAC requires one active HR role and one active ADMIN role in schema %', '${schema}';
+    END IF;
+
+    SELECT STRING_AGG(duplicate_permission.permission_code, ', ' ORDER BY duplicate_permission.permission_code)
+      INTO ambiguous_permissions
+      FROM (
+          SELECT LOWER(TRIM(permission.resource)) || ':' || LOWER(TRIM(permission.action)) AS permission_code
+          FROM "${schema}".permission AS permission
+          JOIN workplace_permission_catalog AS target
+            ON target.resource = LOWER(TRIM(permission.resource))
+           AND target.action = LOWER(TRIM(permission.action))
+          GROUP BY LOWER(TRIM(permission.resource)), LOWER(TRIM(permission.action))
+          HAVING COUNT(*) > 1
+      ) AS duplicate_permission;
+    IF ambiguous_permissions IS NOT NULL THEN
+        RAISE EXCEPTION 'workplace RBAC found ambiguous permission codes in schema %: %', '${schema}', ambiguous_permissions;
+    END IF;
+
+    SELECT STRING_AGG(duplicate_scope.scope_code, ', ' ORDER BY duplicate_scope.scope_code)
+      INTO ambiguous_scopes
+      FROM (
+          SELECT permission_scope.role_id::text || ':' || LOWER(TRIM(permission_scope.resource)) AS scope_code
+          FROM "${schema}".permission_scope AS permission_scope
+          JOIN workplace_permission_catalog AS target
+            ON target.resource = LOWER(TRIM(permission_scope.resource))
+           AND target.action = LOWER(TRIM(permission_scope.action))
+          GROUP BY permission_scope.role_id, LOWER(TRIM(permission_scope.resource)), LOWER(TRIM(permission_scope.action))
+          HAVING COUNT(*) > 1
+      ) AS duplicate_scope;
+    IF ambiguous_scopes IS NOT NULL THEN
+        RAISE EXCEPTION 'workplace RBAC found ambiguous permission scopes in schema %: %', '${schema}', ambiguous_scopes;
+    END IF;
+
+    SELECT STRING_AGG(required_module.module_code, ', ' ORDER BY required_module.module_code)
+      INTO invalid_modules
+      FROM (
+          SELECT DISTINCT module_code
+          FROM workplace_permission_catalog
+      ) AS required_module
+     WHERE (
+         SELECT COUNT(*)
+         FROM kabipay_ops.module AS module
+         WHERE UPPER(TRIM(module.code)) = required_module.module_code
+     ) <> 1;
+    IF invalid_modules IS NOT NULL THEN
+        RAISE EXCEPTION 'workplace RBAC requires exactly one module row for: %', invalid_modules;
+    END IF;
+END $$;
+
+CREATE TEMP TABLE workplace_rbac_change (
+    changed BOOLEAN NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO workplace_rbac_change (changed)
+SELECT
+    EXISTS (
+        SELECT 1
+        FROM workplace_permission_catalog AS target
+        LEFT JOIN "${schema}".permission AS permission
+          ON LOWER(TRIM(permission.resource)) = target.resource
+         AND LOWER(TRIM(permission.action)) = target.action
+        WHERE permission.id IS NULL
+           OR permission.resource <> target.resource
+           OR permission.action <> target.action
+    )
+    OR EXISTS (
+        SELECT 1
+        FROM workplace_rbac_matrix AS expected
+        JOIN tenant_context ON true
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM "${schema}".role AS tenant_role
+            JOIN "${schema}".role_permission AS role_permission ON role_permission.role_id = tenant_role.id
+            JOIN "${schema}".permission AS permission ON permission.id = role_permission.permission_id
+            WHERE tenant_role.tenant_id = tenant_context.tenant_id
+              AND tenant_role.is_deleted = false
+              AND UPPER(TRIM(tenant_role.name)) = expected.role_name
+              AND LOWER(TRIM(permission.resource)) = expected.resource
+              AND LOWER(TRIM(permission.action)) = expected.action
+        )
+    )
+    OR EXISTS (
+        SELECT 1
+        FROM "${schema}".role_permission AS role_permission
+        JOIN "${schema}".role AS tenant_role ON tenant_role.id = role_permission.role_id
+        JOIN "${schema}".permission AS permission ON permission.id = role_permission.permission_id
+        JOIN workplace_permission_catalog AS target
+          ON target.resource = LOWER(TRIM(permission.resource))
+         AND target.action = LOWER(TRIM(permission.action))
+        JOIN tenant_context ON true
+        WHERE tenant_role.tenant_id <> tenant_context.tenant_id
+           OR tenant_role.is_deleted = true
+           OR UPPER(TRIM(tenant_role.name)) NOT IN ('HR', 'ADMIN')
+    )
+    OR EXISTS (
+        SELECT 1
+        FROM workplace_rbac_matrix AS expected
+        JOIN tenant_context ON true
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM "${schema}".role AS tenant_role
+            JOIN "${schema}".permission_scope AS permission_scope ON permission_scope.role_id = tenant_role.id
+            WHERE tenant_role.tenant_id = tenant_context.tenant_id
+              AND tenant_role.is_deleted = false
+              AND UPPER(TRIM(tenant_role.name)) = expected.role_name
+              AND LOWER(TRIM(permission_scope.resource)) = expected.resource
+              AND LOWER(TRIM(permission_scope.action)) = expected.action
+              AND permission_scope.resource = expected.resource
+              AND permission_scope.action = expected.action
+              AND UPPER(TRIM(permission_scope.scope_type)) = expected.scope_type
+              AND permission_scope.tenant_id = tenant_context.tenant_id
+        )
+    )
+    OR EXISTS (
+        SELECT 1
+        FROM "${schema}".permission_scope AS permission_scope
+        JOIN "${schema}".role AS tenant_role ON tenant_role.id = permission_scope.role_id
+        JOIN workplace_permission_catalog AS target
+          ON target.resource = LOWER(TRIM(permission_scope.resource))
+         AND target.action = LOWER(TRIM(permission_scope.action))
+        JOIN tenant_context ON true
+        WHERE tenant_role.tenant_id <> tenant_context.tenant_id
+           OR tenant_role.is_deleted = true
+           OR UPPER(TRIM(tenant_role.name)) NOT IN ('HR', 'ADMIN')
+    );
+
+UPDATE "${schema}".permission AS permission
+SET resource = target.resource,
+    action = target.action,
+    description = COALESCE(permission.description, target.description),
+    updated_at = NOW()
+FROM workplace_permission_catalog AS target
+WHERE LOWER(TRIM(permission.resource)) = target.resource
+  AND LOWER(TRIM(permission.action)) = target.action
+  AND (permission.resource <> target.resource OR permission.action <> target.action OR permission.description IS NULL);
+
+INSERT INTO "${schema}".permission (id, resource, action, module_id, description)
+SELECT gen_random_uuid(), target.resource, target.action, module.id, target.description
+FROM workplace_permission_catalog AS target
+JOIN kabipay_ops.module AS module ON UPPER(TRIM(module.code)) = target.module_code
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM "${schema}".permission AS permission
+    WHERE LOWER(TRIM(permission.resource)) = target.resource
+      AND LOWER(TRIM(permission.action)) = target.action
+);
+
+DELETE FROM "${schema}".role_permission AS role_permission
+USING "${schema}".role AS tenant_role,
+      "${schema}".permission AS permission,
+      workplace_permission_catalog AS target,
+      tenant_context
+WHERE role_permission.role_id = tenant_role.id
+  AND role_permission.permission_id = permission.id
+  AND LOWER(TRIM(permission.resource)) = target.resource
+  AND LOWER(TRIM(permission.action)) = target.action
+  AND (
+      tenant_role.tenant_id <> tenant_context.tenant_id
+      OR tenant_role.is_deleted = true
+      OR UPPER(TRIM(tenant_role.name)) NOT IN ('HR', 'ADMIN')
+  );
+
+DELETE FROM "${schema}".permission_scope AS permission_scope
+USING "${schema}".role AS tenant_role,
+      workplace_permission_catalog AS target,
+      tenant_context
+WHERE permission_scope.role_id = tenant_role.id
+  AND LOWER(TRIM(permission_scope.resource)) = target.resource
+  AND LOWER(TRIM(permission_scope.action)) = target.action
+  AND (
+      tenant_role.tenant_id <> tenant_context.tenant_id
+      OR tenant_role.is_deleted = true
+      OR UPPER(TRIM(tenant_role.name)) NOT IN ('HR', 'ADMIN')
+  );
+
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT tenant_role.id, permission.id
+FROM workplace_rbac_matrix AS expected
+JOIN tenant_context ON true
+JOIN "${schema}".role AS tenant_role
+  ON tenant_role.tenant_id = tenant_context.tenant_id
+ AND tenant_role.is_deleted = false
+ AND UPPER(TRIM(tenant_role.name)) = expected.role_name
+JOIN "${schema}".permission AS permission
+  ON LOWER(TRIM(permission.resource)) = expected.resource
+ AND LOWER(TRIM(permission.action)) = expected.action
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+UPDATE "${schema}".permission_scope AS permission_scope
+SET tenant_id = tenant_context.tenant_id,
+    resource = expected.resource,
+    action = expected.action,
+    scope_type = expected.scope_type
+FROM workplace_rbac_matrix AS expected
+JOIN tenant_context ON true
+JOIN "${schema}".role AS tenant_role
+  ON tenant_role.tenant_id = tenant_context.tenant_id
+ AND tenant_role.is_deleted = false
+ AND UPPER(TRIM(tenant_role.name)) = expected.role_name
+WHERE permission_scope.role_id = tenant_role.id
+  AND LOWER(TRIM(permission_scope.resource)) = expected.resource
+  AND LOWER(TRIM(permission_scope.action)) = expected.action
+  AND (
+      permission_scope.tenant_id <> tenant_context.tenant_id
+      OR permission_scope.resource <> expected.resource
+      OR permission_scope.action <> expected.action
+      OR UPPER(TRIM(permission_scope.scope_type)) <> expected.scope_type
+  );
+
+INSERT INTO "${schema}".permission_scope (id, tenant_id, role_id, resource, action, scope_type)
+SELECT gen_random_uuid(), tenant_context.tenant_id, tenant_role.id, expected.resource, expected.action, expected.scope_type
+FROM workplace_rbac_matrix AS expected
+JOIN tenant_context ON true
+JOIN "${schema}".role AS tenant_role
+  ON tenant_role.tenant_id = tenant_context.tenant_id
+ AND tenant_role.is_deleted = false
+ AND UPPER(TRIM(tenant_role.name)) = expected.role_name
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM "${schema}".permission_scope AS permission_scope
+    WHERE permission_scope.role_id = tenant_role.id
+      AND LOWER(TRIM(permission_scope.resource)) = expected.resource
+      AND LOWER(TRIM(permission_scope.action)) = expected.action
+);
+
+DELETE FROM "${schema}".user_session AS user_session
+USING "${schema}"."user" AS tenant_user,
+      tenant_context,
+      workplace_rbac_change
+WHERE workplace_rbac_change.changed = true
+  AND user_session.user_id = tenant_user.id
+  AND tenant_user.tenant_id = tenant_context.tenant_id;
+
+DO $$
+DECLARE
+    permission_count INTEGER;
+    grant_count INTEGER;
+    scope_count INTEGER;
+BEGIN
+    SELECT COUNT(*)
+      INTO permission_count
+      FROM "${schema}".permission AS permission
+      JOIN workplace_permission_catalog AS target
+        ON target.resource = permission.resource
+       AND target.action = permission.action;
+    IF permission_count <> 6 THEN
+        RAISE EXCEPTION 'workplace RBAC expected six canonical permissions in schema %, found %', '${schema}', permission_count;
+    END IF;
+
+    SELECT COUNT(*)
+      INTO grant_count
+      FROM "${schema}".role_permission AS role_permission
+      JOIN "${schema}".role AS tenant_role ON tenant_role.id = role_permission.role_id
+      JOIN "${schema}".permission AS permission ON permission.id = role_permission.permission_id
+      JOIN workplace_permission_catalog AS target
+        ON target.resource = permission.resource
+       AND target.action = permission.action
+      JOIN tenant_context ON tenant_context.tenant_id = tenant_role.tenant_id
+     WHERE tenant_role.is_deleted = false
+       AND UPPER(TRIM(tenant_role.name)) IN ('HR', 'ADMIN');
+    IF grant_count <> 12 THEN
+        RAISE EXCEPTION 'workplace RBAC expected twelve HR and ADMIN grants in schema %, found %', '${schema}', grant_count;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".role_permission AS role_permission
+        JOIN "${schema}".role AS tenant_role ON tenant_role.id = role_permission.role_id
+        JOIN "${schema}".permission AS permission ON permission.id = role_permission.permission_id
+        JOIN workplace_permission_catalog AS target
+          ON target.resource = permission.resource
+         AND target.action = permission.action
+        JOIN tenant_context ON true
+        WHERE tenant_role.tenant_id <> tenant_context.tenant_id
+           OR tenant_role.is_deleted = true
+           OR UPPER(TRIM(tenant_role.name)) NOT IN ('HR', 'ADMIN')
+    ) THEN
+        RAISE EXCEPTION 'workplace RBAC left a configuration grant on a role other than active HR or ADMIN in schema %', '${schema}';
+    END IF;
+
+    SELECT COUNT(*)
+      INTO scope_count
+      FROM "${schema}".permission_scope AS permission_scope
+      JOIN "${schema}".role AS tenant_role ON tenant_role.id = permission_scope.role_id
+      JOIN workplace_permission_catalog AS target
+        ON target.resource = permission_scope.resource
+       AND target.action = permission_scope.action
+      JOIN tenant_context ON tenant_context.tenant_id = tenant_role.tenant_id
+     WHERE tenant_role.is_deleted = false
+       AND UPPER(TRIM(tenant_role.name)) IN ('HR', 'ADMIN')
+       AND permission_scope.tenant_id = tenant_context.tenant_id
+       AND UPPER(TRIM(permission_scope.scope_type)) = 'ALL';
+    IF scope_count <> 12 THEN
+        RAISE EXCEPTION 'workplace RBAC expected twelve exact ALL scopes in schema %, found %', '${schema}', scope_count;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "${schema}".permission_scope AS permission_scope
+        JOIN "${schema}".role AS tenant_role ON tenant_role.id = permission_scope.role_id
+        JOIN workplace_permission_catalog AS target
+          ON target.resource = permission_scope.resource
+         AND target.action = permission_scope.action
+        JOIN tenant_context ON true
+        WHERE tenant_role.tenant_id <> tenant_context.tenant_id
+           OR tenant_role.is_deleted = true
+           OR UPPER(TRIM(tenant_role.name)) NOT IN ('HR', 'ADMIN')
+           OR permission_scope.tenant_id <> tenant_context.tenant_id
+           OR UPPER(TRIM(permission_scope.scope_type)) <> 'ALL'
+    ) THEN
+        RAISE EXCEPTION 'workplace RBAC left an extra or non-ALL configuration scope in schema %', '${schema}';
+    END IF;
+END $$;
+        ]]></sql>
+
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    RAISE EXCEPTION '0070 workplace RBAC changes authorization data and requires a forward corrective migration instead of rollback';
+END $$;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

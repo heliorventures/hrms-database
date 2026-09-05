@@ -54,8 +54,8 @@ async function main() {
   await client.connect();
   try {
     const result = await client.query(sql);
-    if (result.rows && result.rows.length > 0) {
-      console.table(result.rows);
+    for (const statement of Array.isArray(result) ? result : [result]) {
+      if (statement.rows && statement.rows.length > 0) console.table(statement.rows);
     }
   } finally {
     await client.end();

@@ -7,6 +7,7 @@ $masterPath = Join-Path $root 'changelog\tenant.changelog-master.xml'
 $bootstrapPath = Join-Path $root 'scripts\bootstrap-tenant-admins.ps1'
 $seedPath = Join-Path $root 'scripts\seed-demo-data.ps1'
 $migrationInclude = 'migrations/0069_permission_contract_convergence/permission_contract_convergence.xml'
+$nextMigrationInclude = 'migrations/0070_workplace_configuration_rbac/workplace_configuration_rbac.xml'
 $backfillInclude = 'migrations/0068_permission_catalog_backfill/permission_catalog_backfill.xml'
 $previousMigrationInclude = 'migrations/0068_employee_status_integrity/employee_status_integrity.xml'
 
@@ -116,7 +117,7 @@ $migrationIndex = [array]::IndexOf($includes, $migrationInclude)
 Assert-True ($previousIndex -ge 0) 'tenant master changelog must retain migration 0068'
 Assert-True ($backfillIndex -eq ($previousIndex + 1)) 'tenant master changelog must include the permission catalog backfill immediately after migration 0068'
 Assert-True ($migrationIndex -eq ($backfillIndex + 1)) 'tenant master changelog must include migration 0069 immediately after the permission catalog backfill'
-Assert-True ($includes[-1] -eq $migrationInclude) '0069 must be the final tenant migration'
+Assert-True ($includes[$migrationIndex + 1] -eq $nextMigrationInclude) 'tenant master changelog must include migration 0070 immediately after 0069'
 
 Assert-True ($sql -match 'LOCK TABLE .*user_session.*workflow_step.*approval_rule.*expense_policy.*announcement.*NOWAIT') 'migration must lock every rewritten authorization consumer and user_session with NOWAIT'
 Assert-True ($sql -match "'employee_directory'\s*,\s*'read'") 'directory permission is missing'
@@ -159,7 +160,10 @@ $expectedPermissions = @(
     'PAYROLL:READ:PAYROLL', 'PAYROLL:MANAGE:PAYROLL', 'PAYROLL:STATUTORY_EXPORT:PAYROLL',
     'TAX:READ:TAX', 'TAX:SUBMIT:TAX', 'TAX:APPROVE:TAX', 'TAX:MANAGE:TAX',
     'WORKFLOW:MANAGE:WORKFLOW',
-    'BENEFITS:SELF:EMPLOYEE', 'ONBOARDING:SELF:EMPLOYEE', 'GRIEVANCE:SELF:EMPLOYEE'
+    'BENEFITS:SELF:EMPLOYEE', 'BENEFITS:MANAGE:EMPLOYEE',
+    'RECRUITMENT:MANAGE:RECRUITMENT', 'PERFORMANCE:MANAGE:EMPLOYEE',
+    'LEARNING:MANAGE:EMPLOYEE', 'SUCCESSION:MANAGE:EMPLOYEE', 'COMPENSATION:MANAGE:EMPLOYEE',
+    'ONBOARDING:SELF:EMPLOYEE', 'GRIEVANCE:SELF:EMPLOYEE'
 )
 $expectedGrants = @(
     'EMPLOYEE:EMPLOYEE_DIRECTORY:READ:ALL', 'EMPLOYEE:EMPLOYEE:READ:SELF',
