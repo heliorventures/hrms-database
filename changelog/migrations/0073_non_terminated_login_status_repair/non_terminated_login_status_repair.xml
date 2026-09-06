@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0073-001-reactivate-other-non-terminated-login-users" author="kabipay-dev" runInTransaction="true">
+        <comment>Complete the login-status repair for users disabled by INACTIVE or SUSPENDED employee states. Only termination controls login deactivation.</comment>
+        <sql><![CDATA[
+UPDATE "${schema}"."user" AS login_user
+   SET is_active = TRUE,
+       updated_at = CURRENT_TIMESTAMP
+  FROM "${schema}".employee AS employee
+ WHERE employee.tenant_id = login_user.tenant_id
+   AND employee.user_id = login_user.id
+   AND employee.is_deleted = FALSE
+   AND UPPER(TRIM(employee.status)) IN ('INACTIVE', 'SUSPENDED')
+   AND login_user.is_deleted = FALSE
+   AND login_user.is_active = FALSE;
+        ]]></sql>
+        <rollback>
+            <!-- Account restoration is a data repair and cannot be reversed without disabling valid users. -->
+            <sql>SELECT 1;</sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
