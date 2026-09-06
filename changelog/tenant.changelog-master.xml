@@ -86,5 +86,7 @@
     <include file="migrations/0068_permission_catalog_backfill/permission_catalog_backfill.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0069_permission_contract_convergence/permission_contract_convergence.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0070_workplace_configuration_rbac/workplace_configuration_rbac.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0071_leave_supporting_document_file/leave_supporting_document_file.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0072_on_leave_login_repair/on_leave_login_repair.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

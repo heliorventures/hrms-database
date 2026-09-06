@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0071-001-leave-supporting-document-file" author="kabipay-dev" runInTransaction="true">
+        <comment>Store leave evidence as a tenant-bound private file while retaining historical text references for existing requests.</comment>
+
+        <addColumn tableName="leave_request" schemaName="${schema}">
+            <column name="supporting_document_file_storage_id" type="UUID"/>
+        </addColumn>
+
+        <addForeignKeyConstraint
+            baseTableSchemaName="${schema}"
+            baseTableName="leave_request"
+            baseColumnNames="tenant_id,supporting_document_file_storage_id"
+            referencedTableSchemaName="${schema}"
+            referencedTableName="file_storage"
+            referencedColumnNames="tenant_id,id"
+            constraintName="fk_leave_request_supporting_document_file_tenant"
+            onDelete="RESTRICT"/>
+
+        <createIndex
+            tableName="leave_request"
+            schemaName="${schema}"
+            indexName="idx_leave_request_supporting_document_file">
+            <column name="tenant_id"/>
+            <column name="supporting_document_file_storage_id"/>
+        </createIndex>
+
+        <rollback>
+            <dropIndex
+                tableName="leave_request"
+                schemaName="${schema}"
+                indexName="idx_leave_request_supporting_document_file"/>
+            <dropForeignKeyConstraint
+                baseTableSchemaName="${schema}"
+                baseTableName="leave_request"
+                constraintName="fk_leave_request_supporting_document_file_tenant"/>
+            <dropColumn
+                tableName="leave_request"
+                schemaName="${schema}"
+                columnName="supporting_document_file_storage_id"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
