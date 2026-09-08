@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0075 - PERFORMANCE, FEEDBACK, AND APPRAISAL LIFECYCLE -->
+
+    <changeSet id="0075-001-performance-program" author="kabipay-dev">
+        <createTable tableName="performance_program" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="cadence" type="VARCHAR(20)"><constraints nullable="false"/></column>
+            <column name="anchor_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(20)" defaultValue="DRAFT"><constraints nullable="false"/></column>
+            <column name="include_calibration" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="include_acknowledgement" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="goal_weight_required" type="NUMERIC(7,4)" defaultValueNumeric="100"><constraints nullable="false"/></column>
+            <column name="rating_min" type="NUMERIC(7,4)" defaultValueNumeric="1"><constraints nullable="false"/></column>
+            <column name="rating_max" type="NUMERIC(7,4)" defaultValueNumeric="5"><constraints nullable="false"/></column>
+            <column name="created_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="performance_program" schemaName="${schema}" columnNames="tenant_id,name" constraintName="uq_performance_program_tenant_name"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_program" baseColumnNames="created_by" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id" constraintName="fk_performance_program_created_by" onDelete="SET NULL"/>
+        <sql>ALTER TABLE "${schema}".performance_program ADD CONSTRAINT chk_performance_program_cadence CHECK (cadence IN ('MONTHLY','QUARTERLY','YEARLY','MANUAL')), ADD CONSTRAINT chk_performance_program_status CHECK (status IN ('DRAFT','ACTIVE','ARCHIVED')), ADD CONSTRAINT chk_performance_program_rating CHECK (rating_min &lt; rating_max AND goal_weight_required &gt;= 0);</sql>
+        <sql>CREATE TRIGGER trg_performance_program_updated_at BEFORE UPDATE ON "${schema}".performance_program FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+    </changeSet>
+
+    <changeSet id="0075-002-appraisal-template" author="kabipay-dev">
+        <createTable tableName="appraisal_template" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="performance_program_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="version" type="INT"><constraints nullable="false"/></column>
+            <column name="name" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(20)" defaultValue="DRAFT"><constraints nullable="false"/></column>
+            <column name="published_at" type="TIMESTAMPTZ"/>
+            <column name="published_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="appraisal_template" schemaName="${schema}" columnNames="performance_program_id,version" constraintName="uq_appraisal_template_program_version"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="appraisal_template" baseColumnNames="performance_program_id" referencedTableSchemaName="${schema}" referencedTableName="performance_program" referencedColumnNames="id" constraintName="fk_appraisal_template_program" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="appraisal_template" baseColumnNames="published_by" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id" constraintName="fk_appraisal_template_published_by" onDelete="SET NULL"/>
+        <sql>ALTER TABLE "${schema}".appraisal_template ADD CONSTRAINT chk_appraisal_template_status CHECK (status IN ('DRAFT','PUBLISHED','RETIRED')), ADD CONSTRAINT chk_appraisal_template_version CHECK (version &gt;= 1);</sql>
+        <sql>CREATE TRIGGER trg_appraisal_template_updated_at BEFORE UPDATE ON "${schema}".appraisal_template FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+    </changeSet>
+
+    <changeSet id="0075-003-appraisal-questionnaire" author="kabipay-dev">
+        <createTable tableName="appraisal_template_section" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="appraisal_template_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="title" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="display_order" type="INT"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="appraisal_template_section" schemaName="${schema}" columnNames="appraisal_template_id,display_order" constraintName="uq_appraisal_section_order"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="appraisal_template_section" baseColumnNames="appraisal_template_id" referencedTableSchemaName="${schema}" referencedTableName="appraisal_template" referencedColumnNames="id" constraintName="fk_appraisal_section_template" onDelete="CASCADE"/>
+
+        <createTable tableName="appraisal_question" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="section_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="parent_question_id" type="UUID"/>
+            <column name="question_type" type="VARCHAR(30)"><constraints nullable="false"/></column>
+            <column name="prompt" type="TEXT"><constraints nullable="false"/></column>
+            <column name="is_required" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="answerer" type="VARCHAR(20)"><constraints nullable="false"/></column>
+            <column name="self_rating_enabled" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="manager_rating_enabled" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="display_order" type="INT"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="appraisal_question" schemaName="${schema}" columnNames="id,section_id" constraintName="uq_appraisal_question_id_section"/>
+        <addUniqueConstraint tableName="appraisal_question" schemaName="${schema}" columnNames="section_id,display_order" constraintName="uq_appraisal_question_order"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="appraisal_question" baseColumnNames="section_id" referencedTableSchemaName="${schema}" referencedTableName="appraisal_template_section" referencedColumnNames="id" constraintName="fk_appraisal_question_section" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="appraisal_question" baseColumnNames="parent_question_id,section_id" referencedTableSchemaName="${schema}" referencedTableName="appraisal_question" referencedColumnNames="id,section_id" constraintName="fk_appraisal_question_parent_section" onDelete="CASCADE"/>
+        <sql>ALTER TABLE "${schema}".appraisal_question ADD CONSTRAINT chk_appraisal_question_type CHECK (question_type IN ('SINGLE_CHOICE','MULTIPLE_CHOICE','RATING','SHORT_TEXT','LONG_TEXT')), ADD CONSTRAINT chk_appraisal_question_answerer CHECK (answerer IN ('EMPLOYEE','MANAGER','BOTH')), ADD CONSTRAINT chk_appraisal_question_parent CHECK (parent_question_id IS NULL OR parent_question_id &lt;&gt; id);</sql>
+
+        <createTable tableName="appraisal_question_option" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="question_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="label" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="score" type="NUMERIC(7,4)"/>
+            <column name="display_order" type="INT"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="appraisal_question_option" schemaName="${schema}" columnNames="question_id,display_order" constraintName="uq_appraisal_question_option_order"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="appraisal_question_option" baseColumnNames="question_id" referencedTableSchemaName="${schema}" referencedTableName="appraisal_question" referencedColumnNames="id" constraintName="fk_appraisal_question_option_question" onDelete="CASCADE"/>
+    </changeSet>
+
+    <changeSet id="0075-004-review-cycle-lifecycle" author="kabipay-dev">
+        <addColumn tableName="review_cycle" schemaName="${schema}">
+            <column name="performance_program_id" type="UUID"/>
+            <column name="period_key" type="VARCHAR(30)"/>
+            <column name="appraisal_template_id" type="UUID"/>
+            <column name="current_stage" type="VARCHAR(40)" defaultValue="GOAL_SETTING"><constraints nullable="false"/></column>
+            <column name="self_review_due_date" type="DATE"/>
+            <column name="manager_review_due_date" type="DATE"/>
+            <column name="launched_at" type="TIMESTAMPTZ"/>
+        </addColumn>
+        <addUniqueConstraint tableName="review_cycle" schemaName="${schema}" columnNames="performance_program_id,period_key" constraintName="uq_review_cycle_program_period"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="review_cycle" baseColumnNames="performance_program_id" referencedTableSchemaName="${schema}" referencedTableName="performance_program" referencedColumnNames="id" constraintName="fk_review_cycle_program" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="review_cycle" baseColumnNames="appraisal_template_id" referencedTableSchemaName="${schema}" referencedTableName="appraisal_template" referencedColumnNames="id" constraintName="fk_review_cycle_template" onDelete="RESTRICT"/>
+        <sql>ALTER TABLE "${schema}".review_cycle ADD CONSTRAINT chk_review_cycle_stage CHECK (current_stage IN ('GOAL_SETTING','SELF_REVIEW','MANAGER_REVIEW','HR_CALIBRATION','EMPLOYEE_ACKNOWLEDGEMENT','CLOSED'));</sql>
+    </changeSet>
+
+    <changeSet id="0075-005-performance-participant-answer" author="kabipay-dev">
+        <createTable tableName="performance_participant" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="review_cycle_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="manager_employee_id" type="UUID"/>
+            <column name="department_id" type="UUID"/>
+            <column name="designation_id" type="UUID"/>
+            <column name="work_location_id" type="UUID"/>
+            <column name="appraisal_template_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(40)" defaultValue="GOAL_SETTING"><constraints nullable="false"/></column>
+            <column name="is_excluded" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="exclusion_reason" type="TEXT"/>
+            <column name="response_revision" type="INT" defaultValueNumeric="1"><constraints nullable="false"/></column>
+            <column name="self_submitted_at" type="TIMESTAMPTZ"/>
+            <column name="manager_submitted_at" type="TIMESTAMPTZ"/>
+            <column name="acknowledged_at" type="TIMESTAMPTZ"/>
+            <column name="acknowledgement_comment" type="TEXT"/>
+            <column name="final_rating" type="NUMERIC(7,4)"/>
+            <column name="performance_band" type="VARCHAR(50)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="performance_participant" schemaName="${schema}" columnNames="review_cycle_id,employee_id" constraintName="uq_performance_participant_cycle_employee"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_participant" baseColumnNames="review_cycle_id" referencedTableSchemaName="${schema}" referencedTableName="review_cycle" referencedColumnNames="id" constraintName="fk_performance_participant_cycle" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_participant" baseColumnNames="employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_performance_participant_employee" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_participant" baseColumnNames="manager_employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_performance_participant_manager" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_participant" baseColumnNames="appraisal_template_id" referencedTableSchemaName="${schema}" referencedTableName="appraisal_template" referencedColumnNames="id" constraintName="fk_performance_participant_template" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_performance_participant_updated_at BEFORE UPDATE ON "${schema}".performance_participant FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+
+        <createTable tableName="appraisal_answer" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="performance_participant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="question_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="revision" type="INT" defaultValueNumeric="1"><constraints nullable="false"/></column>
+            <column name="employee_text_answer" type="TEXT"/>
+            <column name="employee_selected_option_ids" type="JSONB"/>
+            <column name="self_rating" type="NUMERIC(7,4)"/>
+            <column name="manager_text_answer" type="TEXT"/>
+            <column name="manager_selected_option_ids" type="JSONB"/>
+            <column name="manager_rating" type="NUMERIC(7,4)"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="appraisal_answer" schemaName="${schema}" columnNames="performance_participant_id,question_id,revision" constraintName="uq_appraisal_answer_participant_question_revision"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="appraisal_answer" baseColumnNames="performance_participant_id" referencedTableSchemaName="${schema}" referencedTableName="performance_participant" referencedColumnNames="id" constraintName="fk_appraisal_answer_participant" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="appraisal_answer" baseColumnNames="question_id" referencedTableSchemaName="${schema}" referencedTableName="appraisal_question" referencedColumnNames="id" constraintName="fk_appraisal_answer_question" onDelete="RESTRICT"/>
+        <sql>CREATE TRIGGER trg_appraisal_answer_updated_at BEFORE UPDATE ON "${schema}".appraisal_answer FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+    </changeSet>
+
+    <changeSet id="0075-006-feedback-and-exceptions" author="kabipay-dev">
+        <createTable tableName="continuous_feedback" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="review_cycle_id" type="UUID"/>
+            <column name="goal_id" type="UUID"/>
+            <column name="reviewer_employee_id" type="UUID"/>
+            <column name="reviewee_employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="visibility" type="VARCHAR(20)"><constraints nullable="false"/></column>
+            <column name="observation_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="comments" type="TEXT"><constraints nullable="false"/></column>
+            <column name="created_by_user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="continuous_feedback" baseColumnNames="review_cycle_id" referencedTableSchemaName="${schema}" referencedTableName="review_cycle" referencedColumnNames="id" constraintName="fk_continuous_feedback_cycle" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="continuous_feedback" baseColumnNames="goal_id" referencedTableSchemaName="${schema}" referencedTableName="goal" referencedColumnNames="id" constraintName="fk_continuous_feedback_goal" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="continuous_feedback" baseColumnNames="reviewer_employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_continuous_feedback_reviewer" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="continuous_feedback" baseColumnNames="reviewee_employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_continuous_feedback_reviewee" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="continuous_feedback" baseColumnNames="created_by_user_id" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id" constraintName="fk_continuous_feedback_created_by" onDelete="RESTRICT"/>
+        <sql>ALTER TABLE "${schema}".continuous_feedback ADD CONSTRAINT chk_continuous_feedback_visibility CHECK (visibility IN ('EMPLOYEE_VISIBLE','HR_ONLY')), ADD CONSTRAINT chk_continuous_feedback_comments CHECK (CHAR_LENGTH(BTRIM(comments)) BETWEEN 1 AND 4000);</sql>
+
+        <createTable tableName="performance_admin_exception" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="performance_program_id" type="UUID"/>
+            <column name="review_cycle_id" type="UUID"/>
+            <column name="exception_code" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="details" type="TEXT"><constraints nullable="false"/></column>
+            <column name="resolved_at" type="TIMESTAMPTZ"/>
+            <column name="resolved_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_admin_exception" baseColumnNames="performance_program_id" referencedTableSchemaName="${schema}" referencedTableName="performance_program" referencedColumnNames="id" constraintName="fk_performance_exception_program" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_admin_exception" baseColumnNames="review_cycle_id" referencedTableSchemaName="${schema}" referencedTableName="review_cycle" referencedColumnNames="id" constraintName="fk_performance_exception_cycle" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_admin_exception" baseColumnNames="resolved_by" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id" constraintName="fk_performance_exception_resolved_by" onDelete="SET NULL"/>
+    </changeSet>
+
+    <changeSet id="0075-007-performance-rbac" author="kabipay-dev">
+        <sql splitStatements="false"><![CDATA[
+INSERT INTO "${schema}".permission (id, resource, action, module_id, description)
+SELECT gen_random_uuid(), 'performance', requested.action, module.id, requested.description
+FROM (
+    VALUES
+        ('evaluate', 'Evaluate performance for authorized team members'),
+        ('self', 'Manage own goals and appraisal response')
+) AS requested(action, description)
+JOIN kabipay_ops.module AS module ON UPPER(TRIM(module.code)) = 'EMPLOYEE'
+WHERE NOT EXISTS (
+    SELECT 1 FROM "${schema}".permission existing
+    WHERE LOWER(TRIM(existing.resource)) = 'performance'
+      AND LOWER(TRIM(existing.action)) = requested.action
+);
+
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT tenant_role.id, permission.id
+FROM "${schema}".role tenant_role
+JOIN "${schema}".permission permission
+  ON LOWER(TRIM(permission.resource)) = 'performance'
+ AND (
+      (LOWER(TRIM(permission.action)) = 'evaluate' AND UPPER(TRIM(tenant_role.name)) = 'MANAGER')
+      OR
+      (LOWER(TRIM(permission.action)) = 'self' AND UPPER(TRIM(tenant_role.name)) IN ('EMPLOYEE','MANAGER','HR','ADMIN'))
+ )
+WHERE tenant_role.is_deleted = FALSE
+  AND NOT EXISTS (
+      SELECT 1 FROM "${schema}".role_permission existing
+      WHERE existing.role_id = tenant_role.id AND existing.permission_id = permission.id
+  );
+
+INSERT INTO "${schema}".permission_scope
+    (id, tenant_id, role_id, resource, action, scope_type, created_at)
+SELECT gen_random_uuid(), tenant_role.tenant_id, tenant_role.id, 'performance', permission.action,
+       CASE permission.action WHEN 'evaluate' THEN 'TEAM' ELSE 'SELF' END, NOW()
+FROM "${schema}".role tenant_role
+JOIN "${schema}".permission permission
+  ON LOWER(TRIM(permission.resource)) = 'performance'
+ AND (
+      (LOWER(TRIM(permission.action)) = 'evaluate' AND UPPER(TRIM(tenant_role.name)) = 'MANAGER')
+      OR
+      (LOWER(TRIM(permission.action)) = 'self' AND UPPER(TRIM(tenant_role.name)) IN ('EMPLOYEE','MANAGER','HR','ADMIN'))
+ )
+WHERE tenant_role.is_deleted = FALSE
+  AND NOT EXISTS (
+      SELECT 1 FROM "${schema}".permission_scope existing
+      WHERE existing.tenant_id = tenant_role.tenant_id
+        AND existing.role_id = tenant_role.id
+        AND LOWER(TRIM(existing.resource)) = 'performance'
+        AND LOWER(TRIM(existing.action)) = LOWER(TRIM(permission.action))
+  );
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="0075-008-forward-only-rollback-guard" author="kabipay-dev">
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    RAISE EXCEPTION '0075 performance appraisal lifecycle contains durable responses and requires a forward corrective migration instead of rollback';
+END $$;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

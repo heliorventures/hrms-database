@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <!-- DOMAIN 0074 — AUTOMATED EMPLOYEE NOTIFICATIONS -->
+
+    <changeSet id="0074-001-notification-automation-setting" author="kabipay-dev">
+        <createTable tableName="notification_automation_setting" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false" unique="true" uniqueConstraintName="uq_notification_automation_setting_tenant"/></column>
+            <column name="birthday_enabled" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="work_anniversary_enabled" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="company_sharing_enabled" type="BOOLEAN" defaultValueBoolean="true"><constraints nullable="false"/></column>
+            <column name="delivery_local_time" type="TIME" defaultValueComputed="'09:00:00'::time"><constraints nullable="false"/></column>
+            <column name="birthday_title_template" type="VARCHAR(500)" defaultValue="Happy birthday, {employee_name}!"><constraints nullable="false"/></column>
+            <column name="birthday_message_template" type="TEXT" defaultValue="Wishing {employee_name} a wonderful birthday."><constraints nullable="false"/></column>
+            <column name="anniversary_title_template" type="VARCHAR(500)" defaultValue="Work anniversary: {employee_name}"><constraints nullable="false"/></column>
+            <column name="anniversary_message_template" type="TEXT" defaultValue="Celebrating {employee_name}'s {service_years}-year work anniversary."><constraints nullable="false"/></column>
+            <column name="updated_by" type="UUID"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="notification_automation_setting" baseColumnNames="updated_by"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_notification_automation_setting_updated_by" onDelete="SET NULL"/>
+        <sql>ALTER TABLE "${schema}".notification_automation_setting ADD CONSTRAINT chk_notification_automation_setting_templates CHECK (CHAR_LENGTH(BTRIM(birthday_title_template)) BETWEEN 1 AND 500 AND CHAR_LENGTH(BTRIM(birthday_message_template)) BETWEEN 1 AND 4000 AND CHAR_LENGTH(BTRIM(anniversary_title_template)) BETWEEN 1 AND 500 AND CHAR_LENGTH(BTRIM(anniversary_message_template)) BETWEEN 1 AND 4000);</sql>
+        <sql>CREATE TRIGGER trg_notification_automation_setting_updated_at BEFORE UPDATE ON "${schema}".notification_automation_setting FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+    </changeSet>
+
+    <changeSet id="0074-002-employee-celebration-preference" author="kabipay-dev">
+        <createTable tableName="employee_celebration_preference" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="share_birthday" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="share_work_anniversary" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="employee_celebration_preference" schemaName="${schema}"
+                             columnNames="tenant_id,employee_id"
+                             constraintName="uq_employee_celebration_preference_tenant_employee"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_celebration_preference" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_employee_celebration_preference_employee" onDelete="CASCADE"/>
+        <createIndex tableName="employee_celebration_preference" schemaName="${schema}" indexName="idx_employee_celebration_preference_tenant">
+            <column name="tenant_id"/>
+        </createIndex>
+        <sql>CREATE TRIGGER trg_employee_celebration_preference_updated_at BEFORE UPDATE ON "${schema}".employee_celebration_preference FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+    </changeSet>
+
+    <changeSet id="0074-003-automated-notification-occurrence" author="kabipay-dev">
+        <createTable tableName="automated_notification_occurrence" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="event_type" type="VARCHAR(50)"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="event_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="recipient_user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="notification_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="automated_notification_occurrence" schemaName="${schema}"
+                             columnNames="tenant_id,event_type,employee_id,event_date,recipient_user_id"
+                             constraintName="uq_automated_notification_occurrence_delivery"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="automated_notification_occurrence" baseColumnNames="employee_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id"
+                                 constraintName="fk_automated_notification_occurrence_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="automated_notification_occurrence" baseColumnNames="recipient_user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_automated_notification_occurrence_recipient" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="automated_notification_occurrence" baseColumnNames="notification_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="notification" referencedColumnNames="id"
+                                 constraintName="fk_automated_notification_occurrence_notification" onDelete="CASCADE"/>
+        <createIndex tableName="automated_notification_occurrence" schemaName="${schema}" indexName="idx_automated_notification_occurrence_tenant_date">
+            <column name="tenant_id"/>
+            <column name="event_date"/>
+        </createIndex>
+        <createIndex tableName="automated_notification_occurrence" schemaName="${schema}" indexName="idx_automated_notification_occurrence_recipient_date">
+            <column name="recipient_user_id"/>
+            <column name="event_date"/>
+        </createIndex>
+        <sql>ALTER TABLE "${schema}".automated_notification_occurrence ADD CONSTRAINT chk_automated_notification_occurrence_event_type CHECK (event_type IN ('EMPLOYEE_BIRTHDAY','EMPLOYEE_WORK_ANNIVERSARY'));</sql>
+    </changeSet>
+
+    <changeSet id="0074-004-forward-only-rollback-guard" author="kabipay-dev">
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+DO $$
+BEGIN
+    RAISE EXCEPTION '0074 automated employee notifications contains durable consent and delivery data and requires a forward corrective migration instead of rollback';
+END $$;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

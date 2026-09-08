@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+<changeSet id="0079-001-announcement-video" author="kabipay-dev">
+<sql><![CDATA[
+ALTER TABLE "${schema}".announcement ADD COLUMN video_file_storage_id UUID, ADD COLUMN video_link TEXT;
+CREATE UNIQUE INDEX uq_announcement_video_parent ON "${schema}".announcement(tenant_id,id);
+CREATE UNIQUE INDEX uq_video_storage_parent ON "${schema}".file_storage(tenant_id,id);
+CREATE UNIQUE INDEX uq_video_user_parent ON "${schema}"."user"(tenant_id,id);
+ALTER TABLE "${schema}".announcement ADD CONSTRAINT fk_announcement_video_file FOREIGN KEY(tenant_id,video_file_storage_id) REFERENCES "${schema}".file_storage(tenant_id,id), ADD CONSTRAINT chk_announcement_video_choice CHECK(video_file_storage_id IS NULL OR video_link IS NULL);
+CREATE TABLE "${schema}".announcement_video_stage (
+ id UUID PRIMARY KEY, tenant_id UUID NOT NULL, created_by UUID NOT NULL,
+ file_storage_id UUID NOT NULL UNIQUE, purpose TEXT NOT NULL DEFAULT 'ANNOUNCEMENT_VIDEO',
+ uploaded_at TIMESTAMPTZ, claimed_announcement_id UUID, expires_at TIMESTAMPTZ NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ CONSTRAINT fk_video_stage_file FOREIGN KEY(tenant_id,file_storage_id) REFERENCES "${schema}".file_storage(tenant_id,id),
+ CONSTRAINT fk_video_stage_owner FOREIGN KEY(tenant_id,created_by) REFERENCES "${schema}"."user"(tenant_id,id),
+ CONSTRAINT fk_video_stage_parent FOREIGN KEY(tenant_id,claimed_announcement_id) REFERENCES "${schema}".announcement(tenant_id,id) ON DELETE CASCADE,
+ CONSTRAINT chk_video_stage_purpose CHECK(purpose='ANNOUNCEMENT_VIDEO'),
+ CONSTRAINT chk_video_stage_claim CHECK(claimed_announcement_id IS NULL OR uploaded_at IS NOT NULL),
+ CONSTRAINT chk_video_stage_expiry CHECK(expires_at > created_at)
+);
+CREATE INDEX idx_announcement_video_stage_expiry ON "${schema}".announcement_video_stage(tenant_id,expires_at) WHERE claimed_announcement_id IS NULL;
+]]></sql>
+<rollback><sql><![CDATA[
+DROP TABLE "${schema}".announcement_video_stage;
+ALTER TABLE "${schema}".announcement DROP CONSTRAINT fk_announcement_video_file, DROP CONSTRAINT chk_announcement_video_choice, DROP COLUMN video_file_storage_id, DROP COLUMN video_link;
+DROP INDEX "${schema}".uq_announcement_video_parent;
+DROP INDEX "${schema}".uq_video_storage_parent;
+DROP INDEX "${schema}".uq_video_user_parent;
+]]></sql></rollback>
+</changeSet>
+</databaseChangeLog>

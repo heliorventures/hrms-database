@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0076-001-survey" author="kabipay-dev">
+        <createTable tableName="survey" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="title" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="description" type="TEXT"/>
+            <column name="status" type="VARCHAR(20)" defaultValue="DRAFT"><constraints nullable="false"/></column>
+            <column name="opens_at" type="TIMESTAMPTZ"/>
+            <column name="closes_at" type="TIMESTAMPTZ"/>
+            <column name="minimum_report_group_size" type="INT" defaultValueNumeric="5"><constraints nullable="false"/></column>
+            <column name="created_by" type="UUID"><constraints nullable="false"/></column>
+            <column name="published_at" type="TIMESTAMPTZ"/>
+            <column name="closed_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="survey" schemaName="${schema}" columnNames="tenant_id,title" constraintName="uq_survey_tenant_title"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey" baseColumnNames="created_by" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id" constraintName="fk_survey_created_by" onDelete="RESTRICT"/>
+        <sql>ALTER TABLE "${schema}".survey ADD CONSTRAINT chk_survey_status CHECK (status IN ('DRAFT','PUBLISHED','CLOSED')), ADD CONSTRAINT chk_survey_threshold CHECK (minimum_report_group_size &gt;= 3), ADD CONSTRAINT chk_survey_window CHECK (closes_at IS NULL OR opens_at IS NULL OR closes_at &gt; opens_at);</sql>
+        <sql>CREATE TRIGGER trg_survey_updated_at BEFORE UPDATE ON "${schema}".survey FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+    </changeSet>
+
+    <changeSet id="0076-002-survey-questionnaire" author="kabipay-dev">
+        <createTable tableName="survey_audience_department" schemaName="${schema}">
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="department_id" type="UUID"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="survey_audience_department" schemaName="${schema}" columnNames="survey_id,department_id" constraintName="pk_survey_audience_department"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_department" baseColumnNames="survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="id" constraintName="fk_survey_audience_survey" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_department" baseColumnNames="department_id" referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id" constraintName="fk_survey_audience_department" onDelete="CASCADE"/>
+
+        <createTable tableName="survey_section" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="title" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="display_order" type="INT"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="survey_section" schemaName="${schema}" columnNames="survey_id,display_order" constraintName="uq_survey_section_order"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_section" baseColumnNames="survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="id" constraintName="fk_survey_section_survey" onDelete="CASCADE"/>
+
+        <createTable tableName="survey_question" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="section_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="dimension" type="VARCHAR(100)" defaultValue="General"><constraints nullable="false"/></column>
+            <column name="question_type" type="VARCHAR(30)"><constraints nullable="false"/></column>
+            <column name="prompt" type="TEXT"><constraints nullable="false"/></column>
+            <column name="is_required" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="rating_min" type="NUMERIC(7,4)"/>
+            <column name="rating_max" type="NUMERIC(7,4)"/>
+            <column name="display_order" type="INT"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="survey_question" schemaName="${schema}" columnNames="section_id,display_order" constraintName="uq_survey_question_order"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_question" baseColumnNames="section_id" referencedTableSchemaName="${schema}" referencedTableName="survey_section" referencedColumnNames="id" constraintName="fk_survey_question_section" onDelete="CASCADE"/>
+        <sql>ALTER TABLE "${schema}".survey_question ADD CONSTRAINT chk_survey_question_type CHECK (question_type IN ('SINGLE_CHOICE','MULTIPLE_CHOICE','RATING','SHORT_TEXT','LONG_TEXT')), ADD CONSTRAINT chk_survey_rating_range CHECK ((question_type = 'RATING' AND rating_min IS NOT NULL AND rating_max IS NOT NULL AND rating_min &lt; rating_max) OR (question_type &lt;&gt; 'RATING' AND rating_min IS NULL AND rating_max IS NULL));</sql>
+
+        <createTable tableName="survey_question_option" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="question_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="label" type="VARCHAR(500)"><constraints nullable="false"/></column>
+            <column name="score" type="NUMERIC(7,4)"/>
+            <column name="display_order" type="INT"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="survey_question_option" schemaName="${schema}" columnNames="question_id,display_order" constraintName="uq_survey_option_order"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_question_option" baseColumnNames="question_id" referencedTableSchemaName="${schema}" referencedTableName="survey_question" referencedColumnNames="id" constraintName="fk_survey_option_question" onDelete="CASCADE"/>
+    </changeSet>
+
+    <changeSet id="0076-003-anonymous-responses" author="kabipay-dev">
+        <!-- Identity-bearing eligibility ledger. It is intentionally not referenced by survey_response. -->
+        <createTable tableName="survey_assignment" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="completed_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="survey_assignment" schemaName="${schema}" columnNames="survey_id,employee_id" constraintName="uq_survey_assignment_employee"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_assignment" baseColumnNames="survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="id" constraintName="fk_survey_assignment_survey" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_assignment" baseColumnNames="employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_survey_assignment_employee" onDelete="RESTRICT"/>
+
+        <!-- Identity-free response facts. Only broad org snapshots needed for aggregate authorization are stored. -->
+        <createTable tableName="survey_response" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="department_id" type="UUID"/>
+            <column name="manager_employee_id" type="UUID"/>
+            <column name="submitted_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_response" baseColumnNames="survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="id" constraintName="fk_survey_response_survey" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_response" baseColumnNames="department_id" referencedTableSchemaName="${schema}" referencedTableName="department" referencedColumnNames="id" constraintName="fk_survey_response_department" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_response" baseColumnNames="manager_employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_survey_response_manager" onDelete="SET NULL"/>
+
+        <createTable tableName="survey_answer" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_response_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="question_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="selected_option_ids" type="JSONB"/>
+            <column name="numeric_answer" type="NUMERIC(12,4)"/>
+            <column name="text_answer" type="TEXT"/>
+        </createTable>
+        <addUniqueConstraint tableName="survey_answer" schemaName="${schema}" columnNames="survey_response_id,question_id" constraintName="uq_survey_answer_response_question"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_answer" baseColumnNames="survey_response_id" referencedTableSchemaName="${schema}" referencedTableName="survey_response" referencedColumnNames="id" constraintName="fk_survey_answer_response" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_answer" baseColumnNames="question_id" referencedTableSchemaName="${schema}" referencedTableName="survey_question" referencedColumnNames="id" constraintName="fk_survey_answer_question" onDelete="RESTRICT"/>
+        <sql>ALTER TABLE "${schema}".survey_answer ADD CONSTRAINT chk_survey_answer_one_value CHECK (num_nonnulls(selected_option_ids, numeric_answer, text_answer) = 1), ADD CONSTRAINT chk_survey_answer_text CHECK (text_answer IS NULL OR CHAR_LENGTH(BTRIM(text_answer)) BETWEEN 1 AND 8000);</sql>
+    </changeSet>
+
+    <changeSet id="0076-004-survey-rbac" author="kabipay-dev">
+        <sql splitStatements="false"><![CDATA[
+INSERT INTO "${schema}".permission (id, resource, action, module_id, description)
+SELECT gen_random_uuid(), 'survey', requested.action, module.id, requested.description
+FROM (VALUES ('manage','Create and publish employee surveys'), ('respond','Submit assigned surveys'), ('results','View privacy-protected aggregate survey results')) requested(action, description)
+JOIN kabipay_ops.module module ON UPPER(TRIM(module.code)) = 'EMPLOYEE'
+WHERE NOT EXISTS (SELECT 1 FROM "${schema}".permission p WHERE LOWER(TRIM(p.resource)) = 'survey' AND LOWER(TRIM(p.action)) = requested.action);
+
+INSERT INTO "${schema}".role_permission (role_id, permission_id)
+SELECT r.id, p.id FROM "${schema}".role r JOIN "${schema}".permission p ON LOWER(TRIM(p.resource)) = 'survey'
+WHERE r.is_deleted = FALSE AND ((LOWER(TRIM(p.action)) IN ('manage','results') AND UPPER(TRIM(r.name)) IN ('HR','ADMIN')) OR (LOWER(TRIM(p.action)) = 'results' AND UPPER(TRIM(r.name)) = 'MANAGER') OR (LOWER(TRIM(p.action)) = 'respond' AND UPPER(TRIM(r.name)) IN ('EMPLOYEE','MANAGER','HR','ADMIN')))
+AND NOT EXISTS (SELECT 1 FROM "${schema}".role_permission rp WHERE rp.role_id = r.id AND rp.permission_id = p.id);
+
+INSERT INTO "${schema}".permission_scope (id, tenant_id, role_id, resource, action, scope_type, created_at)
+SELECT gen_random_uuid(), r.tenant_id, r.id, 'survey', p.action,
+CASE WHEN LOWER(TRIM(p.action)) = 'respond' THEN 'SELF' WHEN UPPER(TRIM(r.name)) = 'MANAGER' THEN 'TEAM' ELSE 'ALL' END, NOW()
+FROM "${schema}".role r JOIN "${schema}".permission p ON LOWER(TRIM(p.resource)) = 'survey'
+WHERE r.is_deleted = FALSE AND ((LOWER(TRIM(p.action)) IN ('manage','results') AND UPPER(TRIM(r.name)) IN ('HR','ADMIN')) OR (LOWER(TRIM(p.action)) = 'results' AND UPPER(TRIM(r.name)) = 'MANAGER') OR (LOWER(TRIM(p.action)) = 'respond' AND UPPER(TRIM(r.name)) IN ('EMPLOYEE','MANAGER','HR','ADMIN')))
+AND NOT EXISTS (SELECT 1 FROM "${schema}".permission_scope ps WHERE ps.tenant_id = r.tenant_id AND ps.role_id = r.id AND LOWER(TRIM(ps.resource)) = 'survey' AND LOWER(TRIM(ps.action)) = LOWER(TRIM(p.action)));
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="0076-005-forward-only-rollback-guard" author="kabipay-dev">
+        <rollback><sql splitStatements="false"><![CDATA[
+DO $$ BEGIN RAISE EXCEPTION '0076 anonymous survey data requires a forward corrective migration instead of rollback'; END $$;
+        ]]></sql></rollback>
+    </changeSet>
+</databaseChangeLog>

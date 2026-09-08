@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0078-001-comp-off-policy" author="kabipay-dev">
+        <sql><![CDATA[
+INSERT INTO "${schema}".leave_type (id,tenant_id,name,code,is_paid,carry_forward,max_carry_forward_days,sandwich_rule,half_day_allowed,requires_document,is_deleted,created_at,updated_at)
+SELECT gen_random_uuid(), tenant.tenant_id, 'Comp-off', 'COMP_OFF', TRUE, FALSE, NULL, FALSE, TRUE, FALSE, FALSE, NOW(), NOW()
+FROM (SELECT tenant_id FROM kabipay_ops.tenant_database WHERE schema_name = '${schema}' AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1) tenant
+WHERE NOT EXISTS (SELECT 1 FROM "${schema}".leave_type WHERE UPPER(TRIM(code)) = 'COMP_OFF' AND is_deleted = FALSE);
+        ]]></sql>
+        <createTable tableName="comp_off_policy" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="designation_id" type="UUID"/>
+            <column name="employee_id" type="UUID"/>
+            <column name="leave_type_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="enabled" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="validity_days" type="INT"><constraints nullable="false"/></column>
+            <column name="claim_deadline_days" type="INT"><constraints nullable="false"/></column>
+            <column name="monthly_earning_limit" type="NUMERIC(7,2)"/>
+            <column name="yearly_earning_limit" type="NUMERIC(7,2)"/>
+            <column name="max_unused_balance" type="NUMERIC(7,2)"/>
+            <column name="allow_approved_leave_cancellation" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_policy" baseColumnNames="designation_id" referencedTableSchemaName="${schema}" referencedTableName="designation" referencedColumnNames="id" constraintName="fk_comp_off_policy_designation" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_policy" baseColumnNames="employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_comp_off_policy_employee" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_policy" baseColumnNames="leave_type_id" referencedTableSchemaName="${schema}" referencedTableName="leave_type" referencedColumnNames="id" constraintName="fk_comp_off_policy_leave_type" onDelete="RESTRICT"/>
+        <sql><![CDATA[
+ALTER TABLE "${schema}".comp_off_policy ADD CONSTRAINT chk_comp_off_policy_scope CHECK (num_nonnulls(designation_id, employee_id) <= 1), ADD CONSTRAINT chk_comp_off_policy_days CHECK (validity_days > 0 AND claim_deadline_days >= 0), ADD CONSTRAINT chk_comp_off_policy_limits CHECK ((monthly_earning_limit IS NULL OR monthly_earning_limit > 0) AND (yearly_earning_limit IS NULL OR yearly_earning_limit > 0) AND (max_unused_balance IS NULL OR max_unused_balance > 0));
+CREATE UNIQUE INDEX uq_comp_off_policy_tenant ON "${schema}".comp_off_policy (tenant_id) WHERE designation_id IS NULL AND employee_id IS NULL;
+CREATE UNIQUE INDEX uq_comp_off_policy_designation ON "${schema}".comp_off_policy (tenant_id, designation_id) WHERE designation_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_comp_off_policy_employee ON "${schema}".comp_off_policy (tenant_id, employee_id) WHERE employee_id IS NOT NULL;
+CREATE TRIGGER trg_comp_off_policy_updated_at BEFORE UPDATE ON "${schema}".comp_off_policy FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="0078-002-comp-off-claims-credits" author="kabipay-dev">
+        <createTable tableName="comp_off_claim" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="worked_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="units" type="NUMERIC(3,1)"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(20)" defaultValue="PENDING"><constraints nullable="false"/></column>
+            <column name="reason" type="TEXT"/>
+            <column name="rejection_reason" type="TEXT"/>
+            <column name="policy_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="policy_validity_days" type="INT"><constraints nullable="false"/></column>
+            <column name="policy_claim_deadline_days" type="INT"><constraints nullable="false"/></column>
+            <column name="policy_monthly_earning_limit" type="NUMERIC(7,2)"/>
+            <column name="policy_yearly_earning_limit" type="NUMERIC(7,2)"/>
+            <column name="policy_max_unused_balance" type="NUMERIC(7,2)"/>
+            <column name="approved_by" type="UUID"/>
+            <column name="approved_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_claim" baseColumnNames="employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_comp_off_claim_employee" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_claim" baseColumnNames="policy_id" referencedTableSchemaName="${schema}" referencedTableName="comp_off_policy" referencedColumnNames="id" constraintName="fk_comp_off_claim_policy" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_claim" baseColumnNames="approved_by" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id" constraintName="fk_comp_off_claim_approver" onDelete="RESTRICT"/>
+        <sql><![CDATA[
+ALTER TABLE "${schema}".comp_off_claim ADD CONSTRAINT chk_comp_off_claim_units CHECK (units IN (0.5, 1.0)), ADD CONSTRAINT chk_comp_off_claim_status CHECK (status IN ('PENDING','APPROVED','REJECTED','CANCELLED')), ADD CONSTRAINT chk_comp_off_claim_decision CHECK ((status = 'APPROVED' AND approved_by IS NOT NULL AND approved_at IS NOT NULL) OR status <> 'APPROVED');
+CREATE UNIQUE INDEX uq_comp_off_claim_full_worked_date ON "${schema}".comp_off_claim (tenant_id, employee_id, worked_date) WHERE units = 1.0 AND status IN ('PENDING','APPROVED');
+CREATE TRIGGER trg_comp_off_claim_updated_at BEFORE UPDATE ON "${schema}".comp_off_claim FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();
+        ]]></sql>
+        <createTable tableName="comp_off_credit" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="claim_id" type="UUID"><constraints nullable="false" unique="true" uniqueConstraintName="uq_comp_off_credit_claim"/></column>
+            <column name="earned_units" type="NUMERIC(3,1)"><constraints nullable="false"/></column>
+            <column name="reserved_units" type="NUMERIC(3,1)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+            <column name="used_units" type="NUMERIC(3,1)" defaultValueNumeric="0"><constraints nullable="false"/></column>
+              <column name="approved_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+              <column name="approval_business_date" type="DATE"><constraints nullable="false"/></column>
+              <column name="expires_at" type="DATE"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_credit" baseColumnNames="employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_comp_off_credit_employee" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_credit" baseColumnNames="claim_id" referencedTableSchemaName="${schema}" referencedTableName="comp_off_claim" referencedColumnNames="id" constraintName="fk_comp_off_credit_claim" onDelete="RESTRICT"/>
+        <sql><![CDATA[
+ALTER TABLE "${schema}".comp_off_credit ADD CONSTRAINT chk_comp_off_credit_units CHECK (earned_units IN (0.5, 1.0) AND reserved_units >= 0 AND used_units >= 0 AND reserved_units + used_units <= earned_units);
+CREATE INDEX idx_comp_off_credit_spend ON "${schema}".comp_off_credit (tenant_id, employee_id, expires_at, approval_business_date);
+CREATE TRIGGER trg_comp_off_credit_updated_at BEFORE UPDATE ON "${schema}".comp_off_credit FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="0078-003-comp-off-leave-allocation" author="kabipay-dev">
+        <addColumn tableName="leave_request" schemaName="${schema}"><column name="uses_comp_off" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column></addColumn>
+        <createTable tableName="comp_off_allocation" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="credit_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="leave_request_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="leave_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="units" type="NUMERIC(3,1)"><constraints nullable="false"/></column>
+            <column name="status" type="VARCHAR(20)" defaultValue="RESERVED"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_allocation" baseColumnNames="credit_id" referencedTableSchemaName="${schema}" referencedTableName="comp_off_credit" referencedColumnNames="id" constraintName="fk_comp_off_allocation_credit" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="comp_off_allocation" baseColumnNames="leave_request_id" referencedTableSchemaName="${schema}" referencedTableName="leave_request" referencedColumnNames="id" constraintName="fk_comp_off_allocation_leave" onDelete="RESTRICT"/>
+        <sql><![CDATA[
+ALTER TABLE "${schema}".comp_off_allocation ADD CONSTRAINT chk_comp_off_allocation_units CHECK (units IN (0.5, 1.0)), ADD CONSTRAINT chk_comp_off_allocation_status CHECK (status IN ('RESERVED','USED','RELEASED','EXPIRED'));
+CREATE UNIQUE INDEX uq_comp_off_active_allocation ON "${schema}".comp_off_allocation (credit_id, leave_request_id, leave_date) WHERE status IN ('RESERVED','USED');
+CREATE INDEX idx_comp_off_allocation_leave ON "${schema}".comp_off_allocation (tenant_id, leave_request_id, status);
+CREATE TRIGGER trg_comp_off_allocation_updated_at BEFORE UPDATE ON "${schema}".comp_off_allocation FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();
+        ]]></sql>
+        <rollback><sql splitStatements="false"><![CDATA[DO $$ BEGIN RAISE EXCEPTION '0078 comp-off ledger requires a forward corrective migration instead of rollback'; END $$;]]></sql></rollback>
+    </changeSet>
+</databaseChangeLog>

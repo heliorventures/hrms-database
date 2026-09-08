@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="0077-001-unpaid-leave-policy-and-snapshot" author="kabipay-dev">
+        <sql splitStatements="true"><![CDATA[
+CREATE TABLE "${schema}".payroll_unpaid_leave_policy (
+    tenant_id UUID PRIMARY KEY,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    basic_component_code VARCHAR(64),
+    day_divisor NUMERIC(10,4),
+    treatment VARCHAR(24),
+    updated_by UUID NOT NULL REFERENCES "${schema}"."user"(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_unpaid_policy_divisor CHECK (day_divisor IS NULL OR day_divisor > 0),
+    CONSTRAINT chk_unpaid_policy_treatment CHECK (treatment IS NULL OR treatment IN ('BEFORE_STATUTORY','AFTER_STATUTORY')),
+    CONSTRAINT chk_unpaid_policy_enabled CHECK (NOT enabled OR (
+        basic_component_code IS NOT NULL AND LENGTH(BTRIM(basic_component_code)) > 0
+        AND day_divisor IS NOT NULL AND treatment IS NOT NULL
+    ))
+);
+CREATE TABLE "${schema}".payroll_unpaid_leave_allocation (
+    leave_request_id UUID PRIMARY KEY REFERENCES "${schema}".leave_request(id) ON DELETE RESTRICT,
+    tenant_id UUID NOT NULL,
+    employee_id UUID NOT NULL REFERENCES "${schema}".employee(id),
+    from_date DATE NOT NULL,
+    to_date DATE NOT NULL,
+    approved_days NUMERIC(8,2) NOT NULL CHECK (approved_days > 0),
+    date_units JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (to_date >= from_date)
+);
+ALTER TABLE "${schema}".payslip ADD CONSTRAINT uq_payslip_unpaid_tenant_id UNIQUE (tenant_id,id);
+CREATE TABLE "${schema}".payslip_unpaid_leave (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    payslip_id UUID NOT NULL UNIQUE,
+    basic_component_code VARCHAR(64) NOT NULL,
+    basic_amount NUMERIC(18,2) NOT NULL CHECK (basic_amount >= 0),
+    day_divisor NUMERIC(10,4) NOT NULL CHECK (day_divisor > 0),
+    unpaid_days NUMERIC(8,2) NOT NULL CHECK (unpaid_days >= 0),
+    amount NUMERIC(18,2) NOT NULL CHECK (amount >= 0),
+    treatment VARCHAR(24) NOT NULL CHECK (treatment IN ('BEFORE_STATUTORY','AFTER_STATUTORY')),
+    source_days JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_unpaid_snapshot_payslip FOREIGN KEY (tenant_id,payslip_id)
+        REFERENCES "${schema}".payslip(tenant_id,id) ON DELETE RESTRICT
+);
+        ]]></sql>
+    </changeSet>
+</databaseChangeLog>

@@ -89,5 +89,12 @@
     <include file="migrations/0071_leave_supporting_document_file/leave_supporting_document_file.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0072_on_leave_login_repair/on_leave_login_repair.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0073_non_terminated_login_status_repair/non_terminated_login_status_repair.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0074_automated_employee_notifications/automated_employee_notifications.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0075_performance_appraisal_lifecycle/performance_appraisal_lifecycle.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0076_anonymous_surveys/anonymous_surveys.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0077_unpaid_leave_payroll/unpaid_leave_payroll.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0078_comp_off/comp_off.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0079_announcement_video/announcement_video.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0080_prejoining/prejoining.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
