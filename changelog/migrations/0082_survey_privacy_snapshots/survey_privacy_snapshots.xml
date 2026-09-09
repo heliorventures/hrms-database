@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0082-001-survey-privacy-snapshots" author="kabipay-dev">
+        <preConditions onFail="HALT" onError="HALT">
+            <sqlCheck expectedResult="0"><![CDATA[
+SELECT (SELECT COUNT(*) FROM "${schema}".survey_assignment)
+     + (SELECT COUNT(*) FROM "${schema}".survey_response)
+            ]]></sqlCheck>
+        </preConditions>
+
+        <addColumn tableName="survey_assignment" schemaName="${schema}">
+            <column name="completed" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="publication_department_id" type="UUID"/>
+            <column name="publication_manager_employee_id" type="UUID"/>
+        </addColumn>
+        <dropColumn
+            tableName="survey_assignment"
+            schemaName="${schema}"
+            columnName="completed_at"/>
+        <dropColumn
+            tableName="survey_response"
+            schemaName="${schema}"
+            columnName="submitted_at"/>
+
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+DO $$ BEGIN RAISE EXCEPTION '0082 survey privacy snapshots require a forward corrective migration instead of rollback'; END $$;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

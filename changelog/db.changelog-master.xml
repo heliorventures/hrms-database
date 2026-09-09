@@ -29,4 +29,7 @@
     <!-- Global integration connector catalog (tenant FKs via cross-schema reference) -->
     <include file="migrations/0005_integration_connector_catalog/integration_connector_catalog.xml" relativeToChangelogFile="true"/>
 
+    <!-- One-time backfill across existing tenants; no tenant-schema changes. -->
+    <include file="migrations/0083_missing_module_subscriptions/missing_module_subscriptions.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>
