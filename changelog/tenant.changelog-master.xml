@@ -96,5 +96,6 @@
     <include file="migrations/0078_comp_off/comp_off.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0079_announcement_video/announcement_video.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0080_prejoining/prejoining.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0081_leave_approval_queue_index/leave_approval_queue_index.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <!-- Concurrent index creation avoids holding a write-blocking table lock for the build.
+         Do not use IF NOT EXISTS: an interrupted build can leave an INVALID index. A retry
+         must fail visibly until that named index is inspected and removed by the operator. -->
+    <changeSet id="0081-001-leave-approval-queue-index" author="kabipay-dev" runInTransaction="false">
+        <sql splitStatements="false"><![CDATA[
+CREATE INDEX CONCURRENTLY idx_leave_request_queue_order
+    ON "${schema}".leave_request (tenant_id, applied_at DESC, id DESC)
+    WHERE is_deleted = FALSE;
+        ]]></sql>
+        <rollback>
+            <sql splitStatements="false">DROP INDEX CONCURRENTLY "${schema}".idx_leave_request_queue_order;</sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
