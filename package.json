@@ -6,7 +6,9 @@
   "scripts": {
     "ensure-java": "node ensure-java.cjs",
     "migrate-ops": "node migrate-ops.cjs",
-    "test": "node tests/liquibase-sql-blocks.test.cjs"
+    "test": "node tests/liquibase-sql-blocks.test.cjs && node tests/admin-hr-permissions.test.cjs",
+    "check:permission-defaults": "node scripts/check-permission-defaults.cjs",
+    "test:permission-defaults:integration": "node tests/admin-hr-permissions.integration.cjs"
   },
   "repository": {
     "type": "git",

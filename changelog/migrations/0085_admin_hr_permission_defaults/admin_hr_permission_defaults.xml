@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0085-001-admin-hr-permission-defaults" author="kabipay-dev" runInTransaction="true">
+  <comment>Add missing Admin/HR defaults without replacing existing scopes or custom role assignments.</comment>
+  <sql splitStatements="false"><![CDATA[
+LOCK TABLE "${schema}".role, "${schema}".permission, "${schema}".role_permission,
+ "${schema}".permission_scope IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+LOCK TABLE kabipay_ops.tenant_database IN SHARE MODE NOWAIT;
+
+CREATE TEMP TABLE admin_hr_defaults (
+ resource TEXT NOT NULL, action TEXT NOT NULL,
+ admin_scope TEXT NOT NULL, hr_scope TEXT NOT NULL,
+ PRIMARY KEY(resource, action),
+ CHECK(admin_scope IN ('ALL','SELF','TEAM','NONE')),
+ CHECK(hr_scope IN ('ALL','SELF','TEAM','NONE'))
+) ON COMMIT DROP;
+
+-- permission-defaults:start
+INSERT INTO admin_hr_defaults(resource, action, admin_scope, hr_scope) VALUES
+ ('analytics','read','ALL','ALL'),
+ ('assets','manage','ALL','ALL'),
+ ('assets','read','ALL','NONE'),
+ ('assets','self','SELF','SELF'),
+ ('attendance','punch_policy','ALL','ALL'),
+ ('attendance','punch_self','SELF','SELF'),
+ ('attendance','read','ALL','ALL'),
+ ('attendance','regularize','ALL','ALL'),
+ ('benefits','manage','ALL','ALL'),
+ ('benefits','self','SELF','SELF'),
+ ('compensation','manage','ALL','ALL'),
+ ('employee_directory','read','ALL','ALL'),
+ ('employee','read','ALL','ALL'),
+ ('employee','write','ALL','ALL'),
+ ('employee','manage','ALL','ALL'),
+ ('expense','read','ALL','ALL'),
+ ('expense','submit','SELF','SELF'),
+ ('expense','approve','ALL','ALL'),
+ ('expense','manage','ALL','ALL'),
+ ('expense','pay','ALL','ALL'),
+ ('grievance','manage','ALL','ALL'),
+ ('grievance','self','SELF','SELF'),
+ ('leave','read','ALL','ALL'),
+ ('leave','submit','SELF','SELF'),
+ ('leave','approve','ALL','ALL'),
+ ('leave','manage','ALL','ALL'),
+ ('learning','manage','ALL','ALL'),
+ ('notification','read','SELF','SELF'),
+ ('notification','manage','ALL','ALL'),
+ ('onboarding','manage','ALL','ALL'),
+ ('onboarding','self','SELF','SELF'),
+ ('prejoining','manage','ALL','ALL'),
+ ('prejoining','review','ALL','ALL'),
+ ('payroll','read','ALL','ALL'),
+ ('payroll','manage','ALL','ALL'),
+ ('payroll','statutory_export','ALL','ALL'),
+ ('performance','manage','ALL','ALL'),
+ ('performance','evaluate','NONE','NONE'),
+ ('performance','self','SELF','SELF'),
+ ('recruitment','manage','ALL','ALL'),
+ ('role','manage','ALL','ALL'),
+ ('succession','manage','ALL','ALL'),
+ ('survey','manage','ALL','ALL'),
+ ('survey','respond','SELF','SELF'),
+ ('survey','results','ALL','ALL'),
+ ('tax','read','ALL','ALL'),
+ ('tax','submit','SELF','SELF'),
+ ('tax','approve','ALL','ALL'),
+ ('tax','manage','ALL','ALL'),
+ ('timesheet','read','ALL','ALL'),
+ ('timesheet','write','SELF','SELF'),
+ ('timesheet','approve','ALL','ALL'),
+ ('timesheet','manage','ALL','ALL'),
+ ('travel','read','ALL','ALL'),
+ ('travel','submit','SELF','SELF'),
+ ('travel','approve','ALL','ALL'),
+ ('travel','manage','ALL','ALL'),
+ ('workflow','manage','ALL','ALL');
+-- permission-defaults:end
+
+CREATE TEMP TABLE admin_hr_tenant ON COMMIT DROP AS
+ SELECT tenant_id FROM kabipay_ops.tenant_database WHERE schema_name = '${schema}';
+
+DO $$
+BEGIN
+ IF (SELECT COUNT(*) FROM admin_hr_tenant) <> 1 THEN
+  RAISE EXCEPTION '0085 expected exactly one tenant mapping for schema %', '${schema}';
+ END IF;
+ IF EXISTS (
+  SELECT names.name FROM (VALUES ('ADMIN'),('HR')) names(name)
+  LEFT JOIN "${schema}".role r ON UPPER(TRIM(r.name)) = names.name
+   AND r.tenant_id = (SELECT tenant_id FROM admin_hr_tenant)
+  GROUP BY names.name HAVING COUNT(r.id) <> 1 OR BOOL_OR(r.is_deleted)
+ ) THEN
+  RAISE EXCEPTION '0085 requires unambiguous active ADMIN and HR roles';
+ END IF;
+ -- Earlier feature migrations own catalog creation and module ownership.
+ IF EXISTS (
+  SELECT d.resource,d.action FROM admin_hr_defaults d
+  LEFT JOIN "${schema}".permission p ON LOWER(TRIM(p.resource)) = d.resource
+   AND LOWER(TRIM(p.action)) = d.action
+  GROUP BY d.resource,d.action HAVING COUNT(p.id) <> 1
+ ) THEN
+  RAISE EXCEPTION '0085 missing or ambiguous permission catalog; apply/repair prerequisite feature migrations';
+ END IF;
+ IF EXISTS (
+  SELECT s.role_id,LOWER(TRIM(s.resource)),LOWER(TRIM(s.action))
+  FROM "${schema}".permission_scope s JOIN "${schema}".role r ON r.id=s.role_id
+  JOIN admin_hr_defaults d ON d.resource=LOWER(TRIM(s.resource)) AND d.action=LOWER(TRIM(s.action))
+  WHERE r.tenant_id=(SELECT tenant_id FROM admin_hr_tenant) AND UPPER(TRIM(r.name)) IN ('ADMIN','HR')
+  GROUP BY s.role_id,LOWER(TRIM(s.resource)),LOWER(TRIM(s.action))
+  HAVING COUNT(*) > 1 OR BOOL_OR(s.tenant_id <> (SELECT tenant_id FROM admin_hr_tenant))
+ ) THEN
+  RAISE EXCEPTION '0085 ambiguous or cross-tenant permission scope; resolve before migrating';
+ END IF;
+END $$;
+
+CREATE TEMP TABLE admin_hr_expected ON COMMIT DROP AS
+ SELECT r.id AS role_id,r.tenant_id,p.id AS permission_id,d.resource,d.action,
+  CASE UPPER(TRIM(r.name)) WHEN 'ADMIN' THEN d.admin_scope ELSE d.hr_scope END AS scope_type
+ FROM "${schema}".role r CROSS JOIN admin_hr_defaults d
+ JOIN "${schema}".permission p ON LOWER(TRIM(p.resource))=d.resource AND LOWER(TRIM(p.action))=d.action
+ WHERE r.tenant_id=(SELECT tenant_id FROM admin_hr_tenant) AND NOT r.is_deleted
+  AND UPPER(TRIM(r.name)) IN ('ADMIN','HR');
+
+INSERT INTO "${schema}".role_permission(role_id,permission_id)
+ SELECT role_id,permission_id FROM admin_hr_expected WHERE scope_type <> 'NONE'
+ ON CONFLICT(role_id,permission_id) DO NOTHING;
+
+INSERT INTO "${schema}".permission_scope(id,tenant_id,role_id,resource,action,scope_type)
+ SELECT gen_random_uuid(),e.tenant_id,e.role_id,e.resource,e.action,e.scope_type
+ FROM admin_hr_expected e WHERE e.scope_type <> 'NONE' AND NOT EXISTS (
+  SELECT 1 FROM "${schema}".permission_scope s WHERE s.role_id=e.role_id
+   AND LOWER(TRIM(s.resource))=e.resource AND LOWER(TRIM(s.action))=e.action
+ );
+
+DO $$
+DECLARE preserved_count INTEGER;
+BEGIN
+ IF EXISTS (
+  SELECT 1 FROM admin_hr_expected e WHERE e.scope_type <> 'NONE' AND (
+   NOT EXISTS (SELECT 1 FROM "${schema}".role_permission rp WHERE rp.role_id=e.role_id AND rp.permission_id=e.permission_id)
+   OR NOT EXISTS (SELECT 1 FROM "${schema}".permission_scope s WHERE s.role_id=e.role_id
+    AND s.tenant_id=e.tenant_id AND LOWER(TRIM(s.resource))=e.resource AND LOWER(TRIM(s.action))=e.action)
+  )
+ ) THEN RAISE EXCEPTION '0085 missing grant or scope after backfill'; END IF;
+ SELECT COUNT(*) INTO preserved_count FROM admin_hr_expected e
+ JOIN "${schema}".permission_scope s ON s.role_id=e.role_id
+  AND LOWER(TRIM(s.resource))=e.resource AND LOWER(TRIM(s.action))=e.action
+ WHERE e.scope_type <> 'NONE' AND s.scope_type <> e.scope_type;
+ RAISE NOTICE '0085 complete; % existing non-default scopes preserved. Audit these and sign in again to refresh permissions.', preserved_count;
+END $$;
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $$ BEGIN RAISE EXCEPTION '0085 requires a forward corrective migration; existing grants cannot be distinguished safely'; END $$;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

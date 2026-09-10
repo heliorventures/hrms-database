@@ -79,5 +79,5 @@ test("post-migration verification covers normalized identifiers and claim owners
 test("npm test executes the Liquibase regression suite", () => {
   const packageJson = JSON.parse(readRepositoryFile("package.json"));
 
-  assert.equal(packageJson.scripts.test, "node tests/liquibase-sql-blocks.test.cjs");
+  assert.ok(packageJson.scripts.test.split(' && ').includes('node tests/liquibase-sql-blocks.test.cjs'));
 });

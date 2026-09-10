@@ -100,4 +100,5 @@
     <include file="migrations/0082_survey_privacy_snapshots/survey_privacy_snapshots.xml" relativeToChangelogFile="true"/>
 
     <include file="migrations/0084_survey_targeting_corrections/survey_targeting_corrections.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0085_admin_hr_permission_defaults/admin_hr_permission_defaults.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

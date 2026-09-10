@@ -464,6 +464,12 @@ $CanonicalRbac = [pscustomobject]@{
 $CanonicalRbacJson = $CanonicalRbac | ConvertTo-Json -Depth 8 -Compress
 $CanonicalRbacJsonSql = $CanonicalRbacJson.Replace("'", "''")
 
+# Use the registered forward-migration decisions so demo/bootstrap seeding
+# cannot erase newer Admin/HR grants or widen SELF permissions to ALL.
+$PermissionDefaultsJson = & node (Join-Path $PSScriptRoot 'check-permission-defaults.cjs') --json
+if ($LASTEXITCODE -ne 0) { throw 'Cannot load Admin/HR permission defaults' }
+$PermissionDefaultsJsonSql = ($PermissionDefaultsJson -join "`n").Replace("'", "''")
+
 # Every SQL batch, including raw batches, crosses this control-plane binding
 # assertion on the same runner connection before any batch statement executes.
 $TenantDatabaseGuardSql = @"
@@ -892,6 +898,22 @@ FROM ranked_grants
 JOIN "$Schema".permission AS permission
   ON LOWER(TRIM(permission.resource)) = ranked_grants.resource
  AND LOWER(TRIM(permission.action)) = ranked_grants.action;
+
+DELETE FROM canonical_permission_matrix AS matrix
+USING json_to_recordset('$PermissionDefaultsJsonSql'::json)
+ AS defaults(resource TEXT, action TEXT, admin TEXT, hr TEXT)
+WHERE matrix.role_name IN ('ADMIN','HR')
+ AND matrix.resource=defaults.resource AND matrix.action=defaults.action;
+
+INSERT INTO canonical_permission_matrix(role_name,resource,action,scope_type)
+SELECT roles.role_name,defaults.resource,defaults.action,
+ CASE roles.role_name WHEN 'ADMIN' THEN defaults.admin ELSE defaults.hr END
+FROM json_to_recordset('$PermissionDefaultsJsonSql'::json)
+ AS defaults(resource TEXT, action TEXT, admin TEXT, hr TEXT)
+CROSS JOIN (VALUES ('ADMIN'),('HR')) roles(role_name)
+JOIN "$Schema".permission p ON LOWER(TRIM(p.resource))=defaults.resource
+ AND LOWER(TRIM(p.action))=defaults.action
+WHERE CASE roles.role_name WHEN 'ADMIN' THEN defaults.admin ELSE defaults.hr END <> 'NONE';
 
 DELETE FROM "$Schema".role_permission AS role_permission
 USING "$Schema".role AS canonical_role, canonical_managed_roles
