@@ -99,4 +99,5 @@
     <include file="migrations/0081_leave_approval_queue_index/leave_approval_queue_index.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0082_survey_privacy_snapshots/survey_privacy_snapshots.xml" relativeToChangelogFile="true"/>
 
+    <include file="migrations/0084_survey_targeting_corrections/survey_targeting_corrections.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>
