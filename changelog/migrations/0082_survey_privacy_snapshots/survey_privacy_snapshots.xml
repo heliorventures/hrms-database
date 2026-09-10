@@ -20,6 +20,24 @@ SELECT (SELECT COUNT(*) FROM "${schema}".survey_assignment)
             <column name="publication_department_id" type="UUID"/>
             <column name="publication_manager_employee_id" type="UUID"/>
         </addColumn>
+        <addForeignKeyConstraint
+            baseTableSchemaName="${schema}"
+            baseTableName="survey_assignment"
+            baseColumnNames="publication_department_id"
+            referencedTableSchemaName="${schema}"
+            referencedTableName="department"
+            referencedColumnNames="id"
+            constraintName="fk_survey_assignment_publication_department"
+            onDelete="SET NULL"/>
+        <addForeignKeyConstraint
+            baseTableSchemaName="${schema}"
+            baseTableName="survey_assignment"
+            baseColumnNames="publication_manager_employee_id"
+            referencedTableSchemaName="${schema}"
+            referencedTableName="employee"
+            referencedColumnNames="id"
+            constraintName="fk_survey_assignment_publication_manager"
+            onDelete="SET NULL"/>
         <dropColumn
             tableName="survey_assignment"
             schemaName="${schema}"

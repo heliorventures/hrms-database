@@ -41,6 +41,11 @@ $responseDrop = $structural.SelectSingleNode('./db:dropColumn[@tableName="survey
 Assert-True ($null -ne $assignmentDrop) 'completed_at must be dropped from tenant survey assignments'
 Assert-True ($null -ne $responseDrop) 'submitted_at and its database default must be dropped from tenant survey responses'
 
+$departmentSnapshotForeignKey = $structural.SelectSingleNode('./db:addForeignKeyConstraint[@baseTableSchemaName="${schema}" and @baseTableName="survey_assignment" and @baseColumnNames="publication_department_id" and @referencedTableSchemaName="${schema}" and @referencedTableName="department" and @referencedColumnNames="id" and @onDelete="SET NULL"]', $namespace)
+$managerSnapshotForeignKey = $structural.SelectSingleNode('./db:addForeignKeyConstraint[@baseTableSchemaName="${schema}" and @baseTableName="survey_assignment" and @baseColumnNames="publication_manager_employee_id" and @referencedTableSchemaName="${schema}" and @referencedTableName="employee" and @referencedColumnNames="id" and @onDelete="SET NULL"]', $namespace)
+Assert-True ($null -ne $departmentSnapshotForeignKey) 'Publication department snapshots must use a tenant-qualified SET NULL foreign key'
+Assert-True ($null -ne $managerSnapshotForeignKey) 'Publication manager snapshots must use a tenant-qualified SET NULL foreign key'
+
 $forwardWrites = $structural.SelectNodes('./db:insert | ./db:update | ./db:delete | ./db:sql', $namespace)
 Assert-True ($forwardWrites.Count -eq 0) 'The correction must not rewrite survey rows'
 Assert-True ($migration -match 'forward corrective migration') 'Rollback must halt instead of restoring identifying timestamps'
