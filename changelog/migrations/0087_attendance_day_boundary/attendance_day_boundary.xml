@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="0087-001-attendance-day-boundary" author="kabipay-dev">
+        <!-- No data activation/backfill: mutation/worker transactions initialize once. -->
+        <createTable tableName="attendance_day_profile" schemaName="${schema}">
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="revision" type="BIGINT"><constraints nullable="false"/></column>
+            <column name="legacy_activation_date" type="DATE"/>
+            <column name="initialized_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey schemaName="${schema}" tableName="attendance_day_profile" columnNames="tenant_id" constraintName="pk_attendance_day_profile"/>
+        <createTable tableName="attendance_day_policy_version" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="effective_work_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="boundary_minutes" type="INT"><constraints nullable="false"/></column>
+            <column name="timezone" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="superseded_at" type="TIMESTAMPTZ"/>
+            <column name="created_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <createTable tableName="attendance_day_window" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="work_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="starts_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+            <column name="ends_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+            <column name="timezone" type="VARCHAR(100)"><constraints nullable="false"/></column>
+            <column name="boundary_minutes" type="INT"><constraints nullable="false"/></column>
+            <column name="policy_version_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint schemaName="${schema}" tableName="attendance_day_policy_version" columnNames="tenant_id,id" constraintName="uq_attendance_day_version_tenant_id"/>
+        <addUniqueConstraint schemaName="${schema}" tableName="attendance_day_window" columnNames="tenant_id,work_date" constraintName="uq_attendance_day_window_tenant_date"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="attendance_day_policy_version" baseColumnNames="tenant_id" referencedTableSchemaName="${schema}" referencedTableName="attendance_day_profile" referencedColumnNames="tenant_id" constraintName="fk_attendance_day_version_profile" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="attendance_day_window" baseColumnNames="tenant_id,policy_version_id" referencedTableSchemaName="${schema}" referencedTableName="attendance_day_policy_version" referencedColumnNames="tenant_id,id" constraintName="fk_attendance_day_window_version" onDelete="RESTRICT"/>
+        <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".attendance_day_profile ADD CONSTRAINT chk_attendance_day_revision CHECK (revision >= 1);
+ALTER TABLE "${schema}".attendance_day_policy_version ADD CONSTRAINT chk_attendance_day_version_minutes CHECK (boundary_minutes BETWEEN 0 AND 1439), ADD CONSTRAINT chk_attendance_day_version_timezone CHECK (length(trim(timezone)) > 0);
+ALTER TABLE "${schema}".attendance_day_window ADD CONSTRAINT chk_attendance_day_window_increasing CHECK (starts_at < ends_at), ADD CONSTRAINT chk_attendance_day_window_minutes CHECK (boundary_minutes BETWEEN 0 AND 1439);
+CREATE UNIQUE INDEX uq_attendance_day_live_effective ON "${schema}".attendance_day_policy_version (tenant_id,effective_work_date) WHERE superseded_at IS NULL;
+CREATE INDEX idx_attendance_day_window_instants ON "${schema}".attendance_day_window (tenant_id,starts_at,ends_at);
+CREATE FUNCTION "${schema}".prevent_attendance_day_window_mutation() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+    RAISE EXCEPTION 'attendance day windows are immutable';
+END;
+$fn$;
+CREATE TRIGGER trg_attendance_day_window_immutable BEFORE UPDATE OR DELETE ON "${schema}".attendance_day_window FOR EACH ROW EXECUTE FUNCTION "${schema}".prevent_attendance_day_window_mutation();
+CREATE FUNCTION "${schema}".protect_attendance_day_policy_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'attendance day policy versions cannot be deleted'; END IF;
+    IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.effective_work_date IS DISTINCT FROM OLD.effective_work_date OR NEW.boundary_minutes IS DISTINCT FROM OLD.boundary_minutes OR NEW.timezone IS DISTINCT FROM OLD.timezone OR NEW.created_at IS DISTINCT FROM OLD.created_at OR OLD.superseded_at IS NOT NULL OR NEW.superseded_at IS NULL THEN
+        RAISE EXCEPTION 'attendance day policy version is immutable except initial supersession';
+    END IF;
+    RETURN NEW;
+END;
+$fn$;
+CREATE TRIGGER trg_attendance_day_policy_version_immutable BEFORE UPDATE OR DELETE ON "${schema}".attendance_day_policy_version FOR EACH ROW EXECUTE FUNCTION "${schema}".protect_attendance_day_policy_version();
+CREATE FUNCTION "${schema}".protect_attendance_day_activation() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'attendance day activation cannot be deleted'; END IF;
+    IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.legacy_activation_date IS DISTINCT FROM OLD.legacy_activation_date OR NEW.initialized_at IS DISTINCT FROM OLD.initialized_at OR NEW.revision <= OLD.revision THEN
+        RAISE EXCEPTION 'attendance day activation is immutable and revision must increase';
+    END IF;
+    RETURN NEW;
+END;
+$fn$;
+CREATE TRIGGER trg_attendance_day_activation_immutable BEFORE UPDATE OR DELETE ON "${schema}".attendance_day_profile FOR EACH ROW EXECUTE FUNCTION "${schema}".protect_attendance_day_activation();
+        ]]></sql>
+    </changeSet>
+</databaseChangeLog>
