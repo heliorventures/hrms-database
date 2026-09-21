@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0051-002-permission-catalog-prerequisites" author="kabipay-dev" runInTransaction="true">
+  <comment>Establish catalog prerequisites before 0052 and canonical RBAC. Fresh tenants must not depend on a post-migration demo/admin seed. Existing permission IDs, grants and scopes are preserved.</comment>
+  <sql splitStatements="false"><![CDATA[
+LOCK TABLE "${schema}".permission IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+LOCK TABLE kabipay_ops.module IN SHARE MODE NOWAIT;
+
+CREATE TEMP TABLE prerequisite_permission_catalog (
+ resource TEXT NOT NULL,
+ action TEXT NOT NULL,
+ module_code TEXT NOT NULL,
+ PRIMARY KEY(resource, action)
+) ON COMMIT DROP;
+
+-- Ownership agrees with 0070 workplace RBAC and the service entitlement map.
+-- 0052 consumes assets:manage; 0069 requires the workplace entries before 0070.
+INSERT INTO prerequisite_permission_catalog(resource, action, module_code) VALUES
+ ('assets', 'manage', 'EMPLOYEE'),
+ ('benefits', 'manage', 'EMPLOYEE'),
+ ('recruitment', 'manage', 'RECRUITMENT'),
+ ('onboarding', 'manage', 'EMPLOYEE'),
+ ('performance', 'manage', 'EMPLOYEE'),
+ ('learning', 'manage', 'EMPLOYEE'),
+ ('grievance', 'manage', 'EMPLOYEE'),
+ ('succession', 'manage', 'EMPLOYEE'),
+ ('compensation', 'manage', 'EMPLOYEE'),
+ ('analytics', 'read', 'EMPLOYEE');
+
+DO $$
+DECLARE
+ problem TEXT;
+BEGIN
+ SELECT string_agg(required.module_code, ', ' ORDER BY required.module_code) INTO problem
+ FROM (SELECT DISTINCT module_code FROM prerequisite_permission_catalog) required
+ WHERE (SELECT COUNT(*) FROM kabipay_ops.module m WHERE UPPER(TRIM(m.code))=required.module_code) <> 1;
+ IF problem IS NOT NULL THEN
+  RAISE EXCEPTION 'permission prerequisites require exactly one catalog module for % in schema %', problem, '${schema}';
+ END IF;
+
+ SELECT string_agg(required.resource || ':' || required.action, ', ' ORDER BY required.resource) INTO problem
+ FROM prerequisite_permission_catalog required
+ WHERE (SELECT COUNT(*) FROM "${schema}".permission p
+        WHERE LOWER(TRIM(p.resource))=required.resource AND LOWER(TRIM(p.action))=required.action) > 1;
+ IF problem IS NOT NULL THEN
+  RAISE EXCEPTION 'ambiguous permission prerequisites in schema %: %', '${schema}', problem;
+ END IF;
+
+ SELECT string_agg(required.resource || ':' || required.action, ', ' ORDER BY required.resource) INTO problem
+ FROM prerequisite_permission_catalog required
+ JOIN "${schema}".permission p ON LOWER(TRIM(p.resource))=required.resource AND LOWER(TRIM(p.action))=required.action
+ JOIN kabipay_ops.module m ON UPPER(TRIM(m.code))=required.module_code
+ WHERE p.module_id<>m.id OR p.resource<>required.resource OR p.action<>required.action;
+ IF problem IS NOT NULL THEN
+  RAISE EXCEPTION 'permission prerequisites have conflicting ownership or spelling in schema %: %; existing rows were not modified', '${schema}', problem;
+ END IF;
+END $$;
+
+INSERT INTO "${schema}".permission(id, resource, action, module_id, description)
+SELECT gen_random_uuid(), required.resource, required.action, m.id,
+       'Canonical permission ' || required.resource || ':' || required.action
+FROM prerequisite_permission_catalog required
+JOIN kabipay_ops.module m ON UPPER(TRIM(m.code))=required.module_code
+WHERE NOT EXISTS (
+ SELECT 1 FROM "${schema}".permission p
+ WHERE LOWER(TRIM(p.resource))=required.resource AND LOWER(TRIM(p.action))=required.action
+);
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $$ BEGIN RAISE EXCEPTION 'Permission catalog prerequisites require a reviewed forward correction; dependent permissions must not be deleted'; END $$;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

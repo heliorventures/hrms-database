@@ -17,7 +17,10 @@ param(
     [string]$DbName = '',
     [string]$DbUser = '',
     [string]$DbPassword = '',
-    [switch]$PostgresSsl
+    [switch]$PostgresSsl,
+    # Used by orchestrators that already loaded .env with the canonical Node
+    # loader. Keep exactly that connection instead of independently reparsing it.
+    [switch]$UseProcessEnvironment
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,7 +46,7 @@ function Import-DotEnvFile {
     }
 }
 
-Import-DotEnvFile -Path $DbEnv
+if (-not $UseProcessEnvironment) { Import-DotEnvFile -Path $DbEnv }
 
 if ([string]::IsNullOrWhiteSpace($DbName)) { $DbName = $env:POSTGRES_DB }
 if ([string]::IsNullOrWhiteSpace($DbUser)) { $DbUser = $env:POSTGRES_USER }
@@ -54,21 +57,35 @@ if ([string]::IsNullOrWhiteSpace($DbName) -or [string]::IsNullOrWhiteSpace($DbUs
     throw "Set DbName, DbUser, DbPassword or configure POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD in kabipay-database/.env"
 }
 if ([string]::IsNullOrWhiteSpace($PostgresHost)) { $PostgresHost = 'localhost' }
-$isCloud = ($PostgresHost -ne 'localhost' -and $PostgresHost -ne '127.0.0.1')
-$useSsl = [bool]$PostgresSsl
-if (-not $useSsl -and $isCloud -and $env:POSTGRES_SSLMODE -eq 'require') { $useSsl = $true }
+$sslMode = ''
+if ($env:POSTGRES_SSLMODE -in @('require', 'verify-full')) { $sslMode = $env:POSTGRES_SSLMODE }
+elseif ($PostgresSsl) { $sslMode = 'require' }
 
 $JdbcHost = $PostgresHost
 $tenantJdbc = "jdbc:postgresql://${JdbcHost}:${PostgresPort}/${DbName}"
-if ($useSsl) { $tenantJdbc += "?sslmode=require" }
+if ($sslMode) { $tenantJdbc += "?sslmode=$sslMode" }
+
+function ConvertTo-JavaPropertyValue {
+    param([string]$Value)
+    $escaped = [System.Text.StringBuilder]::new()
+    foreach ($character in $Value.ToCharArray()) {
+        $code = [int]$character
+        if ($code -eq 92) { [void]$escaped.Append('\\') }
+        elseif ($code -le 32 -or $code -gt 126) { [void]$escaped.Append(('\u{0:x4}' -f $code)) }
+        else { [void]$escaped.Append($character) }
+    }
+    return $escaped.ToString()
+}
+$propertyUser = ConvertTo-JavaPropertyValue $DbUser
+$propertyPassword = ConvertTo-JavaPropertyValue $DbPassword
 
 $TrackingTable = "${Schema}_databasechangelog"
 $TenantPropsPath = Join-Path $DatabaseDir ".generated-tenant-update-$Schema.properties"
 $TenantProps = @"
 changeLogFile=changelog/tenant.changelog-master.xml
 url=$tenantJdbc
-username=$DbUser
-password=$DbPassword
+username=$propertyUser
+password=$propertyPassword
 driver=org.postgresql.Driver
 logLevel=INFO
 defaultSchemaName=$Schema
