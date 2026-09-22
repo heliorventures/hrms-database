@@ -104,4 +104,5 @@
     <include file="migrations/0085_admin_hr_permission_defaults/admin_hr_permission_defaults.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0086_survey_response_review/survey_response_review.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0087_attendance_day_boundary/attendance_day_boundary.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0088_performance_completion/performance_completion.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>
