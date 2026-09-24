@@ -7,6 +7,13 @@ function readRepositoryFile(...segments) {
   return fs.readFileSync(path.join(__dirname, "..", ...segments), "utf8");
 }
 
+test('permission prerequisites run before 0052 without rewriting its existing changesets', () => {
+  const master=readRepositoryFile('changelog','tenant.changelog-master.xml');
+  const prerequisite='migrations/0051_permission_catalog_prerequisites/permission_catalog_prerequisites.xml';
+  assert.ok(master.includes(prerequisite),'Fresh tenant permission prerequisites must be registered');
+  assert.ok(master.indexOf(prerequisite)<master.indexOf('migrations/0052_payroll_assets_hrms_depth/'));
+});
+
 test("0052-003 keeps its PostgreSQL DO block as one Liquibase statement", () => {
   const changelogPath = path.join(
     __dirname,
