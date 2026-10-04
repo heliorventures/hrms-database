@@ -106,4 +106,7 @@
     <include file="migrations/0087_attendance_day_boundary/attendance_day_boundary.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0088_performance_completion/performance_completion.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0089_user_guidance_state/user_guidance_state.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0090_payroll_period_configuration/payroll_period_configuration.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0091_leave_import_history/leave_import_history.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0092_tenant_import_tracking/tenant_import_tracking.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

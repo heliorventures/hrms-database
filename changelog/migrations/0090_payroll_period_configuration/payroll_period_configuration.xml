@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="0090-001-payroll-period-input-and-statement" author="kabipay-dev">
+        <sql splitStatements="true"><![CDATA[
+ALTER TABLE "${schema}".employee ADD CONSTRAINT uq_import_employee_tenant UNIQUE(tenant_id,id);
+ALTER TABLE "${schema}"."user" ADD CONSTRAINT uq_import_user_tenant UNIQUE(tenant_id,id);
+ALTER TABLE "${schema}".salary_component ADD COLUMN show_on_payslip BOOLEAN NOT NULL DEFAULT TRUE;
+UPDATE "${schema}".salary_component SET show_on_payslip=FALSE WHERE type='EMPLOYER_CONTRIBUTION';
+ALTER TABLE "${schema}".employee_salary_structure ADD COLUMN annual_gross NUMERIC(18,2) CHECK(annual_gross >= 0);
+ALTER TABLE "${schema}".employee_salary_structure ADD COLUMN annual_employer_pf NUMERIC(18,2) CHECK(annual_employer_pf >= 0);
+CREATE TABLE "${schema}".employee_payroll_rule (
+    tenant_id UUID NOT NULL,
+    employee_id UUID NOT NULL,
+    rules JSONB NOT NULL,
+    effective_from DATE NOT NULL,
+    updated_by UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(tenant_id,employee_id,effective_from),
+    FOREIGN KEY(tenant_id,employee_id) REFERENCES "${schema}".employee(tenant_id,id),
+    FOREIGN KEY(tenant_id,updated_by) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE TABLE "${schema}".payroll_period_input (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    employee_id UUID NOT NULL,
+    year INT NOT NULL CHECK(year BETWEEN 1900 AND 2200),
+    month INT NOT NULL CHECK(month BETWEEN 1 AND 12),
+    input JSONB NOT NULL,
+    ready BOOLEAN NOT NULL DEFAULT FALSE,
+    source_ref JSONB,
+    revision INT NOT NULL DEFAULT 1 CHECK(revision > 0),
+    updated_by UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id,employee_id,year,month),
+    UNIQUE(tenant_id,id),
+    FOREIGN KEY(tenant_id,employee_id) REFERENCES "${schema}".employee(tenant_id,id),
+    FOREIGN KEY(tenant_id,updated_by) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE TABLE "${schema}".payroll_period_adjustment (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    employee_id UUID NOT NULL,
+    year INT NOT NULL CHECK(year BETWEEN 1900 AND 2200),
+    month INT NOT NULL CHECK(month BETWEEN 1 AND 12),
+    code VARCHAR(64) NOT NULL,
+    amount NUMERIC(18,2) NOT NULL CHECK(amount >= 0),
+    reason TEXT,
+    ready BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_by UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id,employee_id,year,month,code),
+    CHECK(NOT ready OR amount=0 OR LENGTH(BTRIM(COALESCE(reason,''))) > 0),
+    FOREIGN KEY(tenant_id,employee_id) REFERENCES "${schema}".employee(tenant_id,id),
+    FOREIGN KEY(tenant_id,updated_by) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE TABLE "${schema}".payslip_statement (
+    payslip_id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    statement JSONB NOT NULL,
+    period_input_id UUID,
+    period_input_revision INT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY(tenant_id,payslip_id) REFERENCES "${schema}".payslip(tenant_id,id),
+    FOREIGN KEY(tenant_id,period_input_id) REFERENCES "${schema}".payroll_period_input(tenant_id,id)
+);
+CREATE TABLE "${schema}".payroll_period_input_audit (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    period_input_id UUID NOT NULL,
+    revision INT NOT NULL,
+    input JSONB NOT NULL,
+    changed_by UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(period_input_id,revision),
+    FOREIGN KEY(tenant_id,changed_by) REFERENCES "${schema}"."user"(tenant_id,id),
+    FOREIGN KEY(tenant_id,period_input_id) REFERENCES "${schema}".payroll_period_input(tenant_id,id)
+);
+        ]]></sql>
+    </changeSet>
+</databaseChangeLog>

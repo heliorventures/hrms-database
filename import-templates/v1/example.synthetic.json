@@ -1,0 +1,86 @@
+{
+  "format": "hrms-tenant-import",
+  "version": 1,
+  "source": {
+    "file_label": "synthetic-example.xlsx",
+    "file_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "profile": "SYNTHETIC_EXAMPLE",
+    "profile_version": 1,
+    "formula_results": "CACHED_SOURCE_VALUES"
+  },
+  "tenant_code": "synthetic-example-only",
+  "salary_effective_from": "2026-09-01",
+  "leave_as_of": "2026-09-30",
+  "period": {"year": 2026, "month": 9},
+  "employees": [
+    {
+      "source_ref": {
+        "file_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "sheet": "Sheet1",
+        "row": 8,
+        "cells": {"code": "D8", "name": "F8", "fixed_gross": "Z8", "earned_gross": "AE8", "grant": "P8", "taken": "Q8", "balance": "R8"}
+      },
+      "source_states": {"code": "VALUE", "grant": "VALUE", "bank_account": "MISSING", "pan": "BLANK"},
+      "employee": {
+        "code": "SYNTHETIC-001", "mapping_key": "Sheet1:8", "name": "Synthetic Example",
+        "first_name": "Synthetic", "last_name": "Example", "joining_date": "2020-01-01",
+        "birth_date": null, "confirmation_date": null, "exit_date": null, "last_working_date": null,
+        "gender": null, "designation": "Example", "department": "Example", "uan": null
+      },
+      "identity": {"pan": null, "aadhaar_last_four": null, "verified": false},
+      "bank": null,
+      "recurring_salary": {
+        "monthly_gross": "30000.00", "annual_gross": "360000.00",
+        "components": {"BASIC": "15000.00", "HRA": "7500.00", "CONVEYANCE": "3750.00", "OTHER": "3750.00"},
+        "component_ratios": {"BASIC": "0.5", "HRA": "0.25", "CONVEYANCE": "0.125", "OTHER": "0.125"},
+        "calculation_basis": "PERCENT_OF_GROSS",
+        "employer_pf_rule": {"basis_components": ["BASIC", "CONVEYANCE", "OTHER"], "rate": "0.13", "ceiling": null, "rounding": "HALF_UP_2DP", "origin": "SOURCE_FORMULA"},
+        "annual_employer_pf": "35100.00", "annual_ctc": "395100.00"
+      },
+      "leave_opening": {
+        "year": 2026, "as_of": "2026-09-30", "carry_forward": "4", "grant": "6", "source_taken": "12", "source_balance": "-2",
+        "paid_used": "10", "paid_remaining": "0", "pending": null, "planned": null, "ready": true
+      },
+      "historical_lwp": {"as_of": "2026-09-30", "days": "2", "payroll_attribution": "HISTORICAL_ONLY"},
+      "period_input": {
+        "year": 2026, "month": 9, "gross_rule": "SOURCE_OVERRIDE", "fixed_gross": "30000.00", "earned_gross_override": "30000.00",
+        "month_days": "30", "paid_days": "30", "present_days": "30", "lwp_days": "0", "source_lwp_days": "0", "lwp_divisor": "31",
+        "lwp_amount_override": "0.00", "lwp_basis": "GROSS", "lwp_handling": "SOURCE_GROSS_INCLUDES_REDUCTION", "variable_allowance_ot": "0.00",
+        "incentive": "500.00", "advance_already_paid": "5000.00", "additional_deductions": [],
+        "statutory_overrides": {"PF": "2700.00", "ESI": "0.00", "PT": "200.00", "TDS": "0.00"},
+        "expected_earned_components": {"BASIC": "15000.00", "HRA": "7500.00", "CONVEYANCE": "3750.00", "OTHER": "3750.00"},
+        "expected_wages": {"pf": "22500.00", "esi": "15000.00"},
+        "expected_employer_contributions": {"pf": "2925.00", "esi": "0.00"},
+        "expected_statement": {
+          "earned_gross": "30000.00", "statutory_total": "2900.00", "additional_total": "0.00", "net_earned": "27600.00",
+          "source_total_deduction": "7900.00", "remaining_payable": "22600.00", "excess_advance_credit": "0.00"
+        },
+        "contribution_rules": {
+          "employee_pf": {"origin": "SOURCE_FORMULA", "rate": "0.12", "ceiling": null, "future_applicability_confirmed": true, "source_amount": "2700.00"},
+          "employer_pf": {"origin": "SOURCE_FORMULA", "rate": "0.13", "ceiling": null, "future_applicability_confirmed": true, "source_amount": "2925.00"},
+          "employee_esi": {"origin": "PERIOD_OVERRIDE", "rate": null, "ceiling": null, "future_applicability_confirmed": false, "source_amount": "0.00"},
+          "employer_esi": {"origin": "PERIOD_OVERRIDE", "rate": null, "ceiling": null, "future_applicability_confirmed": false, "source_amount": "0.00"},
+          "pf_basis_components": ["BASIC", "CONVEYANCE", "OTHER"], "displayed_pf_ceiling": "15000.00", "esi_gross_multiplier": "0.5", "rounding": "SOURCE_PERIOD_OVERRIDE"
+        },
+        "ready": true, "status": "DRAFT", "historical_lwp_included": false
+      },
+      "clear_fields": []
+    }
+  ],
+  "configuration": {
+    "leave": {"paid_type_code": "EL", "unpaid_type_code": "LWP", "grant_mode": "SNAPSHOT_ONLY", "unpaid_quota": null, "unpaid_max_consecutive_days": null, "approval": "EXISTING_WORKFLOW"},
+    "payroll": {"lwp_basis": "GROSS", "lwp_divisor": "31", "rounding": "HALF_UP_2DP", "unresolved_future_rules": "REQUIRE_HR_CONFIGURATION", "auto_generate_payslips": false}
+  },
+  "issues": [
+    {
+      "code": "SOURCE_GROSS_OVERRIDE", "severity": "WARNING", "section": "period_input", "field": "earned_gross",
+      "source_ref": {"file_hash": "0000000000000000000000000000000000000000000000000000000000000000", "sheet": "Sheet1", "row": 8, "cells": {"earned_gross": "AE8"}},
+      "message": "This fictional example uses an explicit monthly gross override. It is not a client package."
+    },
+    {
+      "code": "OPTIONAL_IDENTIFIER_MISSING", "severity": "DEFER_SECTION", "section": "bank", "field": "bank_account",
+      "source_ref": {"file_hash": "0000000000000000000000000000000000000000000000000000000000000000", "sheet": "Sheet1", "row": 8, "cells": {"bank_account": "BI8"}},
+      "message": "The fictional bank section is intentionally omitted; employee, salary and leave sections remain independent."
+    }
+  ]
+}

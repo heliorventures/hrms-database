@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Explicit native tenant import operator options",
+  "type": "object", "additionalProperties": false,
+  "required": ["tenant_id", "tenant_code", "schema_name", "db_host", "db_name", "actor_id", "preserved_usernames", "reviewed_absent_usernames", "login_by_employee_code", "payroll_excluded_employee_ids", "runtime_contract_version"],
+  "properties": {
+    "tenant_id": {"type": "string", "format": "uuid"}, "actor_id": {"type": "string", "format": "uuid"},
+    "tenant_code": {"type": "string", "minLength": 1}, "schema_name": {"type": "string", "pattern": "^tenant_[A-Za-z0-9_]{1,56}$"},
+    "db_host": {"type": "string", "minLength": 1}, "db_name": {"type": "string", "minLength": 1},
+    "connection_host": {"type": ["string", "null"], "minLength": 1},
+    "preserved_usernames": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "reviewed_absent_usernames": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "login_by_employee_code": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 128}},
+    "payroll_excluded_employee_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uuid"}},
+    "runtime_contract_version": {"const": 1}, "review_reference": {"type": ["string", "null"], "minLength": 1, "maxLength": 200},
+    "reset_delete_tables": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "reset_retain_tables": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+  }
+}
