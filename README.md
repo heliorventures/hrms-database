@@ -303,9 +303,15 @@ Independent sections use savepoints in one tenant transaction. Missing/invalid o
 
 Identical committed package/options/mode replay returns the persisted report without writes. To retry deferred sections after correcting configuration, set a new meaningful `review_reference` and review a fresh preview. Changed source values produce a new package hash. Domain identities prevent duplicate employees, assignments, balances or monthly records on corrected-file imports.
 
-Replacement uses a separate review. Resolve every required employee identity and classify every target table in `reset_delete_tables` or `reset_retain_tables`. Foundation, permissions, roles, migration history and import audit remain retained. Preview with `-Replace`; review counts, exact preserved accounts and nullable links within rows selected for deletion. Retained references to deleted rows and unsupported cycles block execution.
+Replacement uses a separate review. Resolve every required employee identity and classify every target table in `reset_delete_tables`, `reset_truncate_tables` or `reset_retain_tables`. Foundation, permissions, roles, migration history and import audit remain retained. Preview with `-Replace`; review counts, exact preserved accounts and reset operations. Delete follows populated foreign-key dependencies; nullable links are cleared only to resolve supported cycles, and columns governed by check constraints are excluded from automatic clearing. Retained references to deleted rows and unsupported cycles block execution. Populated tables with delete triggers require explicit lifecycle review rather than being silently treated as ordinary deletes.
+
+`reset_truncate_tables` explicitly selects a whole-table reset group, such as all three attendance day metadata tables for a pre-live reload. The group must include every table referencing a selected table, including empty referencing tables, and must exclude preserved identity/foundation tables and inherited/partitioned tables. The engine uses schema-qualified `TRUNCATE ... RESTRICT` in the import transaction, without CASCADE or disabling normal lifecycle guards.
 
 For an approved replacement, pause application writes and add `-Replace -WritesPaused -PostgresBin "<PostgreSQL bin directory>"` to Apply, using the replacement preview/digest. A snapshot-consistent custom backup is taken and checked before deletion. Reset, import and committed audit are atomic. Restoration has been tested into a separate fictional database containing the ops foundation; restoring over a live schema requires its own reviewed procedure.
+
+For an explicitly approved pre-live reset without a backup, set `"replacement_backup": {"mode": "SKIP", "reason": "Operator approved pre-live clean reload"}` in the operator options **before Preview**. The default is `{"mode":"REQUIRED"}`. A SKIP reason must be nonblank, at most 200 characters, and contain no control characters. The reviewed digest binds this choice, and the committed report/audit records it. With SKIP, `PostgresBin` is not required and no new backup is created; all target, preservation, write-lock and transaction checks still apply.
+
+Failures after the private output directory is created write `failure.json` with a safe operation code and available SQLSTATE/constraint/table identifiers, excluding SQL text, bind values and database error details. A failure report does not establish commit status: check staged run state and persisted audit before retrying.
 
 `run-state.staged.json` records the run ID before commit. If commit acknowledgement or final report writing fails, run `-Action Reconcile -RunId "<staged run ID>"` with the original package/options and new output. Distribute staged credentials only after the persisted run is confirmed committed.
 
@@ -318,7 +324,7 @@ Focused local suites, from `hrms-database`:
 ```powershell
 rtk proxy py -3 -m unittest discover -s tests/tenant_specific/solvian/unit -p test_converter.py -v
 rtk proxy py -3 -m unittest discover -s tests/integration/imports -p test_import_storage.py
-# Requires the native importer and payroll_fixture test executable to be compiled.
+# Requires the native importer, payroll_fixture, and analytics payroll_report_fixture test executables.
 rtk proxy node tests/integration/imports/native-import.integration.cjs
 ```
 

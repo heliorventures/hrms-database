@@ -35,8 +35,12 @@ if ($Action -ne 'Apply' -and ($PlanPath -or $ConfirmDigest -or $WritesPaused)) {
 if ($Action -eq 'Apply' -and (-not $PlanPath -or -not $ConfirmDigest)) {
     throw 'Apply requires the reviewed PlanPath and its exact ConfirmDigest.'
 }
-if ($Action -eq 'Apply' -and $Replace -and (-not $WritesPaused -or -not $PostgresBin)) {
-    throw 'Replacement requires an application write pause and PostgresBin for a verified backup.'
+if ($Action -eq 'Apply' -and $Replace) {
+    $operatorOptions = Get-Content -LiteralPath $optionsFile -Raw | ConvertFrom-Json
+    $skipBackup = $operatorOptions.replacement_backup.mode -eq 'SKIP'
+    if (-not $WritesPaused -or (-not $skipBackup -and -not $PostgresBin)) {
+        throw 'Replacement requires a write pause and PostgresBin unless the reviewed options explicitly skip backup.'
+    }
 }
 $nativeArguments = @($Action.ToLowerInvariant(), '--package', $packageFile, '--options', $optionsFile, '--output', $outputPath)
 if ($EnvironmentFile) { $nativeArguments += @('--env-file', (ExistingFile $EnvironmentFile)) }

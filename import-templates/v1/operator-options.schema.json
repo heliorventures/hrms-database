@@ -14,6 +14,11 @@
     "payroll_excluded_employee_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uuid"}},
     "runtime_contract_version": {"const": 1}, "review_reference": {"type": ["string", "null"], "minLength": 1, "maxLength": 200},
     "reset_delete_tables": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-    "reset_retain_tables": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+    "reset_retain_tables": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "reset_truncate_tables": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9_]{1,63}$"}},
+    "replacement_backup": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "REQUIRED"}}},
+      {"type": "object", "additionalProperties": false, "required": ["mode", "reason"], "properties": {"mode": {"const": "SKIP"}, "reason": {"type": "string", "minLength": 1, "maxLength": 200, "allOf": [{"pattern": "\\S"}, {"pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"}]}}}
+    ]}
   }
 }
