@@ -141,10 +141,13 @@ def convert_solvian(rows, profile: str, options: ConversionOptions) -> dict:
         salary = recurring_salary(row)
         leave, historical = leave_snapshot(row, options)
         period = period_input(row, options.september_blank_formula_inputs_as_zero)
+        from scripts.tenant_specific.solvian.imports.solvian_future_rules import tax_settings
+        future_tax = tax_settings(row)
         employees.append({"source_ref": row.source_ref(), "source_states": row.states(),
                           "employee": employee, "identity": identity, "bank": bank,
                           "recurring_salary": salary, "leave_opening": leave,
-                          "historical_lwp": historical, "period_input": period, "clear_fields": []})
+                          "historical_lwp": historical, "period_input": period, "clear_fields": [],
+                          "tax_settings": future_tax, "tax_history": []})
     if not employees:
         raise ValueError("No employee rows matched the selected source profile")
     _duplicates(employees, issues)
@@ -152,9 +155,10 @@ def convert_solvian(rows, profile: str, options: ConversionOptions) -> dict:
     if unmatched:
         issues.append({"code": "UNUSED_CODE_MAPPING", "severity": "BLOCK_TENANT", "section": "employee",
                        "source_ref": None, "field": "code", "message": "A reviewed code mapping does not match an employee source row; review the mapping file."})
-    return {"format": "hrms-tenant-import", "version": 1,
+    from scripts.tenant_specific.solvian.imports.solvian_future_rules import company_policy
+    return {"format": "hrms-tenant-import", "version": 1, "company_payroll_policy": company_policy(),
             "source": {"file_label": rows.file_label, "file_hash": rows.file_hash, "profile": profile,
-                       "profile_version": 1, "formula_results": "CACHED_SOURCE_VALUES"},
+                       "profile_version": 3, "formula_results": "CACHED_SOURCE_VALUES"},
             "tenant_code": options.tenant_code.strip(),
             "salary_effective_policy": "JOINING_DATE" if options.salary_effective_from == "JOINING_DATE" else "FIXED_DATE",
             "salary_effective_from": None if options.salary_effective_from == "JOINING_DATE" else options.salary_effective_from,

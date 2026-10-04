@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0095-001-protect-referenced-component-semantics" author="kabipay-dev">
+  <sql splitStatements="false"><![CDATA[
+CREATE FUNCTION "${schema}".guard_salary_component_semantics() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF (OLD.code,OLD.type,OLD.is_taxable) IS DISTINCT FROM (NEW.code,NEW.type,NEW.is_taxable)
+ AND (
+  EXISTS (SELECT 1 FROM "${schema}".salary_structure_component WHERE tenant_id=OLD.tenant_id AND salary_component_id=OLD.id)
+  OR EXISTS (SELECT 1 FROM "${schema}".employee_salary_component_override WHERE tenant_id=OLD.tenant_id AND salary_component_id=OLD.id)
+  OR EXISTS (SELECT 1 FROM "${schema}".payslip_component WHERE tenant_id=OLD.tenant_id AND salary_component_id=OLD.id)
+  OR EXISTS (SELECT 1 FROM "${schema}".payroll_period_input WHERE tenant_id=OLD.tenant_id AND ready
+     AND (input->'automatic' IS NULL OR input->'automatic'='null'::jsonb)
+     AND ((input->'expected_earned_components') ? OLD.code OR (OLD.code='INCENTIVE' AND COALESCE((input->>'incentive')::numeric,0)<>0)))
+  OR EXISTS (SELECT 1 FROM "${schema}".employee_tax_history WHERE tenant_id=OLD.tenant_id AND (payload->'components') ? OLD.code)
+  OR EXISTS (SELECT 1 FROM "${schema}".payslip_statement WHERE tenant_id=OLD.tenant_id
+     AND ((statement->'components') ? OLD.code OR (OLD.code='INCENTIVE' AND COALESCE((statement->>'incentive')::numeric,0)<>0)))
+ ) THEN
+  RAISE EXCEPTION 'Referenced component code, type and tax treatment are immutable; create a new component for future salary assignments';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER guard_salary_component_semantics BEFORE UPDATE ON "${schema}".salary_component
+ FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_salary_component_semantics();
+  ]]></sql>
+ </changeSet>
+</databaseChangeLog>

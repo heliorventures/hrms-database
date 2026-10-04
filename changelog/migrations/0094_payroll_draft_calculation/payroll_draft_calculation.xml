@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0094-001-payroll-reviewed-drafts" author="kabipay-dev">
+  <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".payroll_cycle ADD CONSTRAINT uq_payroll_cycle_draft_tenant UNIQUE(tenant_id,id);
+CREATE TABLE "${schema}".payroll_draft_calculation (
+ tenant_id UUID NOT NULL, cycle_id UUID NOT NULL, revision INTEGER NOT NULL CHECK(revision>0),
+ fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64), snapshot JSONB NOT NULL,
+ calculated_by UUID NOT NULL, calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ finalized_at TIMESTAMPTZ, finalized_by UUID, acknowledgement JSONB,
+ PRIMARY KEY(tenant_id,cycle_id),
+ FOREIGN KEY(tenant_id,cycle_id) REFERENCES "${schema}".payroll_cycle(tenant_id,id),
+ FOREIGN KEY(tenant_id,calculated_by) REFERENCES "${schema}"."user"(tenant_id,id),
+ FOREIGN KEY(tenant_id,finalized_by) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE FUNCTION "${schema}".guard_payroll_draft() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='UPDATE' AND OLD.finalized_at IS NOT NULL THEN
+  RAISE EXCEPTION 'finalized payroll review is immutable';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER guard_payroll_draft BEFORE UPDATE ON "${schema}".payroll_draft_calculation
+ FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_payroll_draft();
+  ]]></sql>
+ </changeSet>
+</databaseChangeLog>

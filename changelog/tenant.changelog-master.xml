@@ -109,4 +109,7 @@
     <include file="migrations/0090_payroll_period_configuration/payroll_period_configuration.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0091_leave_import_history/leave_import_history.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0092_tenant_import_tracking/tenant_import_tracking.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0093_tax_projection_configuration/tax_projection_configuration.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0094_payroll_draft_calculation/payroll_draft_calculation.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0095_payroll_catalog_integrity/payroll_catalog_integrity.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

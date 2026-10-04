@@ -217,7 +217,11 @@ Conversion issues use WARNING, DEFER_SECTION, BLOCK_EMPLOYEE and BLOCK_TENANT. A
 
 Recurring gross/split and annual employer PF are distinct. A source monthly hardcoded contribution/zero does not establish a permanent exemption or future employer cost. Employer PF/CTC remains unknown until its formula/configuration is confirmed. The displayed PF ceiling does not override a source formula that calculates directly from PF wages.
 
-Leave snapshots retain signed source values for review. Only reconciled nonnegative usage is split into EL usage and historical LWP. Pending/planned remain unknown where not supplied. Historical LWP never supplies September payroll days or dated requests.
+Leave snapshots retain signed source values for review. The Solvian profile applies the confirmed blank/dash-as-zero conventions: Opening is 2025 carry-forward, Allotted is the 2026 grant, signed taken values represent usage and excess usage is historical unpaid leave. All 37 source snapshots reconcile to nonnegative paid balances. Pending/planned remain unknown where not supplied. Historical LWP never supplies September payroll days or dated requests. Other converters must establish their own source conventions.
+
+Optional version-1 sections `company_payroll_policy`, employee `tax_settings` and `tax_history` use reusable native validators and independent section outcomes. Old packages can omit them. Proven Solvian percentage formulas and source contribution rules are converted into configuration effective 1 October 2026. Annual regime, residency, future eligibility and PT are not inferred from blank source amounts. Invalid/incomplete optional tax data defers that section while valid employee/salary/leave data can continue. Tax imports require tax:manage ALL; replacement also requires this permission because it can delete tax state.
+
+Tax history requires an explicit fiscal year, source reference, covered dates, actual component amounts, coverage status and reason. `tds: null` means not supplied; `tds: "0"` is a confirmed zero. Complete coverage requires a known TDS amount. Current-employer history must not overlap imported or finalized payroll. Settings/history corrections are revisioned and preserve finalized statements.
 
 Period data retains the actual gross formula choice, source-only overrides and earned components. Employee deductions are PF, ESI, PT and TDS, plus reviewed additional deductions with a reason. Advance is salary already paid: it never enters recurring components or deduction totals, and appears once in settlement. Missing deduction reasons keep the period draft. Company component visibility controls browser, print and PDF details without changing calculated totals; employer contributions are hidden by default.
 
@@ -305,7 +309,7 @@ For an approved replacement, pause application writes and add `-Replace -WritesP
 
 `run-state.staged.json` records the run ID before commit. If commit acknowledgement or final report writing fails, run `-Action Reconcile -RunId "<staged run ID>"` with the original package/options and new output. Distribute staged credentials only after the persisted run is confirmed committed.
 
-Deploy reviewed migrations 0090–0092 and matching services, recompose the gateway and deploy the UI before client acceptance. HR reviews monthly inputs and unresolved costs, then runs normal payroll. Company payslip display applies to all employees. Advances reduce remaining transfer payment while tax and net-earnings reports retain full earned salary. Payment itself remains external.
+Deploy reviewed migrations 0090–0094 and matching employee/payroll/leave/tax services, recompose the gateway and deploy the UI before client acceptance. HR reviews monthly inputs and unresolved costs, calculates/recalculates a draft, then explicitly selects Finalize & Lock. A stale review must be recalculated. Finalization is atomic and immutable; the old direct-run endpoint is retired. Company payslip display applies to all employees. Advances reduce remaining transfer payment while tax and net-earnings reports retain full earned salary. Payment itself remains external.
 
 ### Local verification
 

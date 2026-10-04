@@ -233,7 +233,51 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual(employee["historical_lwp"]["days"], "2")
         self.assertEqual(employee["period_input"]["lwp_days"], "0")
 
-    def test_negative_taken_is_reviewed_without_sign_inversion(self):
+    def test_all_blank_leave_is_zero(self):
+        package = self.convert(changes={"O": "", "P": "", "Q": "", "R": ""})
+        leave = package["employees"][0]["leave_opening"]
+        self.assertTrue(leave["ready"])
+        for field in ("carry_forward", "grant", "source_taken", "source_balance", "paid_used", "paid_remaining"):
+            self.assertEqual(leave[field], "0")
+        self.assertIsNone(leave["pending"])
+        self.assertIsNone(leave["planned"])
+        self.assertIn("LEAVE_BLANK_AS_ZERO", self.issue_codes(package))
+
+    def test_negative_taken_without_entitlement_is_historical_lwp(self):
+        employee = self.convert(changes={"O": 0, "P": 0, "Q": -7.5, "R": -7.5})["employees"][0]
+        self.assertTrue(employee["leave_opening"]["ready"])
+        self.assertEqual(employee["historical_lwp"]["days"], "7.5")
+        self.assertEqual(employee["leave_opening"]["paid_remaining"], "0")
+        self.assertEqual(employee["leave_opening"]["raw_source_values"]["taken"], "-7.5")
+
+    def test_positive_taken_with_zero_balance_is_lwp(self):
+        employee = self.convert(changes={"O": 0, "P": 0, "Q": 6, "R": 0})["employees"][0]
+        self.assertTrue(employee["leave_opening"]["ready"])
+        self.assertEqual(employee["historical_lwp"]["days"], "6")
+        self.assertEqual(employee["leave_opening"]["source_balance"], "-6")
+        self.assertEqual(employee["leave_opening"]["raw_source_values"]["balance"], "0")
+        self.assertEqual(employee["leave_opening"]["paid_used"], "0")
+
+    def test_blank_opening_reconciles_grant(self):
+        leave = self.convert(changes={"O": "", "P": 5, "Q": 2, "R": 3})["employees"][0]["leave_opening"]
+        self.assertTrue(leave["ready"])
+        self.assertEqual((leave["carry_forward"], leave["paid_used"], leave["paid_remaining"]), ("0", "2", "3"))
+
+    def test_source_dash_placeholders_follow_confirmed_blank_convention(self):
+        for changes in ({"O": "-", "P": "-", "Q": "-", "R": "-"},
+                        {"O": "-", "P": "-", "Q": -1, "R": "-"},
+                        {"O": "-", "P": 5, "Q": 2, "R": 3}):
+            with self.subTest(changes=changes):
+                leave = self.convert(changes=changes)["employees"][0]["leave_opening"]
+                self.assertTrue(leave["ready"])
+                self.assertEqual(leave["raw_source_values"]["carry_forward"], "-")
+
+    def test_blank_balance_is_derived_from_known_usage(self):
+        leave = self.convert(changes={"O": "", "P": "", "Q": -1, "R": ""})["employees"][0]["leave_opening"]
+        self.assertTrue(leave["ready"])
+        self.assertEqual(leave["source_balance"], "-1")
+
+    def test_negative_taken_with_contradictory_entitlement_is_reviewed(self):
         package = self.convert(changes={"Q": -2, "R": -2})
         self.assertIn("LEAVE_RECONCILIATION_REQUIRED", self.issue_codes(package))
         self.assertIsNone(package["employees"][0]["historical_lwp"])
@@ -288,6 +332,21 @@ class ConverterTests(unittest.TestCase):
     def test_optional_source_blanks_never_request_explicit_clears(self):
         employee = self.convert(changes={"I": "", "BG": ""})["employees"][0]
         self.assertEqual(employee["clear_fields"], [])
+
+    def test_future_tax_settings_only_retain_proven_source_percentage(self):
+        formula = self.convert(changes={"AT": ("AE8*10%", 2700)})
+        settings = formula["employees"][0]["tax_settings"]
+        self.assertEqual(settings["percentage"], "0.10")
+        self.assertIsNone(settings["regime"])
+        self.assertEqual(settings["effective_from"], "2026-10-01")
+        self.assertIsNone(self.convert()["employees"][0]["tax_settings"])
+
+    def test_future_company_basis_is_source_configuration_not_statutory_certification(self):
+        policy = self.convert()["company_payroll_policy"]
+        self.assertEqual(policy["esi_mode"], "CUSTOM_COMPONENTS")
+        self.assertEqual(policy["effective_from"], "2026-10-01")
+        self.assertIsNone(policy["professional_tax"])
+        self.assertTrue(policy["reason"])
 
     def test_required_operator_dates_have_no_defaults(self):
         with self.assertRaises((TypeError, ValueError)):

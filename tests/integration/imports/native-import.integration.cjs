@@ -10,7 +10,7 @@ const { Client } = require('pg');
 const root = path.resolve(__dirname, '../../..');
 const service = path.resolve(root, '../hrms-svc');
 const binary = path.join(service, 'target/debug/kabipay-tenant-import.exe');
-const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hrms-native-import-'));
+const directory = fs.mkdtempSync(path.join(process.env.HRMS_TEST_OUTPUT_ROOT || os.tmpdir(), 'hrms-native-import-'));
 const data = path.join(directory, 'pgdata');
 const bin = process.env.PG_TEST_BIN || 'C:/Program Files/PostgreSQL/17/bin';
 const schema = 'tenant_import_fixture';
@@ -68,6 +68,9 @@ async function main() {
     const optionsPath = path.join(directory, 'options.json');
     const document = JSON.parse(fs.readFileSync(path.join(root, 'import-templates/v1/example.synthetic.json'), 'utf8'));
     document.tenant_code = 'fictional'; document.employees[0].employee.code = 'EXAMPLE-001'; document.employees[0].employee.confirmation_date = '2025-01-01';
+    // This fixture exercises missing tax history estimated from a known salary.
+    // Historical salary unavailable but covered by opening history is a separate domain regression.
+    document.salary_effective_from = document.employees[0].employee.joining_date;
     document.employees[0].bank = { account_number: '1234567890', ifsc: 'ABCD0123456', bank_name: 'Fictional Bank', account_holder: 'Fictional Employee', branch: 'Fictional', account_type: 'SAVINGS', verified: false };
     document.employees[0].identity = { pan: 'ABCDE1234F', aadhaar_last_four: '1234', verified: false };
     fs.writeFileSync(packagePath, JSON.stringify(document));
@@ -160,6 +163,12 @@ async function main() {
     finally {await restored.end();}
     console.log('PASS snapshot backup restores pre-replacement employee data into a separate database');
     console.log(`Disposable fixture evidence: ${directory}`);
-  } finally {await db.end().catch(() => {}); if(started) pg('pg_ctl',['-D',data,'-m','fast','-w','stop']);}
+  } catch (error) {
+    console.error(`Fixture failure: ${error.message}; evidence: ${directory}`);
+    throw error;
+  } finally {await db.end().catch(() => {}); if(started) {
+    try { pg('pg_ctl',['-D',data,'-m','fast','-w','stop']); }
+    catch (error) { console.error(`Fixture cleanup failed: ${error.message}`); process.exitCode=1; }
+  }}
 }
 main().catch(error => {console.error(error.message);process.exitCode=1;});

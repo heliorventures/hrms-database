@@ -53,9 +53,36 @@ def recurring_salary(row):
 
 
 def leave_snapshot(row, options):
-    carry, grant, taken, balance = (row.number(field) for field in ("carry_forward", "grant", "taken", "balance"))
+    fields = ("carry_forward", "grant", "taken", "balance")
+    values = {field: row.number(field) for field in fields}
+    raw_values = {field: row.cell(field).raw if row.cell(field) else None for field in fields}
+    states = row.states()
+    blank = {field for field in fields if states[field] in ("BLANK", "MISSING")
+             or (states[field] == "VALUE" and str(raw_values[field]).strip() == "-")}
+    zero_fields = blank.intersection(("carry_forward", "grant"))
+    # Usage is zero only when the entire section is blank; otherwise an absent
+    # Taken field remains unknown instead of inventing historical usage.
+    if len(blank) == len(fields):
+        zero_fields.add("taken")
+    for field in zero_fields:
+        values[field] = Decimal(0)
+    if zero_fields:
+        row.issue("LEAVE_BLANK_AS_ZERO", "WARNING", "leave_opening", "carry_forward",
+                  "Confirmed source convention: blank entitlement, or wholly blank leave history, is zero.")
+    carry, grant, taken, balance = (values[field] for field in fields)
+    if taken is not None and taken < 0:
+        taken = abs(taken)
+        row.issue("LEAVE_SIGNED_USAGE_NORMALIZED", "WARNING", "leave_opening", "taken",
+                  "Confirmed source convention: negative Taken records absolute historical usage; original values are retained.")
+    if all(value is not None for value in (carry, grant, taken)):
+        expected_balance = carry + grant - taken
+        if "balance" in blank or (carry == 0 and grant == 0 and taken > 0 and balance == 0):
+            balance = expected_balance
+            row.issue("LEAVE_BALANCE_NORMALIZED", "WARNING", "leave_opening", "balance",
+                      "Derived accounting balance from entitlement and usage; source zero with no entitlement denotes unpaid usage. Paid availability stays nonnegative.")
     result = {"year": 2026, "as_of": options.leave_as_of, "carry_forward": quantity(carry),
               "grant": quantity(grant), "source_taken": quantity(taken), "source_balance": quantity(balance),
+              "raw_source_values": raw_values,
               "paid_used": None, "paid_remaining": None, "pending": None, "planned": None,
               "ready": False}
     historical = None
@@ -70,7 +97,7 @@ def leave_snapshot(row, options):
                           "payroll_attribution": "HISTORICAL_ONLY"}
     else:
         row.issue("LEAVE_RECONCILIATION_REQUIRED", "DEFER_SECTION", "leave_opening", "taken",
-                  "Leave values are unknown, signed or inconsistent; confirm the snapshot without guessing signs or entitlement.")
+                  "Leave values remain unknown or inconsistent after confirmed source conventions; review the snapshot.")
     row.issue("LEAVE_REQUEST_STATUS_NOT_SUPPLIED", "WARNING", "leave_opening", "pending",
               "The source supplies no pending/planned request status; these remain unknown and no dated request is created.")
     if row.text("leave_date_text"):

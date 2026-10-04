@@ -5,230 +5,1495 @@
   "description": "Decimal strings, ISO dates and independent section issues. Null/omitted optional source values preserve existing data; clear_fields alone requests deletion. A package is never authorization to run payroll or reset a tenant.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format", "version", "source", "tenant_code", "salary_effective_from", "leave_as_of", "period", "employees", "configuration", "issues"],
-  "properties": {
-    "format": {"const": "hrms-tenant-import"},
-    "version": {"const": 1},
-    "source": {"$ref": "#/$defs/source"},
-    "tenant_code": {"type": "string", "minLength": 1},
-    "salary_effective_from": {"$ref": "#/$defs/optional_date"},
-    "salary_effective_policy": {"enum": ["FIXED_DATE", "JOINING_DATE"], "default": "FIXED_DATE"},
-    "leave_as_of": {"$ref": "#/$defs/date"},
-    "period": {"$ref": "#/$defs/period"},
-    "employees": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/import_employee"}},
-    "configuration": {"$ref": "#/$defs/configuration"},
-    "issues": {"type": "array", "items": {"$ref": "#/$defs/issue"}}
-  },
-  "allOf": [
-    {"if": {"properties": {"salary_effective_policy": {"const": "JOINING_DATE"}}, "required": ["salary_effective_policy"]},
-     "then": {"properties": {"salary_effective_from": {"type": "null"}}},
-     "else": {"properties": {"salary_effective_from": {"$ref": "#/$defs/date"}}}}
+  "required": [
+    "format",
+    "version",
+    "source",
+    "tenant_code",
+    "salary_effective_from",
+    "leave_as_of",
+    "period",
+    "employees",
+    "configuration",
+    "issues"
   ],
-  "$defs": {
-    "money": {"type": ["string", "null"], "pattern": "^-?[0-9]+\\.[0-9]{2}$"},
-    "quantity": {"type": ["string", "null"], "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
-    "date": {"type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
-    "optional_date": {"anyOf": [{"$ref": "#/$defs/date"}, {"type": "null"}]},
-    "optional_text": {"type": ["string", "null"], "minLength": 1},
-    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "component_set": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["BASIC", "HRA", "CONVEYANCE", "OTHER"]}},
-    "components": {
-      "type": "object", "additionalProperties": false, "required": ["BASIC", "HRA", "CONVEYANCE", "OTHER"],
-      "properties": {"BASIC": {"$ref": "#/$defs/money"}, "HRA": {"$ref": "#/$defs/money"}, "CONVEYANCE": {"$ref": "#/$defs/money"}, "OTHER": {"$ref": "#/$defs/money"}}
+  "properties": {
+    "company_payroll_policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/company_payroll_policy"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
-    "ratios": {
-      "type": "object", "additionalProperties": false, "required": ["BASIC", "HRA", "CONVEYANCE", "OTHER"],
-      "properties": {"BASIC": {"$ref": "#/$defs/quantity"}, "HRA": {"$ref": "#/$defs/quantity"}, "CONVEYANCE": {"$ref": "#/$defs/quantity"}, "OTHER": {"$ref": "#/$defs/quantity"}}
+    "format": {
+      "const": "hrms-tenant-import"
     },
-    "period": {
-      "type": "object", "additionalProperties": false, "required": ["year", "month"],
-      "properties": {"year": {"type": "integer", "minimum": 1900, "maximum": 2200}, "month": {"type": "integer", "minimum": 1, "maximum": 12}}
+    "version": {
+      "const": 1
     },
     "source": {
-      "type": "object", "additionalProperties": false,
-      "required": ["file_label", "file_hash", "profile", "profile_version", "formula_results"],
+      "$ref": "#/$defs/source"
+    },
+    "tenant_code": {
+      "type": "string",
+      "minLength": 1
+    },
+    "salary_effective_from": {
+      "$ref": "#/$defs/optional_date"
+    },
+    "salary_effective_policy": {
+      "enum": [
+        "FIXED_DATE",
+        "JOINING_DATE"
+      ],
+      "default": "FIXED_DATE"
+    },
+    "leave_as_of": {
+      "$ref": "#/$defs/date"
+    },
+    "period": {
+      "$ref": "#/$defs/period"
+    },
+    "employees": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/import_employee"
+      }
+    },
+    "configuration": {
+      "$ref": "#/$defs/configuration"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "salary_effective_policy": {
+            "const": "JOINING_DATE"
+          }
+        },
+        "required": [
+          "salary_effective_policy"
+        ]
+      },
+      "then": {
+        "properties": {
+          "salary_effective_from": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "salary_effective_from": {
+            "$ref": "#/$defs/date"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "component_formula": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "weights",
+        "rate",
+        "ceiling",
+        "rounding"
+      ],
       "properties": {
-        "file_label": {"type": "string", "minLength": 1}, "file_hash": {"$ref": "#/$defs/hash"},
-        "profile": {"type": "string", "minLength": 1}, "profile_version": {"type": "integer", "minimum": 1},
-        "formula_results": {"const": "CACHED_SOURCE_VALUES"}
+        "weights": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "$ref": "#/$defs/quantity"
+          }
+        },
+        "rate": {
+          "$ref": "#/$defs/quantity"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/money"
+        },
+        "rounding": {
+          "enum": [
+            "HALF_UP_2DP",
+            "HALF_UP_RUPEE",
+            "CEIL_RUPEE"
+          ]
+        }
+      }
+    },
+    "company_payroll_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effective_from",
+        "effective_until",
+        "lwp_divisor",
+        "origin",
+        "reason",
+        "pf_employee",
+        "pf_employer",
+        "esi_basis",
+        "esi_employer_rate",
+        "company_esi_covered",
+        "esi_mode",
+        "classifications",
+        "professional_tax"
+      ],
+      "properties": {
+        "effective_from": {
+          "$ref": "#/$defs/date"
+        },
+        "effective_until": {
+          "$ref": "#/$defs/optional_date"
+        },
+        "lwp_divisor": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 31
+        },
+        "origin": {
+          "enum": [
+            "IMPORTED_CLIENT_RULE",
+            "HR_CONFIGURATION",
+            "STATUTORY_VERSION"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "pf_employee": {
+          "$ref": "#/$defs/component_formula"
+        },
+        "pf_employer": {
+          "$ref": "#/$defs/component_formula"
+        },
+        "esi_basis": {
+          "$ref": "#/$defs/component_formula"
+        },
+        "esi_employer_rate": {
+          "$ref": "#/$defs/quantity"
+        },
+        "company_esi_covered": {
+          "type": "boolean"
+        },
+        "esi_mode": {
+          "enum": [
+            "CUSTOM_COMPONENTS",
+            "INDIA_COSS_2025"
+          ]
+        },
+        "classifications": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "INCLUDED",
+              "EXCLUDED_WITH_ADDBACK",
+              "EXCLUDED_OUTSIDE_ADDBACK"
+            ]
+          }
+        },
+        "professional_tax": {
+          "$ref": "#/$defs/money"
+        }
+      }
+    },
+    "tax_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "regime",
+        "method",
+        "percentage",
+        "basis_components",
+        "effective_from",
+        "effective_until",
+        "reason"
+      ],
+      "properties": {
+        "regime": {
+          "enum": [
+            "OLD",
+            "NEW",
+            null
+          ]
+        },
+        "method": {
+          "enum": [
+            "ANNUAL_PROJECTION",
+            "PERCENTAGE_OVERRIDE"
+          ]
+        },
+        "percentage": {
+          "$ref": "#/$defs/quantity"
+        },
+        "basis_components": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "effective_from": {
+          "$ref": "#/$defs/date"
+        },
+        "effective_until": {
+          "$ref": "#/$defs/optional_date"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2000
+        },
+        "resident": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "tax_history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fiscal_year",
+        "period_start",
+        "period_end",
+        "employer",
+        "source_key",
+        "earnings",
+        "components",
+        "tds",
+        "coverage",
+        "reason",
+        "evidence"
+      ],
+      "properties": {
+        "fiscal_year": {
+          "type": "integer",
+          "minimum": 2000,
+          "maximum": 2199
+        },
+        "period_start": {
+          "$ref": "#/$defs/date"
+        },
+        "period_end": {
+          "$ref": "#/$defs/date"
+        },
+        "employer": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "source_key": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "earnings": {
+          "$ref": "#/$defs/money"
+        },
+        "components": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "$ref": "#/$defs/money"
+          }
+        },
+        "tds": {
+          "$ref": "#/$defs/money"
+        },
+        "coverage": {
+          "enum": [
+            "COMPLETE",
+            "INCOMPLETE"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "evidence": {
+          "const": "IMPORTED_ACTUAL"
+        }
+      }
+    },
+    "money": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^-?[0-9]+\\.[0-9]{2}$"
+    },
+    "quantity": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "optional_date": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/date"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optional_text": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "component_set": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "BASIC",
+          "HRA",
+          "CONVEYANCE",
+          "OTHER"
+        ]
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "BASIC",
+        "HRA",
+        "CONVEYANCE",
+        "OTHER"
+      ],
+      "properties": {
+        "BASIC": {
+          "$ref": "#/$defs/money"
+        },
+        "HRA": {
+          "$ref": "#/$defs/money"
+        },
+        "CONVEYANCE": {
+          "$ref": "#/$defs/money"
+        },
+        "OTHER": {
+          "$ref": "#/$defs/money"
+        }
+      }
+    },
+    "ratios": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "BASIC",
+        "HRA",
+        "CONVEYANCE",
+        "OTHER"
+      ],
+      "properties": {
+        "BASIC": {
+          "$ref": "#/$defs/quantity"
+        },
+        "HRA": {
+          "$ref": "#/$defs/quantity"
+        },
+        "CONVEYANCE": {
+          "$ref": "#/$defs/quantity"
+        },
+        "OTHER": {
+          "$ref": "#/$defs/quantity"
+        }
+      }
+    },
+    "period": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "year",
+        "month"
+      ],
+      "properties": {
+        "year": {
+          "type": "integer",
+          "minimum": 1900,
+          "maximum": 2200
+        },
+        "month": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_label",
+        "file_hash",
+        "profile",
+        "profile_version",
+        "formula_results"
+      ],
+      "properties": {
+        "file_label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "formula_results": {
+          "const": "CACHED_SOURCE_VALUES"
+        }
       }
     },
     "source_ref": {
-      "type": "object", "additionalProperties": false, "required": ["file_hash", "sheet", "row", "cells"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_hash",
+        "sheet",
+        "row",
+        "cells"
+      ],
       "properties": {
-        "file_hash": {"$ref": "#/$defs/hash"}, "sheet": {"type": "string", "minLength": 1},
-        "row": {"type": "integer", "minimum": 1},
-        "cells": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[A-Z]{1,3}[1-9][0-9]*$"}}
+        "file_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "sheet": {
+          "type": "string",
+          "minLength": 1
+        },
+        "row": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cells": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Z]{1,3}[1-9][0-9]*$"
+          }
+        }
       }
     },
     "issue": {
-      "type": "object", "additionalProperties": false, "required": ["code", "severity", "section", "source_ref", "field", "message"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "section",
+        "source_ref",
+        "field",
+        "message"
+      ],
       "properties": {
-        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"},
-        "severity": {"enum": ["WARNING", "DEFER_SECTION", "BLOCK_EMPLOYEE", "BLOCK_TENANT"]},
-        "section": {"type": "string", "minLength": 1}, "field": {"type": "string", "minLength": 1},
-        "source_ref": {"anyOf": [{"$ref": "#/$defs/source_ref"}, {"type": "null"}]},
-        "message": {"type": "string", "minLength": 1, "description": "Safe application text only; no credential, source name, account number or full identifier."}
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]+$"
+        },
+        "severity": {
+          "enum": [
+            "WARNING",
+            "DEFER_SECTION",
+            "BLOCK_EMPLOYEE",
+            "BLOCK_TENANT"
+          ]
+        },
+        "section": {
+          "type": "string",
+          "minLength": 1
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/source_ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Safe application text only; no credential, source name, account number or full identifier."
+        }
       }
     },
     "employee": {
-      "type": "object", "additionalProperties": false,
-      "required": ["code", "mapping_key", "name", "first_name", "last_name", "joining_date"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "mapping_key",
+        "name",
+        "first_name",
+        "last_name",
+        "joining_date"
+      ],
       "properties": {
-        "code": {"$ref": "#/$defs/optional_text"}, "mapping_key": {"type": "string", "minLength": 1},
-        "name": {"$ref": "#/$defs/optional_text"}, "first_name": {"$ref": "#/$defs/optional_text"},
-        "last_name": {"$ref": "#/$defs/optional_text"}, "joining_date": {"$ref": "#/$defs/optional_date"},
-        "birth_date": {"$ref": "#/$defs/optional_date"}, "confirmation_date": {"$ref": "#/$defs/optional_date"},
-        "exit_date": {"$ref": "#/$defs/optional_date"}, "last_working_date": {"$ref": "#/$defs/optional_date"},
-        "gender": {"enum": ["MALE", "FEMALE", "OTHER", null]}, "designation": {"$ref": "#/$defs/optional_text"},
-        "department": {"$ref": "#/$defs/optional_text"}, "uan": {"type": ["string", "null"], "pattern": "^[0-9]{12}$"}
+        "code": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "mapping_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "first_name": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "last_name": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "joining_date": {
+          "$ref": "#/$defs/optional_date"
+        },
+        "birth_date": {
+          "$ref": "#/$defs/optional_date"
+        },
+        "confirmation_date": {
+          "$ref": "#/$defs/optional_date"
+        },
+        "exit_date": {
+          "$ref": "#/$defs/optional_date"
+        },
+        "last_working_date": {
+          "$ref": "#/$defs/optional_date"
+        },
+        "gender": {
+          "enum": [
+            "MALE",
+            "FEMALE",
+            "OTHER",
+            null
+          ]
+        },
+        "designation": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "department": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "uan": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9]{12}$"
+        }
       },
       "description": "Unresolved required identity can be null in a conversion package only with BLOCK_EMPLOYEE issues. Importer must fail that employee closed. Optional nulls preserve existing data."
     },
     "identity": {
-      "type": "object", "additionalProperties": false, "required": ["verified"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verified"
+      ],
       "properties": {
-        "pan": {"type": ["string", "null"], "pattern": "^[A-Z]{5}[0-9]{4}[A-Z]$"},
-        "aadhaar_last_four": {"type": ["string", "null"], "pattern": "^[0-9]{4}$"}, "verified": {"const": false}
+        "pan": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Z]{5}[0-9]{4}[A-Z]$"
+        },
+        "aadhaar_last_four": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9]{4}$"
+        },
+        "verified": {
+          "const": false
+        }
       }
     },
     "bank": {
-      "type": "object", "additionalProperties": false, "required": ["account_number", "ifsc", "bank_name", "verified"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "account_number",
+        "ifsc",
+        "bank_name",
+        "verified"
+      ],
       "properties": {
-        "account_number": {"type": "string", "pattern": "^[0-9]+$"},
-        "ifsc": {"type": "string", "pattern": "^[A-Z]{4}0[A-Z0-9]{6}$"},
-        "bank_name": {"type": "string", "minLength": 1}, "account_holder": {"$ref": "#/$defs/optional_text"},
-        "branch": {"$ref": "#/$defs/optional_text"}, "account_type": {"$ref": "#/$defs/optional_text"}, "verified": {"const": false}
+        "account_number": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "ifsc": {
+          "type": "string",
+          "pattern": "^[A-Z]{4}0[A-Z0-9]{6}$"
+        },
+        "bank_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "account_holder": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "branch": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "account_type": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "verified": {
+          "const": false
+        }
       }
     },
     "employer_pf_rule": {
-      "type": "object", "additionalProperties": false, "required": ["basis_components", "rate", "ceiling", "rounding", "origin"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basis_components",
+        "rate",
+        "ceiling",
+        "rounding",
+        "origin"
+      ],
       "properties": {
-        "basis_components": {"$ref": "#/$defs/component_set"}, "rate": {"$ref": "#/$defs/quantity"},
-        "ceiling": {"$ref": "#/$defs/money"}, "rounding": {"enum": ["HALF_UP_2DP"]}, "origin": {"enum": ["SOURCE_FORMULA", "REVIEWED_CONFIGURATION"]}
+        "basis_components": {
+          "$ref": "#/$defs/component_set"
+        },
+        "rate": {
+          "$ref": "#/$defs/quantity"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/money"
+        },
+        "rounding": {
+          "enum": [
+            "HALF_UP_2DP"
+          ]
+        },
+        "origin": {
+          "enum": [
+            "SOURCE_FORMULA",
+            "REVIEWED_CONFIGURATION"
+          ]
+        }
       }
     },
     "recurring_salary": {
-      "type": "object", "additionalProperties": false,
-      "required": ["monthly_gross", "annual_gross", "components", "component_ratios", "calculation_basis", "employer_pf_rule", "annual_employer_pf", "annual_ctc"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "monthly_gross",
+        "annual_gross",
+        "components",
+        "component_ratios",
+        "calculation_basis",
+        "employer_pf_rule",
+        "annual_employer_pf",
+        "annual_ctc"
+      ],
       "properties": {
-        "monthly_gross": {"$ref": "#/$defs/money"}, "annual_gross": {"$ref": "#/$defs/money"},
-        "components": {"$ref": "#/$defs/components"}, "component_ratios": {"$ref": "#/$defs/ratios"},
-        "calculation_basis": {"const": "PERCENT_OF_GROSS"},
-        "employer_pf_rule": {"anyOf": [{"$ref": "#/$defs/employer_pf_rule"}, {"type": "null"}]},
-        "annual_employer_pf": {"$ref": "#/$defs/money"}, "annual_ctc": {"$ref": "#/$defs/money"}
+        "monthly_gross": {
+          "$ref": "#/$defs/money"
+        },
+        "annual_gross": {
+          "$ref": "#/$defs/money"
+        },
+        "components": {
+          "$ref": "#/$defs/components"
+        },
+        "component_ratios": {
+          "$ref": "#/$defs/ratios"
+        },
+        "calculation_basis": {
+          "const": "PERCENT_OF_GROSS"
+        },
+        "employer_pf_rule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/employer_pf_rule"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "annual_employer_pf": {
+          "$ref": "#/$defs/money"
+        },
+        "annual_ctc": {
+          "$ref": "#/$defs/money"
+        }
       }
     },
     "leave_opening": {
-      "type": "object", "additionalProperties": false,
-      "required": ["year", "as_of", "carry_forward", "grant", "source_taken", "source_balance", "paid_used", "paid_remaining", "pending", "planned", "ready"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "year",
+        "as_of",
+        "carry_forward",
+        "grant",
+        "source_taken",
+        "source_balance",
+        "paid_used",
+        "paid_remaining",
+        "pending",
+        "planned",
+        "ready"
+      ],
       "properties": {
-        "year": {"type": "integer", "minimum": 1900}, "as_of": {"$ref": "#/$defs/date"},
-        "carry_forward": {"$ref": "#/$defs/quantity"}, "grant": {"$ref": "#/$defs/quantity"},
-        "source_taken": {"$ref": "#/$defs/quantity"}, "source_balance": {"$ref": "#/$defs/quantity"},
-        "paid_used": {"$ref": "#/$defs/quantity"}, "paid_remaining": {"$ref": "#/$defs/quantity"},
-        "pending": {"$ref": "#/$defs/quantity"}, "planned": {"$ref": "#/$defs/quantity"}, "ready": {"type": "boolean"}
+        "raw_source_values": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "carry_forward",
+            "grant",
+            "taken",
+            "balance"
+          ],
+          "properties": {
+            "carry_forward": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            },
+            "grant": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            },
+            "taken": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            },
+            "balance": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            }
+          }
+        },
+        "year": {
+          "type": "integer",
+          "minimum": 1900
+        },
+        "as_of": {
+          "$ref": "#/$defs/date"
+        },
+        "carry_forward": {
+          "$ref": "#/$defs/quantity"
+        },
+        "grant": {
+          "$ref": "#/$defs/quantity"
+        },
+        "source_taken": {
+          "$ref": "#/$defs/quantity"
+        },
+        "source_balance": {
+          "$ref": "#/$defs/quantity"
+        },
+        "paid_used": {
+          "$ref": "#/$defs/quantity"
+        },
+        "paid_remaining": {
+          "$ref": "#/$defs/quantity"
+        },
+        "pending": {
+          "$ref": "#/$defs/quantity"
+        },
+        "planned": {
+          "$ref": "#/$defs/quantity"
+        },
+        "ready": {
+          "type": "boolean"
+        }
       }
     },
     "historical_lwp": {
-      "type": "object", "additionalProperties": false, "required": ["as_of", "days", "payroll_attribution"],
-      "properties": {"as_of": {"$ref": "#/$defs/date"}, "days": {"$ref": "#/$defs/quantity"}, "payroll_attribution": {"const": "HISTORICAL_ONLY"}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "as_of",
+        "days",
+        "payroll_attribution"
+      ],
+      "properties": {
+        "as_of": {
+          "$ref": "#/$defs/date"
+        },
+        "days": {
+          "$ref": "#/$defs/quantity"
+        },
+        "payroll_attribution": {
+          "const": "HISTORICAL_ONLY"
+        }
+      }
     },
     "additional_deduction": {
-      "type": "object", "additionalProperties": false, "required": ["code", "amount", "reason", "origin"],
-      "properties": {"code": {"type": "string", "minLength": 1}, "amount": {"$ref": "#/$defs/money"},
-                     "reason": {"$ref": "#/$defs/optional_text"}, "origin": {"enum": ["SOURCE_IMPORT", "HR_EDIT"]}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "amount",
+        "reason",
+        "origin"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "amount": {
+          "$ref": "#/$defs/money"
+        },
+        "reason": {
+          "$ref": "#/$defs/optional_text"
+        },
+        "origin": {
+          "enum": [
+            "SOURCE_IMPORT",
+            "HR_EDIT"
+          ]
+        }
+      }
     },
     "statutory_overrides": {
-      "type": "object", "additionalProperties": false, "required": ["PF", "ESI", "PT", "TDS"],
-      "properties": {"PF": {"$ref": "#/$defs/money"}, "ESI": {"$ref": "#/$defs/money"}, "PT": {"$ref": "#/$defs/money"}, "TDS": {"$ref": "#/$defs/money"}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "PF",
+        "ESI",
+        "PT",
+        "TDS"
+      ],
+      "properties": {
+        "PF": {
+          "$ref": "#/$defs/money"
+        },
+        "ESI": {
+          "$ref": "#/$defs/money"
+        },
+        "PT": {
+          "$ref": "#/$defs/money"
+        },
+        "TDS": {
+          "$ref": "#/$defs/money"
+        }
+      }
     },
     "pf_esi_amounts": {
-      "type": "object", "additionalProperties": false, "required": ["pf", "esi"],
-      "properties": {"pf": {"$ref": "#/$defs/money"}, "esi": {"$ref": "#/$defs/money"}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pf",
+        "esi"
+      ],
+      "properties": {
+        "pf": {
+          "$ref": "#/$defs/money"
+        },
+        "esi": {
+          "$ref": "#/$defs/money"
+        }
+      }
     },
     "contribution_rule": {
-      "type": "object", "additionalProperties": false, "required": ["origin", "rate", "ceiling", "future_applicability_confirmed", "source_amount"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "rate",
+        "ceiling",
+        "future_applicability_confirmed",
+        "source_amount"
+      ],
       "properties": {
-        "origin": {"enum": ["SOURCE_FORMULA", "PERIOD_OVERRIDE"]}, "rate": {"$ref": "#/$defs/quantity"}, "ceiling": {"$ref": "#/$defs/money"},
-        "future_applicability_confirmed": {"type": "boolean"}, "source_amount": {"$ref": "#/$defs/money"}
+        "origin": {
+          "enum": [
+            "SOURCE_FORMULA",
+            "PERIOD_OVERRIDE"
+          ]
+        },
+        "rate": {
+          "$ref": "#/$defs/quantity"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/money"
+        },
+        "future_applicability_confirmed": {
+          "type": "boolean"
+        },
+        "source_amount": {
+          "$ref": "#/$defs/money"
+        }
       }
     },
     "contribution_rules": {
-      "type": "object", "additionalProperties": false,
-      "required": ["employee_pf", "employer_pf", "employee_esi", "employer_esi", "pf_basis_components", "displayed_pf_ceiling", "esi_gross_multiplier", "rounding"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "employee_pf",
+        "employer_pf",
+        "employee_esi",
+        "employer_esi",
+        "pf_basis_components",
+        "displayed_pf_ceiling",
+        "esi_gross_multiplier",
+        "rounding"
+      ],
       "properties": {
-        "employee_pf": {"$ref": "#/$defs/contribution_rule"}, "employer_pf": {"$ref": "#/$defs/contribution_rule"},
-        "employee_esi": {"$ref": "#/$defs/contribution_rule"}, "employer_esi": {"$ref": "#/$defs/contribution_rule"},
-        "pf_basis_components": {"$ref": "#/$defs/component_set"}, "displayed_pf_ceiling": {"$ref": "#/$defs/money"},
-        "esi_gross_multiplier": {"$ref": "#/$defs/quantity"}, "rounding": {"enum": ["SOURCE_PERIOD_OVERRIDE"]}
+        "employee_pf": {
+          "$ref": "#/$defs/contribution_rule"
+        },
+        "employer_pf": {
+          "$ref": "#/$defs/contribution_rule"
+        },
+        "employee_esi": {
+          "$ref": "#/$defs/contribution_rule"
+        },
+        "employer_esi": {
+          "$ref": "#/$defs/contribution_rule"
+        },
+        "pf_basis_components": {
+          "$ref": "#/$defs/component_set"
+        },
+        "displayed_pf_ceiling": {
+          "$ref": "#/$defs/money"
+        },
+        "esi_gross_multiplier": {
+          "$ref": "#/$defs/quantity"
+        },
+        "rounding": {
+          "enum": [
+            "SOURCE_PERIOD_OVERRIDE"
+          ]
+        }
       }
     },
     "expected_statement": {
-      "type": "object", "additionalProperties": false,
-      "required": ["earned_gross", "statutory_total", "additional_total", "net_earned", "source_total_deduction", "remaining_payable", "excess_advance_credit"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "earned_gross",
+        "statutory_total",
+        "additional_total",
+        "net_earned",
+        "source_total_deduction",
+        "remaining_payable",
+        "excess_advance_credit"
+      ],
       "properties": {
-        "earned_gross": {"$ref": "#/$defs/money"}, "statutory_total": {"$ref": "#/$defs/money"}, "additional_total": {"$ref": "#/$defs/money"},
-        "net_earned": {"$ref": "#/$defs/money"}, "source_total_deduction": {"$ref": "#/$defs/money"},
-        "remaining_payable": {"$ref": "#/$defs/money"}, "excess_advance_credit": {"$ref": "#/$defs/money"}
+        "earned_gross": {
+          "$ref": "#/$defs/money"
+        },
+        "statutory_total": {
+          "$ref": "#/$defs/money"
+        },
+        "additional_total": {
+          "$ref": "#/$defs/money"
+        },
+        "net_earned": {
+          "$ref": "#/$defs/money"
+        },
+        "source_total_deduction": {
+          "$ref": "#/$defs/money"
+        },
+        "remaining_payable": {
+          "$ref": "#/$defs/money"
+        },
+        "excess_advance_credit": {
+          "$ref": "#/$defs/money"
+        }
       }
     },
     "period_input": {
-      "type": "object", "additionalProperties": false,
-      "required": ["year", "month", "gross_rule", "fixed_gross", "earned_gross_override", "month_days", "paid_days", "present_days", "lwp_days", "source_lwp_days", "lwp_divisor", "lwp_amount_override", "lwp_basis", "lwp_handling", "variable_allowance_ot", "incentive", "advance_already_paid", "additional_deductions", "statutory_overrides", "expected_earned_components", "expected_wages", "expected_employer_contributions", "expected_statement", "contribution_rules", "ready", "status", "historical_lwp_included"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "year",
+        "month",
+        "gross_rule",
+        "fixed_gross",
+        "earned_gross_override",
+        "month_days",
+        "paid_days",
+        "present_days",
+        "lwp_days",
+        "source_lwp_days",
+        "lwp_divisor",
+        "lwp_amount_override",
+        "lwp_basis",
+        "lwp_handling",
+        "variable_allowance_ot",
+        "incentive",
+        "advance_already_paid",
+        "additional_deductions",
+        "statutory_overrides",
+        "expected_earned_components",
+        "expected_wages",
+        "expected_employer_contributions",
+        "expected_statement",
+        "contribution_rules",
+        "ready",
+        "status",
+        "historical_lwp_included"
+      ],
       "properties": {
-        "year": {"type": "integer", "minimum": 1900}, "month": {"type": "integer", "minimum": 1, "maximum": 12},
-        "gross_rule": {"enum": ["FIXED_MINUS_LWP", "PAID_DAYS_PLUS_OT", "SOURCE_OVERRIDE"]},
-        "fixed_gross": {"$ref": "#/$defs/money"}, "earned_gross_override": {"$ref": "#/$defs/money"},
-        "month_days": {"$ref": "#/$defs/quantity"}, "paid_days": {"$ref": "#/$defs/quantity"}, "present_days": {"$ref": "#/$defs/quantity"},
-        "lwp_days": {"$ref": "#/$defs/quantity"}, "source_lwp_days": {"$ref": "#/$defs/quantity"}, "lwp_divisor": {"$ref": "#/$defs/quantity"},
-        "lwp_amount_override": {"$ref": "#/$defs/money"}, "lwp_basis": {"enum": ["GROSS"]},
-        "lwp_handling": {"const": "SOURCE_GROSS_INCLUDES_REDUCTION"},
-        "variable_allowance_ot": {"$ref": "#/$defs/money"}, "incentive": {"$ref": "#/$defs/money"}, "advance_already_paid": {"$ref": "#/$defs/money"},
-        "additional_deductions": {"type": "array", "items": {"$ref": "#/$defs/additional_deduction"}},
-        "statutory_overrides": {"$ref": "#/$defs/statutory_overrides"}, "expected_earned_components": {"$ref": "#/$defs/components"},
-        "expected_wages": {"$ref": "#/$defs/pf_esi_amounts"}, "expected_employer_contributions": {"$ref": "#/$defs/pf_esi_amounts"},
-        "expected_statement": {"$ref": "#/$defs/expected_statement"}, "contribution_rules": {"$ref": "#/$defs/contribution_rules"},
-        "ready": {"type": "boolean"}, "status": {"const": "DRAFT"}, "historical_lwp_included": {"const": false},
-        "approved_lwp_review_hash": {"anyOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]}
+        "year": {
+          "type": "integer",
+          "minimum": 1900
+        },
+        "month": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "gross_rule": {
+          "enum": [
+            "FIXED_MINUS_LWP",
+            "PAID_DAYS_PLUS_OT",
+            "SOURCE_OVERRIDE"
+          ]
+        },
+        "fixed_gross": {
+          "$ref": "#/$defs/money"
+        },
+        "earned_gross_override": {
+          "$ref": "#/$defs/money"
+        },
+        "month_days": {
+          "$ref": "#/$defs/quantity"
+        },
+        "paid_days": {
+          "$ref": "#/$defs/quantity"
+        },
+        "present_days": {
+          "$ref": "#/$defs/quantity"
+        },
+        "lwp_days": {
+          "$ref": "#/$defs/quantity"
+        },
+        "source_lwp_days": {
+          "$ref": "#/$defs/quantity"
+        },
+        "lwp_divisor": {
+          "$ref": "#/$defs/quantity"
+        },
+        "lwp_amount_override": {
+          "$ref": "#/$defs/money"
+        },
+        "lwp_basis": {
+          "enum": [
+            "GROSS"
+          ]
+        },
+        "lwp_handling": {
+          "const": "SOURCE_GROSS_INCLUDES_REDUCTION"
+        },
+        "variable_allowance_ot": {
+          "$ref": "#/$defs/money"
+        },
+        "incentive": {
+          "$ref": "#/$defs/money"
+        },
+        "advance_already_paid": {
+          "$ref": "#/$defs/money"
+        },
+        "additional_deductions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/additional_deduction"
+          }
+        },
+        "statutory_overrides": {
+          "$ref": "#/$defs/statutory_overrides"
+        },
+        "expected_earned_components": {
+          "$ref": "#/$defs/components"
+        },
+        "expected_wages": {
+          "$ref": "#/$defs/pf_esi_amounts"
+        },
+        "expected_employer_contributions": {
+          "$ref": "#/$defs/pf_esi_amounts"
+        },
+        "expected_statement": {
+          "$ref": "#/$defs/expected_statement"
+        },
+        "contribution_rules": {
+          "$ref": "#/$defs/contribution_rules"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "status": {
+          "const": "DRAFT"
+        },
+        "historical_lwp_included": {
+          "const": false
+        },
+        "approved_lwp_review_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "automatic": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "eligibility",
+                "withholding_override"
+              ],
+              "properties": {
+                "eligibility": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "pf_applicable",
+                    "esi_applicable",
+                    "esi_continuation_until",
+                    "disability",
+                    "average_daily_wage"
+                  ],
+                  "properties": {
+                    "pf_applicable": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "esi_applicable": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "esi_continuation_until": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date"
+                    },
+                    "disability": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "average_daily_wage": {
+                      "$ref": "#/$defs/money"
+                    }
+                  }
+                },
+                "withholding_override": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "amount",
+                        "reason"
+                      ],
+                      "properties": {
+                        "amount": {
+                          "$ref": "#/$defs/money"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "pattern": "\\S",
+                          "maxLength": 2000
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
       },
-      "allOf": [{"if": {"properties": {"ready": {"const": true}}}, "then": {"properties": {
-        "additional_deductions": {"items": {"properties": {"reason": {"type": "string", "pattern": "\\S"}}}}
-      }}}]
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ready": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "additional_deductions": {
+                "items": {
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "import_employee": {
-      "type": "object", "additionalProperties": false,
-      "required": ["source_ref", "source_states", "employee", "identity", "bank", "recurring_salary", "leave_opening", "historical_lwp", "period_input", "clear_fields"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_ref",
+        "source_states",
+        "employee",
+        "identity",
+        "bank",
+        "recurring_salary",
+        "leave_opening",
+        "historical_lwp",
+        "period_input",
+        "clear_fields"
+      ],
       "properties": {
-        "source_ref": {"$ref": "#/$defs/source_ref"},
-        "source_states": {"type": "object", "additionalProperties": {"enum": ["MISSING", "BLANK", "NA", "VALUE", "ERROR"]}},
-        "employee": {"$ref": "#/$defs/employee"}, "identity": {"$ref": "#/$defs/identity"},
-        "bank": {"anyOf": [{"$ref": "#/$defs/bank"}, {"type": "null"}]},
-        "recurring_salary": {"anyOf": [{"$ref": "#/$defs/recurring_salary"}, {"type": "null"}]},
-        "leave_opening": {"$ref": "#/$defs/leave_opening"},
-        "historical_lwp": {"anyOf": [{"$ref": "#/$defs/historical_lwp"}, {"type": "null"}]},
-        "period_input": {"$ref": "#/$defs/period_input"},
-        "clear_fields": {"type": "array", "uniqueItems": true, "items": {"enum": ["birth_date", "confirmation_date", "exit_date", "last_working_date", "gender", "uan", "pan", "aadhaar_last_four", "bank.account_holder", "bank.branch", "bank.account_type"]}}
+        "tax_settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/tax_settings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tax_history": {
+          "type": "array",
+          "maxItems": 120,
+          "items": {
+            "$ref": "#/$defs/tax_history"
+          }
+        },
+        "source_ref": {
+          "$ref": "#/$defs/source_ref"
+        },
+        "source_states": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "MISSING",
+              "BLANK",
+              "NA",
+              "VALUE",
+              "ERROR"
+            ]
+          }
+        },
+        "employee": {
+          "$ref": "#/$defs/employee"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "bank": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/bank"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recurring_salary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/recurring_salary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leave_opening": {
+          "$ref": "#/$defs/leave_opening"
+        },
+        "historical_lwp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/historical_lwp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "period_input": {
+          "$ref": "#/$defs/period_input"
+        },
+        "clear_fields": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "birth_date",
+              "confirmation_date",
+              "exit_date",
+              "last_working_date",
+              "gender",
+              "uan",
+              "pan",
+              "aadhaar_last_four",
+              "bank.account_holder",
+              "bank.branch",
+              "bank.account_type"
+            ]
+          }
+        }
       }
     },
     "configuration": {
-      "type": "object", "additionalProperties": false, "required": ["leave", "payroll"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "leave",
+        "payroll"
+      ],
       "properties": {
         "leave": {
-          "type": "object", "additionalProperties": false,
-          "required": ["paid_type_code", "unpaid_type_code", "grant_mode", "unpaid_quota", "unpaid_max_consecutive_days", "approval"],
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "paid_type_code",
+            "unpaid_type_code",
+            "grant_mode",
+            "unpaid_quota",
+            "unpaid_max_consecutive_days",
+            "approval"
+          ],
           "properties": {
-            "paid_type_code": {"type": "string", "minLength": 1}, "unpaid_type_code": {"type": "string", "minLength": 1},
-            "grant_mode": {"const": "SNAPSHOT_ONLY"}, "unpaid_quota": {"type": "null"},
-            "unpaid_max_consecutive_days": {"type": "null"}, "approval": {"const": "EXISTING_WORKFLOW"}
+            "paid_type_code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "unpaid_type_code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "grant_mode": {
+              "const": "SNAPSHOT_ONLY"
+            },
+            "unpaid_quota": {
+              "type": "null"
+            },
+            "unpaid_max_consecutive_days": {
+              "type": "null"
+            },
+            "approval": {
+              "const": "EXISTING_WORKFLOW"
+            }
           }
         },
         "payroll": {
-          "type": "object", "additionalProperties": false,
-          "required": ["lwp_basis", "lwp_divisor", "rounding", "unresolved_future_rules", "auto_generate_payslips"],
-          "properties": {"lwp_basis": {"enum": ["GROSS"]}, "lwp_divisor": {"$ref": "#/$defs/quantity"},
-                         "rounding": {"enum": ["HALF_UP_2DP"]}, "unresolved_future_rules": {"const": "REQUIRE_HR_CONFIGURATION"},
-                         "auto_generate_payslips": {"const": false}}
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lwp_basis",
+            "lwp_divisor",
+            "rounding",
+            "unresolved_future_rules",
+            "auto_generate_payslips"
+          ],
+          "properties": {
+            "lwp_basis": {
+              "enum": [
+                "GROSS"
+              ]
+            },
+            "lwp_divisor": {
+              "$ref": "#/$defs/quantity"
+            },
+            "rounding": {
+              "enum": [
+                "HALF_UP_2DP"
+              ]
+            },
+            "unresolved_future_rules": {
+              "const": "REQUIRE_HR_CONFIGURATION"
+            },
+            "auto_generate_payslips": {
+              "const": false
+            }
+          }
         }
       }
     }
