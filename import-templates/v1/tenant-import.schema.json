@@ -705,8 +705,9 @@
         "origin"
       ],
       "properties": {
+        "fixed_monthly_amount": { "$ref": "#/$defs/money" },
         "basis_components": {
-          "$ref": "#/$defs/component_set"
+          "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/component_set/items" }
         },
         "rate": {
           "$ref": "#/$defs/quantity"
@@ -725,7 +726,12 @@
             "REVIEWED_CONFIGURATION"
           ]
         }
-      }
+      },
+      "allOf": [{
+        "if": { "required": ["fixed_monthly_amount"], "properties": { "fixed_monthly_amount": { "type": "string" } } },
+        "then": { "properties": { "basis_components": { "maxItems": 0 }, "rate": { "enum": ["0", "0.0", "0.00"] }, "ceiling": { "type": "null" }, "origin": { "const": "REVIEWED_CONFIGURATION" } } },
+        "else": { "properties": { "basis_components": { "minItems": 1 } } }
+      }]
     },
     "recurring_salary": {
       "type": "object",
@@ -1250,6 +1256,9 @@
                       ]
                     },
                     "average_daily_wage": {
+                      "$ref": "#/$defs/money"
+                    },
+                    "professional_tax": {
                       "$ref": "#/$defs/money"
                     }
                   }

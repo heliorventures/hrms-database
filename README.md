@@ -272,6 +272,8 @@ The user selected a provisional 31 August 2026 leave cutoff, each employee's joi
 
 ### Native template import and reviewed replacement
 
+Recurring employer PF may use either a component-based formula or a reviewed fixed monthly cost. For a fixed cost, supply `employer_pf_rule.fixed_monthly_amount` as a decimal string, an empty `basis_components` array, rate `0`, no ceiling, `HALF_UP_2DP` rounding and `REVIEWED_CONFIGURATION` origin. Annual employer PF must equal that monthly amount × 12, and annual CTC must equal annual gross + annual employer PF. A confirmed zero is valid; a missing amount remains unresolved. Use an effective salary revision when correcting employer costs; never rewrite finalized payroll.
+
 The reusable engine is `hrms-svc/crates/kabipay-tenant-import`; it contains no workbook column mappings. `scripts/reusable/imports/import-tenant-template.ps1` runs it. The default action is **Preview**, which only reads the database and writes a private plan. No action migrates, deploys or automatically generates payslips.
 
 Offline **Validate** checks the package contract and shared native salary/leave/period calculations without reading an environment file or connecting to a database. It writes a protected `validation-report.json` when an output path is supplied. Preview includes masked per-source section actions: CREATE/UPDATE/UNCHANGED for core identity, CREATE_AFTER_RESET for ordinary replaced staff, STAGE_FOR_REVIEW/DEFERRED for missing inputs, and RECONCILE for linked domain sections. The committed report gives the final CREATED/UPDATED/UNCHANGED/DEFERRED/FAILED facts after domain validation. Reconciliation actions are deliberately not promises that linked records can be overwritten.
