@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0099-001-company-payslip-template" author="kabipay-dev">
+  <addColumn schemaName="${schema}" tableName="payroll_compliance_setting">
+   <column name="payslip_template" type="VARCHAR(32)" defaultValue="EXISTING">
+    <constraints nullable="false"/>
+   </column>
+  </addColumn>
+  <sql>ALTER TABLE "${schema}".payroll_compliance_setting ADD CONSTRAINT ck_company_payslip_template CHECK (payslip_template IN ('EXISTING', 'TABLE'));</sql>
+  <rollback>
+   <sql>ALTER TABLE "${schema}".payroll_compliance_setting DROP CONSTRAINT ck_company_payslip_template;</sql>
+   <dropColumn schemaName="${schema}" tableName="payroll_compliance_setting" columnName="payslip_template"/>
+  </rollback>
+ </changeSet>
+</databaseChangeLog>
