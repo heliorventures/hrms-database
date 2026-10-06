@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts.reusable.imports.normalize import ConversionOptions
+from scripts.reusable.imports.location_mapping import load_location_map
 from scripts.reusable.imports.private_output import create_private_directory, write_private_json
 from scripts.tenant_specific.solvian.imports.solvian_profile import convert_solvian
 from scripts.reusable.imports.workbook_xml import read_workbook
@@ -28,6 +29,8 @@ def parser():
                         help="Reviewed September-only policy: blank numeric salary-formula inputs are zero, with provenance logs")
     result.add_argument("--employee-code-map", type=Path,
                         help="Reviewed JSON {source_hash, employee_codes: {Sheet1:row: code}}")
+    result.add_argument("--location-map", type=Path,
+                        help="Reviewed JSON {source_hash, tenant_code, locations: {Sheet1:row: {name, effective_from}}}")
     result.add_argument("--output-dir", required=True, type=Path,
                         help="New private directory under an existing parent; must not already exist")
     return result
@@ -63,6 +66,7 @@ def issue_report(package):
             "section_counts": {
                 "recurring_salary_present": sum(e["recurring_salary"] is not None for e in package["employees"]),
                 "bank_present": sum(e["bank"] is not None for e in package["employees"]),
+                "location_present": sum(e.get("location") is not None for e in package["employees"]),
                 "leave_opening_ready": sum(e["leave_opening"]["ready"] for e in package["employees"]),
                 "period_inputs_ready": sum(e["period_input"]["ready"] for e in package["employees"])},
             "issues": package["issues"], "database_writes": False, "import_performed": False}
@@ -76,7 +80,8 @@ def main(argv=None):
         stage = "VALIDATE_OPERATOR_INPUTS"
         options = ConversionOptions(args.tenant_code, args.salary_effective_from, args.leave_as_of,
                                     _code_map(args.employee_code_map, workbook),
-                                    args.september_blank_formula_inputs_as_zero)
+                                    args.september_blank_formula_inputs_as_zero,
+                                    load_location_map(args.location_map, workbook, args.tenant_code))
         stage = "CONVERT_SOURCE"
         package = convert_solvian(workbook, args.profile, options)
         report = issue_report(package)

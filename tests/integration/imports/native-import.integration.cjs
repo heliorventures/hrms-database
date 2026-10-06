@@ -17,6 +17,7 @@ const bin = process.env.PG_TEST_BIN || 'C:/Program Files/PostgreSQL/17/bin';
 const schema = 'tenant_import_fixture';
 const tenant = '10000000-0000-0000-0000-000000000001';
 const actor = '10000000-0000-0000-0000-000000000002';
+const locationOnly = process.argv.includes('--location-only');
 const adminEmployee = '10000000-0000-0000-0000-000000000003';
 function run(executable, args, log, options = {}) {
   const fd = fs.openSync(path.join(directory, log), 'a');
@@ -69,6 +70,7 @@ async function main() {
     const optionsPath = path.join(directory, 'options.json');
     const document = JSON.parse(fs.readFileSync(path.join(root, 'import-templates/v1/example.synthetic.json'), 'utf8'));
     document.tenant_code = 'fictional'; document.employees[0].employee.code = 'EXAMPLE-001'; document.employees[0].employee.confirmation_date = '2025-01-01';
+    if (locationOnly) document.employees[0].location = { name: ' Fictional   Office ', effective_from: '2026-10-07' };
     // This fixture exercises missing tax history estimated from a known salary.
     // Historical salary unavailable but covered by opening history is a separate domain regression.
     document.salary_effective_from = document.employees[0].employee.joining_date;
@@ -122,6 +124,21 @@ async function main() {
     const retryReport = JSON.parse(fs.readFileSync(path.join(retry,'report.json'),'utf8'));
     for (const section of ['employee','login','profile','department','designation','identity','bank','recurring_salary','leave_opening','period_input']) assert.ok(retryReport.sections.some(item=>item.section===section && item.outcome==='UNCHANGED'),`${section} must be unchanged on a reviewed retry`);
     console.log('PASS corrected/reviewed retry preserves domain rows and reports unchanged sections');
+    if (locationOnly) {
+      assert.ok(report.sections.some(item => item.section === 'location' && item.outcome === 'CREATED'));
+      assert.ok(retryReport.sections.some(item => item.section === 'location' && item.outcome === 'UNCHANGED'));
+      const locations = await db.query(`SELECT l.name,a.revision,a.effective_from::text FROM employee e JOIN location l ON l.tenant_id=e.tenant_id AND l.id=e.location_id JOIN employee_location_assignment a ON a.tenant_id=e.tenant_id AND a.employee_id=e.id AND a.location_id=l.id WHERE e.tenant_id=$1 AND e.employee_code='EXAMPLE-001'`, [tenant]);
+      assert.equal(locations.rows.length, 1);
+      assert.equal(locations.rows[0].name, 'Fictional Office');
+      assert.equal(Number(locations.rows[0].revision), 1);
+      assert.equal(locations.rows[0].effective_from, '2026-10-07');
+      const testDirectory = path.join(service, 'target/debug/deps');
+      const executable = fs.readdirSync(testDirectory).filter(name => /^location_fixture-.*\.exe$/.test(name)).map(name => path.join(testDirectory, name)).sort((a,b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+      assert.ok(executable, 'Compile the location_fixture test first');
+      assert.equal(run(executable, ['--ignored', '--exact', 'imported_location_persists_both_links_and_replays_without_new_history'], 'location-fixture.log', {env: {...env, HRMS_IMPORT_TEST_DATABASE_URL: env.DATABASE_URL}}), 0, `Location persistence test failed; logs: ${directory}/location-fixture.log`);
+      console.log(`PASS location import, normalized name, dated assignment, replay and persisted links; evidence: ${directory}`);
+      return;
+    }
     options.review_reference = 'Partial source and stale target review'; fs.writeFileSync(optionsPath, JSON.stringify(options));
     document.employees[0].bank.ifsc='INVALID'; fs.writeFileSync(packagePath,JSON.stringify(document));
     planPath = path.join(native('preview','preview-partial'),'plan.json'); plan = JSON.parse(fs.readFileSync(planPath,'utf8'));

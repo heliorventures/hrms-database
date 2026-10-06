@@ -1335,6 +1335,21 @@
         "clear_fields"
       ],
       "properties": {
+        "location": {
+          "description": "Reviewed initial location assignment. Omitted/null preserves existing data. Conflicting history is deferred for review.",
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "effective_from"],
+              "properties": {
+                "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+                "effective_from": { "type": "string", "format": "date" }
+              }
+            }
+          ]
+        },
         "tax_settings": {
           "anyOf": [
             {

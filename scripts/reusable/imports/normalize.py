@@ -105,8 +105,11 @@ class ConversionOptions:
     leave_as_of: str
     employee_codes: dict[str, str] = field(default_factory=dict)
     september_blank_formula_inputs_as_zero: bool = False
+    employee_locations: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def __post_init__(self):
+        from scripts.reusable.imports.location_mapping import validate_locations
+        validate_locations(self.employee_locations)
         if type(self.september_blank_formula_inputs_as_zero) is not bool:
             raise ValueError("September blank-input policy must be explicitly boolean")
         if not isinstance(self.tenant_code, str) or not self.tenant_code.strip():

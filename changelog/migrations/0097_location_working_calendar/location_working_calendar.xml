@@ -3,7 +3,6 @@
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
     <changeSet id="0097-001-location-working-calendar" author="kabipay-dev" runInTransaction="true">
-        <comment>Dated employee locations and weekly-off policies. Existing attendance and leave keep legacy behavior until explicit tenant activation.</comment>
         <preConditions onFail="HALT" onFailMessage="Active company locations have duplicate normalized names. Review the duplicates before rerunning this migration; no locations were renamed.">
             <sqlCheck expectedResult="0"><![CDATA[
                 SELECT count(*) FROM (
@@ -13,6 +12,7 @@
                 ) duplicates
             ]]></sqlCheck>
         </preConditions>
+        <comment>Dated employee locations and weekly-off policies. Existing attendance and leave keep legacy behavior until explicit tenant activation.</comment>
         <createTable tableName="working_calendar_profile" schemaName="${schema}">
             <column name="tenant_id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
             <column name="activation_date" type="DATE"><constraints nullable="false"/></column>

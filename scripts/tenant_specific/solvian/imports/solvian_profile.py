@@ -128,6 +128,8 @@ def convert_solvian(rows, profile: str, options: ConversionOptions) -> dict:
         raise ValueError("The selected profile does not match the source header layout")
     columns = {**COMMON, **(SCL if profile == "SCL" else SBL)}
     issues, employees, used_code_keys = [], [], set()
+    used_locations = set()
+    from scripts.reusable.imports.location_mapping import mapped_location
     for row_number, cells in sorted(sheet.rows.items()):
         if row_number <= header_row:
             continue
@@ -137,6 +139,7 @@ def convert_solvian(rows, profile: str, options: ConversionOptions) -> dict:
             continue
         row = SourceRow(rows, sheet, row_number, columns, issues)
         employee = _employee(row, options, used_code_keys)
+        location = mapped_location(row, options.employee_locations, used_locations)
         identity, bank = _identity(row), _bank(row)
         salary = recurring_salary(row)
         leave, historical = leave_snapshot(row, options)
@@ -144,13 +147,16 @@ def convert_solvian(rows, profile: str, options: ConversionOptions) -> dict:
         from scripts.tenant_specific.solvian.imports.solvian_future_rules import tax_settings
         future_tax = tax_settings(row)
         employees.append({"source_ref": row.source_ref(), "source_states": row.states(),
-                          "employee": employee, "identity": identity, "bank": bank,
+                          "employee": employee, "location": location, "identity": identity, "bank": bank,
                           "recurring_salary": salary, "leave_opening": leave,
                           "historical_lwp": historical, "period_input": period, "clear_fields": [],
                           "tax_settings": future_tax, "tax_history": []})
     if not employees:
         raise ValueError("No employee rows matched the selected source profile")
     _duplicates(employees, issues)
+    if set(options.employee_locations) - used_locations:
+        issues.append({"code": "UNUSED_LOCATION_MAPPING", "severity": "BLOCK_TENANT", "section": "location",
+                       "source_ref": None, "field": "location", "message": "A reviewed location mapping does not match an employee source row; review the mapping file."})
     unmatched = set(options.employee_codes) - used_code_keys
     if unmatched:
         issues.append({"code": "UNUSED_CODE_MAPPING", "severity": "BLOCK_TENANT", "section": "employee",
@@ -158,7 +164,7 @@ def convert_solvian(rows, profile: str, options: ConversionOptions) -> dict:
     from scripts.tenant_specific.solvian.imports.solvian_future_rules import company_policy
     return {"format": "hrms-tenant-import", "version": 1, "company_payroll_policy": company_policy(),
             "source": {"file_label": rows.file_label, "file_hash": rows.file_hash, "profile": profile,
-                       "profile_version": 3, "formula_results": "CACHED_SOURCE_VALUES"},
+                       "profile_version": 4, "formula_results": "CACHED_SOURCE_VALUES"},
             "tenant_code": options.tenant_code.strip(),
             "salary_effective_policy": "JOINING_DATE" if options.salary_effective_from == "JOINING_DATE" else "FIXED_DATE",
             "salary_effective_from": None if options.salary_effective_from == "JOINING_DATE" else options.salary_effective_from,
