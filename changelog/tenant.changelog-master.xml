@@ -116,4 +116,5 @@
     <include file="migrations/0097_location_working_calendar/location_working_calendar.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0098_leave_working_dates/leave_working_dates.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0099_company_payslip_template/company_payslip_template.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0100_payslip_employee_fields/payslip_employee_fields.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

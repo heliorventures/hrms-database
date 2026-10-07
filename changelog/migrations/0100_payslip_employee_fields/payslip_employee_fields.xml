@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0100-001-payslip-employee-fields" author="kabipay-dev">
+  <addColumn schemaName="${schema}" tableName="payroll_compliance_setting">
+   <column name="payslip_employee_fields" type="JSONB" defaultValueComputed="'[&quot;EMPLOYEE_NAME&quot;,&quot;EMPLOYEE_CODE&quot;,&quot;UAN&quot;,&quot;ESIC&quot;]'::jsonb">
+    <constraints nullable="false"/>
+   </column>
+  </addColumn>
+  <sql><![CDATA[
+   ALTER TABLE "${schema}".payroll_compliance_setting
+    ADD CONSTRAINT ck_payslip_employee_fields CHECK (
+     jsonb_typeof(payslip_employee_fields) = 'array' AND
+     payslip_employee_fields <@ '["EMPLOYEE_NAME","EMPLOYEE_CODE","DEPARTMENT","DESIGNATION","JOINING_DATE","GENDER","MARITAL_STATUS","UAN","ESIC"]'::jsonb);
+  ]]></sql>
+  <rollback>
+   <sql>ALTER TABLE "${schema}".payroll_compliance_setting DROP CONSTRAINT ck_payslip_employee_fields;</sql>
+   <dropColumn schemaName="${schema}" tableName="payroll_compliance_setting" columnName="payslip_employee_fields"/>
+  </rollback>
+ </changeSet>
+ <changeSet id="0100-002-employee-marital-status" author="kabipay-dev">
+  <addColumn schemaName="${schema}" tableName="employee">
+   <column name="marital_status" type="VARCHAR(32)"/>
+  </addColumn>
+  <sql>ALTER TABLE "${schema}".employee ADD CONSTRAINT ck_employee_marital_status CHECK (marital_status IN ('SINGLE','MARRIED','DIVORCED','WIDOWED','SEPARATED','PREFER_NOT_TO_SAY'));</sql>
+  <rollback>
+   <sql>ALTER TABLE "${schema}".employee DROP CONSTRAINT ck_employee_marital_status;</sql>
+   <dropColumn schemaName="${schema}" tableName="employee" columnName="marital_status"/>
+  </rollback>
+ </changeSet>
+</databaseChangeLog>
