@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0088-001-performance-policy-and-deadlines" author="kabipay-dev">
+        <createTable tableName="performance_program_policy" schemaName="${schema}">
+            <column name="performance_program_id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="population_mode" type="VARCHAR(20)" defaultValue="ALL"><constraints nullable="false"/></column>
+            <column name="goal_setting_due_days" type="INT"/>
+            <column name="self_review_due_days" type="INT"/>
+            <column name="manager_review_due_days" type="INT"/>
+            <column name="calibration_due_days" type="INT"/>
+            <column name="acknowledgement_due_days" type="INT"/>
+            <column name="archived_at" type="TIMESTAMPTZ"/>
+            <column name="archive_reason" type="TEXT"/>
+            <column name="updated_by" type="UUID"/>
+            <column name="updated_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <createTable tableName="performance_program_population" schemaName="${schema}">
+            <column name="performance_program_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="selection_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey schemaName="${schema}" tableName="performance_program_population" columnNames="performance_program_id,selection_id" constraintName="pk_performance_program_population"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_program_policy" baseColumnNames="performance_program_id" referencedTableSchemaName="${schema}" referencedTableName="performance_program" referencedColumnNames="id" constraintName="fk_performance_program_policy_program" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_program_population" baseColumnNames="performance_program_id" referencedTableSchemaName="${schema}" referencedTableName="performance_program" referencedColumnNames="id" constraintName="fk_performance_program_population_program" onDelete="CASCADE"/>
+        <addColumn tableName="review_cycle" schemaName="${schema}">
+            <column name="goal_setting_due_date" type="DATE"/>
+            <column name="calibration_due_date" type="DATE"/>
+            <column name="acknowledgement_due_date" type="DATE"/>
+        </addColumn>
+        <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".performance_program_policy
+  ADD CONSTRAINT chk_performance_program_population_mode CHECK (population_mode IN ('ALL','DEPARTMENTS','LOCATIONS','EMPLOYEES')),
+  ADD CONSTRAINT chk_performance_program_policy_days CHECK (
+    (goal_setting_due_days IS NULL OR goal_setting_due_days >= 0) AND
+    (self_review_due_days IS NULL OR self_review_due_days >= 0) AND
+    (manager_review_due_days IS NULL OR manager_review_due_days >= 0) AND
+    (calibration_due_days IS NULL OR calibration_due_days >= 0) AND
+    (acknowledgement_due_days IS NULL OR acknowledgement_due_days >= 0));
+CREATE INDEX idx_performance_program_population_tenant ON "${schema}".performance_program_population (tenant_id,selection_id);
+CREATE INDEX idx_review_cycle_performance_deadlines ON "${schema}".review_cycle (tenant_id,current_stage,goal_setting_due_date,self_review_due_date,manager_review_due_date,calibration_due_date,acknowledgement_due_date) WHERE status = 'ACTIVE';
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="0088-002-performance-revision-and-calibration-evidence" author="kabipay-dev">
+        <addColumn tableName="performance_participant" schemaName="${schema}">
+            <column name="manager_rating" type="NUMERIC(5,2)"/>
+            <column name="manager_performance_band" type="VARCHAR(50)"/>
+            <column name="calibration_provenance" type="VARCHAR(30)"/>
+        </addColumn>
+        <createTable tableName="performance_participant_revision" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="performance_participant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="revision" type="INT"><constraints nullable="false"/></column>
+            <column name="correction_stage" type="VARCHAR(30)"/>
+            <column name="reopen_reason" type="TEXT"/>
+            <column name="reopened_by_user_id" type="UUID"/>
+            <column name="reopened_at" type="TIMESTAMPTZ"/>
+            <column name="self_submitted_at" type="TIMESTAMPTZ"/>
+            <column name="manager_submitted_at" type="TIMESTAMPTZ"/>
+            <column name="acknowledged_at" type="TIMESTAMPTZ"/>
+            <column name="acknowledgement_comment" type="TEXT"/>
+            <column name="manager_rating" type="NUMERIC(5,2)"/>
+            <column name="manager_performance_band" type="VARCHAR(50)"/>
+            <column name="final_rating" type="NUMERIC(5,2)"/>
+            <column name="performance_band" type="VARCHAR(50)"/>
+            <column name="calibration_reason" type="TEXT"/>
+            <column name="calibrated_by_user_id" type="UUID"/>
+            <column name="calibrated_at" type="TIMESTAMPTZ"/>
+            <column name="calibration_provenance" type="VARCHAR(30)"/>
+            <column name="kpi_snapshot" type="JSONB"/>
+            <column name="created_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint schemaName="${schema}" tableName="performance_participant_revision" columnNames="performance_participant_id,revision" constraintName="uq_performance_participant_revision"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_participant_revision" baseColumnNames="performance_participant_id" referencedTableSchemaName="${schema}" referencedTableName="performance_participant" referencedColumnNames="id" constraintName="fk_performance_participant_revision_participant" onDelete="RESTRICT"/>
+        <addColumn tableName="kpi" schemaName="${schema}">
+            <column name="evidence" type="TEXT"/>
+            <column name="comment" type="TEXT"/>
+        </addColumn>
+        <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".performance_participant
+  ADD CONSTRAINT chk_performance_participant_calibration_provenance CHECK (calibration_provenance IS NULL OR calibration_provenance IN ('HR_CALIBRATED','LEGACY_MANAGER'));
+ALTER TABLE "${schema}".performance_participant_revision
+  ADD CONSTRAINT chk_performance_participant_revision_stage CHECK (correction_stage IS NULL OR correction_stage IN ('SELF_REVIEW','MANAGER_REVIEW')),
+  ADD CONSTRAINT chk_performance_participant_revision_provenance CHECK (calibration_provenance IS NULL OR calibration_provenance IN ('HR_CALIBRATED','LEGACY_MANAGER'));
+UPDATE "${schema}".performance_participant
+SET manager_rating = final_rating,
+    manager_performance_band = performance_band,
+    calibration_provenance = 'LEGACY_MANAGER'
+WHERE final_rating IS NOT NULL;
+INSERT INTO "${schema}".performance_participant_revision
+  (id,tenant_id,performance_participant_id,revision,self_submitted_at,manager_submitted_at,acknowledged_at,acknowledgement_comment,manager_rating,manager_performance_band,final_rating,performance_band,calibration_provenance,created_at)
+SELECT gen_random_uuid(),tenant_id,id,response_revision,self_submitted_at,manager_submitted_at,acknowledged_at,acknowledgement_comment,manager_rating,manager_performance_band,final_rating,performance_band,calibration_provenance,updated_at
+FROM "${schema}".performance_participant
+ON CONFLICT (performance_participant_id,revision) DO NOTHING;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="0088-003-performance-exception-deduplication" author="kabipay-dev">
+        <addColumn tableName="performance_admin_exception" schemaName="${schema}">
+            <column name="dedup_key" type="VARCHAR(255)"/>
+        </addColumn>
+        <sql splitStatements="false"><![CDATA[
+CREATE UNIQUE INDEX uq_performance_admin_exception_actionable ON "${schema}".performance_admin_exception (tenant_id,dedup_key) WHERE resolved_at IS NULL AND dedup_key IS NOT NULL;
+CREATE INDEX idx_performance_participant_revision_history ON "${schema}".performance_participant_revision (tenant_id,performance_participant_id,revision DESC);
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="0088-004-performance-decision-and-audit-history" author="kabipay-dev">
+        <createTable tableName="performance_calibration_decision" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="performance_participant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="revision" type="INT"><constraints nullable="false"/></column>
+            <column name="final_rating" type="NUMERIC(5,2)"><constraints nullable="false"/></column>
+            <column name="performance_band" type="VARCHAR(50)"/>
+            <column name="reason" type="TEXT"><constraints nullable="false"/></column>
+            <column name="decided_by_user_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="decided_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <createTable tableName="performance_audit_event" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="review_cycle_id" type="UUID"/>
+            <column name="performance_participant_id" type="UUID"/>
+            <column name="event_type" type="VARCHAR(80)"><constraints nullable="false"/></column>
+            <column name="reason" type="TEXT"/>
+            <column name="actor_user_id" type="UUID"/>
+            <column name="metadata" type="JSONB"/>
+            <column name="created_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+        </createTable>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="performance_calibration_decision" baseColumnNames="performance_participant_id" referencedTableSchemaName="${schema}" referencedTableName="performance_participant" referencedColumnNames="id" constraintName="fk_performance_calibration_decision_participant" onDelete="RESTRICT"/>
+        <createIndex schemaName="${schema}" tableName="performance_calibration_decision" indexName="idx_performance_calibration_decision_revision"><column name="tenant_id"/><column name="performance_participant_id"/><column name="revision"/><column name="decided_at"/></createIndex>
+        <createIndex schemaName="${schema}" tableName="performance_audit_event" indexName="idx_performance_audit_event_cycle"><column name="tenant_id"/><column name="review_cycle_id"/><column name="created_at"/></createIndex>
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0086-001-survey-response-review" author="kabipay-dev">
+  <!-- Existing surveys retain the privacy mode disclosed when they were created. -->
+  <addColumn schemaName="${schema}" tableName="survey"><column name="response_review_mode" type="VARCHAR(30)" defaultValue="AGGREGATE_ONLY"><constraints nullable="false"/></column></addColumn>
+  <addColumn schemaName="${schema}" tableName="survey_question">
+   <column name="description" type="TEXT"/>
+   <column name="comment_enabled" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+  </addColumn>
+  <addColumn schemaName="${schema}" tableName="survey_answer"><column name="comment" type="TEXT"/></addColumn>
+  <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".survey ADD CONSTRAINT ck_survey_response_review_mode CHECK (response_review_mode IN ('AGGREGATE_ONLY', 'ANONYMOUS_SUBMISSIONS'));
+ALTER TABLE "${schema}".survey_question ADD CONSTRAINT ck_survey_question_guidance CHECK (description IS NULL OR char_length(description) <= 2000);
+ALTER TABLE "${schema}".survey_question ADD CONSTRAINT ck_survey_question_comment_type CHECK (NOT comment_enabled OR question_type IN ('RATING','SINGLE_CHOICE','MULTIPLE_CHOICE'));
+ALTER TABLE "${schema}".survey_answer ADD CONSTRAINT ck_survey_answer_comment_length CHECK (comment IS NULL OR char_length(comment) BETWEEN 1 AND 4000);
+CREATE OR REPLACE FUNCTION "${schema}".guard_survey_review_mode() RETURNS trigger LANGUAGE plpgsql AS $body$
+BEGIN
+ IF OLD.status <> 'DRAFT' AND NEW.response_review_mode IS DISTINCT FROM OLD.response_review_mode THEN
+  RAISE EXCEPTION 'Survey response review mode is immutable after publication';
+ END IF;
+ IF OLD.status = 'CLOSED' AND NEW.status <> 'CLOSED' THEN
+  RAISE EXCEPTION 'Closed surveys cannot reopen; create a new survey instead';
+ END IF;
+ IF OLD.status <> 'DRAFT' AND NEW.status = 'DRAFT' THEN
+  RAISE EXCEPTION 'Published surveys cannot return to draft';
+ END IF;
+ RETURN NEW;
+END $body$;
+CREATE TRIGGER guard_survey_review_mode BEFORE UPDATE ON "${schema}".survey FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_survey_review_mode();
+CREATE INDEX idx_survey_response_review_page ON "${schema}".survey_response (tenant_id, survey_id, id);
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[DO $$ BEGIN RAISE EXCEPTION '0086 requires a forward corrective migration to preserve disclosed review modes'; END $$;]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

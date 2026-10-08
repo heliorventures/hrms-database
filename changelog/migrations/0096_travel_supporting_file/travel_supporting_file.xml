@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="0096-001-travel-supporting-file" author="kabipay-dev" runInTransaction="true">
+        <comment>New travel requests require private evidence in the service; historical requests remain nullable.</comment>
+        <addColumn tableName="travel_request" schemaName="${schema}">
+            <column name="supporting_file_storage_id" type="UUID"/>
+        </addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="travel_request"
+            baseColumnNames="tenant_id,supporting_file_storage_id"
+            referencedTableSchemaName="${schema}" referencedTableName="file_storage"
+            referencedColumnNames="tenant_id,id" constraintName="fk_travel_request_supporting_file_tenant"
+            onDelete="RESTRICT"/>
+        <createIndex tableName="travel_request" schemaName="${schema}" indexName="idx_travel_request_supporting_file">
+            <column name="tenant_id"/>
+            <column name="supporting_file_storage_id"/>
+        </createIndex>
+        <rollback>
+            <dropIndex tableName="travel_request" schemaName="${schema}" indexName="idx_travel_request_supporting_file"/>
+            <dropForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="travel_request"
+                constraintName="fk_travel_request_supporting_file_tenant"/>
+            <dropColumn tableName="travel_request" schemaName="${schema}" columnName="supporting_file_storage_id"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

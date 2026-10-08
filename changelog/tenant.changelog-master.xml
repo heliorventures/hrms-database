@@ -66,6 +66,7 @@
     <include file="migrations/0049_user_must_change_password/user_must_change_password.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0050_employee_self_service/employee_self_service.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0051_employee_self_service_readiness/employee_self_service_readiness.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0051_permission_catalog_prerequisites/permission_catalog_prerequisites.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0052_payroll_assets_hrms_depth/payroll_assets_hrms_depth.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0053_hrms_qa_rbac_leave_integrity/hrms_qa_rbac_leave_integrity.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0054_qa_authorization_workflow_integrity/qa_authorization_workflow_integrity.xml" relativeToChangelogFile="true"/>
@@ -96,5 +97,26 @@
     <include file="migrations/0078_comp_off/comp_off.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0079_announcement_video/announcement_video.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0080_prejoining/prejoining.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0081_leave_approval_queue_index/leave_approval_queue_index.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0082_survey_privacy_snapshots/survey_privacy_snapshots.xml" relativeToChangelogFile="true"/>
 
+    <include file="migrations/0084_survey_targeting_corrections/survey_targeting_corrections.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0085_admin_hr_permission_defaults/admin_hr_permission_defaults.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0086_survey_response_review/survey_response_review.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0087_attendance_day_boundary/attendance_day_boundary.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0088_performance_completion/performance_completion.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0089_user_guidance_state/user_guidance_state.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0090_payroll_period_configuration/payroll_period_configuration.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0091_leave_import_history/leave_import_history.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0092_tenant_import_tracking/tenant_import_tracking.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0093_tax_projection_configuration/tax_projection_configuration.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0094_payroll_draft_calculation/payroll_draft_calculation.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0095_payroll_catalog_integrity/payroll_catalog_integrity.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0096_travel_supporting_file/travel_supporting_file.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0097_location_working_calendar/location_working_calendar.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0098_leave_working_dates/leave_working_dates.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0099_company_payslip_template/company_payslip_template.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0100_payslip_employee_fields/payslip_employee_fields.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0101_optional_payslip_metadata/optional_payslip_metadata.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0102_payslip_company_address/payslip_company_address.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

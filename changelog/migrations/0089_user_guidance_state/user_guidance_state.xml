@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0089-001-user-guidance-state" author="kabipay-dev">
+        <createTable tableName="user_guidance_state" schemaName="${schema}">
+            <column name="id" type="UUID">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="tenant_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="user_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="overview_dismissed_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="user_guidance_state" schemaName="${schema}"
+                             columnNames="tenant_id,user_id"
+                             constraintName="uq_user_guidance_state_tenant_user"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="user_guidance_state" baseColumnNames="user_id"
+                                 referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="id"
+                                 constraintName="fk_user_guidance_state_user" onDelete="CASCADE"/>
+        <sql>CREATE TRIGGER trg_user_guidance_state_updated_at BEFORE UPDATE ON "${schema}".user_guidance_state FOR EACH ROW EXECUTE FUNCTION kabipay_ops.set_updated_at();</sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_user_guidance_state_updated_at ON "${schema}".user_guidance_state;</sql>
+            <dropTable tableName="user_guidance_state" schemaName="${schema}"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

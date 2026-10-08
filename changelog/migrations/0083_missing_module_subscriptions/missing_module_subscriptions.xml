@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+
+    <changeSet id="0083-001-backfill-missing-module-subscriptions" author="kabipay-dev" runInTransaction="true">
+        <comment>Add missing subscriptions for all active catalog modules and non-deleted tenants.
+            Existing rows, including deleted or inactive subscriptions, are never modified.
+            New subscriptions have no activation boundary or expiry; seat fields retain schema defaults.
+            Tenant status, feature flags, module state, pricing and RBAC are unchanged.
+            This is a one-time backfill, not a default subscription policy for future tenants.</comment>
+        <sql><![CDATA[
+INSERT INTO kabipay_ops.tenant_subscription (
+    id, tenant_id, module_id, status, activated_at, expires_at
+)
+SELECT gen_random_uuid(), tenant.id, module.id, 'ACTIVE', NULL, NULL
+FROM kabipay_ops.tenant AS tenant
+CROSS JOIN kabipay_ops.module AS module
+WHERE tenant.is_deleted = false
+  AND module.is_active = true
+  AND NOT EXISTS (
+      SELECT 1
+      FROM kabipay_ops.tenant_subscription AS existing
+      WHERE existing.tenant_id = tenant.id
+        AND existing.module_id = module.id
+  )
+ON CONFLICT (tenant_id, module_id) DO NOTHING;
+        ]]></sql>
+        <!-- No automatic rollback: removing entitlements after use requires a reviewed forward change. -->
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="0091-001-leave-opening-history" author="kabipay-dev">
+        <sql splitStatements="true"><![CDATA[
+ALTER TABLE "${schema}".leave_type ADD CONSTRAINT uq_import_leave_type_tenant UNIQUE(tenant_id,id);
+CREATE TABLE "${schema}".leave_import_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    employee_id UUID NOT NULL,
+    leave_type_id UUID NOT NULL,
+    year INT NOT NULL CHECK(year BETWEEN 1900 AND 2200),
+    as_of DATE NOT NULL,
+    opening JSONB NOT NULL,
+    historical_lwp NUMERIC(8,2) NOT NULL DEFAULT 0 CHECK(historical_lwp >= 0),
+    ready BOOLEAN NOT NULL DEFAULT FALSE,
+    source_ref JSONB,
+    updated_by UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id,employee_id,year),
+    FOREIGN KEY(tenant_id,employee_id) REFERENCES "${schema}".employee(tenant_id,id),
+    FOREIGN KEY(tenant_id,leave_type_id) REFERENCES "${schema}".leave_type(tenant_id,id),
+    FOREIGN KEY(tenant_id,updated_by) REFERENCES "${schema}"."user"(tenant_id,id),
+    CHECK(EXTRACT(YEAR FROM as_of)=year)
+);
+        ]]></sql>
+    </changeSet>
+</databaseChangeLog>

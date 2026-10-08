@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="0097-001-location-working-calendar" author="kabipay-dev" runInTransaction="true">
+        <preConditions onFail="HALT" onFailMessage="Active company locations have duplicate normalized names. Review the duplicates before rerunning this migration; no locations were renamed.">
+            <sqlCheck expectedResult="0"><![CDATA[
+                SELECT count(*) FROM (
+                    SELECT tenant_id,lower(regexp_replace(btrim(name),'\s+',' ','g'))
+                    FROM "${schema}".location WHERE NOT is_deleted
+                    GROUP BY tenant_id,lower(regexp_replace(btrim(name),'\s+',' ','g')) HAVING count(*)>1
+                ) duplicates
+            ]]></sqlCheck>
+        </preConditions>
+        <comment>Dated employee locations and weekly-off policies. Existing attendance and leave keep legacy behavior until explicit tenant activation.</comment>
+        <createTable tableName="working_calendar_profile" schemaName="${schema}">
+            <column name="tenant_id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="activation_date" type="DATE"><constraints nullable="false"/></column>
+            <column name="revision" type="BIGINT" defaultValueNumeric="1"><constraints nullable="false"/></column>
+            <column name="activated_by" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createTable tableName="employee_location_assignment" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="location_id" type="UUID"/>
+            <column name="effective_from" type="DATE"><constraints nullable="false"/></column>
+            <column name="revision" type="BIGINT"><constraints nullable="false"/></column>
+            <column name="changed_by" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+        </createTable>
+        <createTable tableName="weekly_off_policy_version" schemaName="${schema}">
+            <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="location_id" type="UUID"/>
+            <column name="effective_from" type="DATE"><constraints nullable="false"/></column>
+            <column name="inherits_default" type="BOOLEAN" defaultValueBoolean="false"><constraints nullable="false"/></column>
+            <column name="fixed_weekdays" type="JSONB"><constraints nullable="false"/></column>
+            <column name="saturday_ordinals" type="JSONB"><constraints nullable="false"/></column>
+            <column name="created_by" type="UUID"><constraints nullable="false"/></column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+            <column name="superseded_at" type="TIMESTAMPTZ"/>
+        </createTable>
+        <addUniqueConstraint tableName="employee_location_assignment" schemaName="${schema}" columnNames="tenant_id,employee_id,effective_from" constraintName="uq_employee_location_assignment_date"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_location_assignment" baseColumnNames="tenant_id,employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="tenant_id,id" constraintName="fk_location_assignment_employee_tenant" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_location_assignment" baseColumnNames="tenant_id,location_id" referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="tenant_id,id" constraintName="fk_location_assignment_location_tenant" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="employee_location_assignment" baseColumnNames="tenant_id,changed_by" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="tenant_id,id" constraintName="fk_location_assignment_actor_tenant" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="weekly_off_policy_version" baseColumnNames="tenant_id,location_id" referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="tenant_id,id" constraintName="fk_weekly_off_location_tenant" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="weekly_off_policy_version" baseColumnNames="tenant_id,created_by" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="tenant_id,id" constraintName="fk_weekly_off_actor_tenant" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="working_calendar_profile" baseColumnNames="tenant_id,activated_by" referencedTableSchemaName="${schema}" referencedTableName="user" referencedColumnNames="tenant_id,id" constraintName="fk_working_calendar_actor_tenant" onDelete="RESTRICT"/>
+        <sql><![CDATA[
+            CREATE UNIQUE INDEX uq_location_active_normalized_name ON "${schema}".location (tenant_id,lower(regexp_replace(btrim(name),'\s+',' ','g'))) WHERE NOT is_deleted;
+            CREATE UNIQUE INDEX uq_weekly_off_default_date ON "${schema}".weekly_off_policy_version (tenant_id,effective_from) WHERE location_id IS NULL AND superseded_at IS NULL;
+            CREATE UNIQUE INDEX uq_weekly_off_location_date ON "${schema}".weekly_off_policy_version (tenant_id,location_id,effective_from) WHERE location_id IS NOT NULL AND superseded_at IS NULL;
+            CREATE INDEX idx_weekly_off_policy_lookup ON "${schema}".weekly_off_policy_version (tenant_id,location_id,effective_from) WHERE superseded_at IS NULL;
+            ALTER TABLE "${schema}".working_calendar_profile ADD CONSTRAINT ck_working_calendar_revision CHECK (revision>0);
+            ALTER TABLE "${schema}".employee_location_assignment ADD CONSTRAINT ck_location_assignment_revision CHECK (revision>0);
+            ALTER TABLE "${schema}".weekly_off_policy_version ADD CONSTRAINT ck_weekly_off_recurrence CHECK (
+                jsonb_typeof(fixed_weekdays)='array' AND jsonb_typeof(saturday_ordinals)='array'
+                AND fixed_weekdays <@ '[1,2,3,4,5,6,7]'::jsonb AND saturday_ordinals <@ '[1,2,3,4,5]'::jsonb
+                AND NOT (fixed_weekdays @> '[6]'::jsonb AND jsonb_array_length(saturday_ordinals)>0)
+                AND (location_id IS NOT NULL OR NOT inherits_default)
+                AND (NOT inherits_default OR (fixed_weekdays='[]'::jsonb AND saturday_ordinals='[]'::jsonb))
+            );
+        ]]></sql>
+        <rollback>
+            <dropTable tableName="weekly_off_policy_version" schemaName="${schema}"/>
+            <dropTable tableName="employee_location_assignment" schemaName="${schema}"/>
+            <dropTable tableName="working_calendar_profile" schemaName="${schema}"/>
+            <sql>DROP INDEX "${schema}".uq_location_active_normalized_name;</sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

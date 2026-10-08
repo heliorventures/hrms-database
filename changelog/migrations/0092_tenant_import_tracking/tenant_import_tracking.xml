@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="0092-001-tenant-import-tracking-and-profile" author="kabipay-dev">
+        <sql splitStatements="true"><![CDATA[
+ALTER TABLE "${schema}".employee ADD COLUMN confirmation_date DATE;
+ALTER TABLE "${schema}".employee ADD COLUMN imported_exit_date DATE;
+ALTER TABLE "${schema}".employee ADD COLUMN imported_last_working_date DATE;
+ALTER TABLE "${schema}".employee ADD COLUMN payroll_excluded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE "${schema}".employee_bank ADD COLUMN account_holder VARCHAR(255);
+ALTER TABLE "${schema}".employee_bank ADD COLUMN branch_name VARCHAR(255);
+CREATE TABLE "${schema}".tenant_import_run (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    package_hash VARCHAR(64) NOT NULL,
+    configuration_hash VARCHAR(64) NOT NULL,
+    target_hash VARCHAR(64) NOT NULL,
+    mode VARCHAR(16) NOT NULL CHECK(mode IN ('IMPORT','REPLACE')),
+    actor_id UUID NOT NULL,
+    report JSONB NOT NULL,
+    committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id,package_hash,configuration_hash,mode),
+    UNIQUE(tenant_id,id),
+    FOREIGN KEY(tenant_id,actor_id) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE TABLE "${schema}".tenant_import_record (
+    tenant_id UUID NOT NULL,
+    run_id UUID NOT NULL,
+    employee_code VARCHAR(64) NOT NULL,
+    section VARCHAR(64) NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    outcome VARCHAR(24) NOT NULL CHECK(outcome IN ('CREATED','UPDATED','UNCHANGED','DEFERRED','FAILED','PARTIAL')),
+    source_ref JSONB NOT NULL,
+    PRIMARY KEY(tenant_id,run_id,employee_code,section),
+    FOREIGN KEY(tenant_id,run_id) REFERENCES "${schema}".tenant_import_run(tenant_id,id)
+);
+        ]]></sql>
+    </changeSet>
+</databaseChangeLog>

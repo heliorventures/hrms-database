@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="0084-001-survey-targeting-corrections" author="kabipay-dev">
+        <preConditions onFail="HALT" onError="HALT">
+            <sqlCheck expectedResult="0"><![CDATA[
+SELECT (SELECT COUNT(*) FROM "${schema}".survey_assignment)
+     + (SELECT COUNT(*) FROM "${schema}".survey_response)
+            ]]></sqlCheck>
+        </preConditions>
+        <createTable tableName="survey_audience_location" schemaName="${schema}">
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="location_id" type="UUID"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="survey_audience_location" schemaName="${schema}" columnNames="survey_id,location_id" constraintName="pk_survey_audience_location"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_location" baseColumnNames="survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="id" constraintName="fk_survey_audience_location_survey" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_location" baseColumnNames="location_id" referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="id" constraintName="fk_survey_audience_location_target" onDelete="RESTRICT"/>
+        <createTable tableName="survey_audience_employee" schemaName="${schema}">
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="survey_audience_employee" schemaName="${schema}" columnNames="survey_id,employee_id" constraintName="pk_survey_audience_employee"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_employee" baseColumnNames="survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="id" constraintName="fk_survey_audience_employee_survey" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_employee" baseColumnNames="employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="id" constraintName="fk_survey_audience_employee_target" onDelete="RESTRICT"/>
+        <createTable tableName="survey_revision" schemaName="${schema}">
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="source_survey_id" type="UUID"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="survey_revision" schemaName="${schema}" columnNames="survey_id" constraintName="pk_survey_revision"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_revision" baseColumnNames="survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="id" constraintName="fk_survey_revision_survey" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_revision" baseColumnNames="source_survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="id" constraintName="fk_survey_revision_target" onDelete="RESTRICT"/>
+        <addUniqueConstraint tableName="survey" schemaName="${schema}" columnNames="tenant_id,id" constraintName="uq_survey_survey_tenant_id"/>
+        <createTable tableName="survey_audience_scope" schemaName="${schema}">
+            <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="survey_id" type="UUID"><constraints nullable="false"/></column>
+            <column name="audience_kind" type="VARCHAR(20)"><constraints nullable="false"/></column>
+        </createTable>
+        <addPrimaryKey tableName="survey_audience_scope" schemaName="${schema}" columnNames="survey_id" constraintName="pk_survey_audience_scope"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_scope" baseColumnNames="tenant_id,survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="tenant_id,id" constraintName="fk_survey_audience_scope_tenant_survey" onDelete="CASCADE"/>
+        <addUniqueConstraint tableName="location" schemaName="${schema}" columnNames="tenant_id,id" constraintName="uq_location_survey_tenant_id"/>
+        <addUniqueConstraint tableName="employee" schemaName="${schema}" columnNames="tenant_id,id" constraintName="uq_employee_survey_tenant_id"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_location" baseColumnNames="tenant_id,survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="tenant_id,id" constraintName="fk_survey_audience_location_tenant_survey" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_location" baseColumnNames="tenant_id,location_id" referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="tenant_id,id" constraintName="fk_survey_audience_location_tenant_target" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_employee" baseColumnNames="tenant_id,survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="tenant_id,id" constraintName="fk_survey_audience_employee_tenant_survey" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_audience_employee" baseColumnNames="tenant_id,employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="tenant_id,id" constraintName="fk_survey_audience_employee_tenant_target" onDelete="RESTRICT"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_revision" baseColumnNames="tenant_id,survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="tenant_id,id" constraintName="fk_survey_revision_tenant_survey" onDelete="CASCADE"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_revision" baseColumnNames="tenant_id,source_survey_id" referencedTableSchemaName="${schema}" referencedTableName="survey" referencedColumnNames="tenant_id,id" constraintName="fk_survey_revision_tenant_target" onDelete="RESTRICT"/>
+        <addColumn tableName="survey_assignment" schemaName="${schema}"><column name="publication_location_id" type="UUID"/></addColumn>
+        <addColumn tableName="survey_response" schemaName="${schema}"><column name="location_id" type="UUID"/></addColumn>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_assignment" baseColumnNames="publication_location_id" referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="id" constraintName="fk_survey_assignment_publication_location" onDelete="SET NULL"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_response" baseColumnNames="location_id" referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="id" constraintName="fk_survey_response_location" onDelete="SET NULL"/>
+        <!-- The scalar FK clears only the nullable snapshot on deletion. Composite
+             Deferred NO ACTION checks tenant ownership after the nullable value is cleared. -->
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_assignment" baseColumnNames="tenant_id,publication_location_id" referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="tenant_id,id" constraintName="fk_survey_assignment_location_tenant" onDelete="NO ACTION" deferrable="true" initiallyDeferred="true"/>
+        <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="survey_response" baseColumnNames="tenant_id,location_id" referencedTableSchemaName="${schema}" referencedTableName="location" referencedColumnNames="tenant_id,id" constraintName="fk_survey_response_location_tenant" onDelete="NO ACTION" deferrable="true" initiallyDeferred="true"/>
+        <rollback><sql splitStatements="false"><![CDATA[
+DO $$ BEGIN RAISE EXCEPTION '0084 requires a forward corrective migration'; END $$;
+        ]]></sql></rollback>
+    </changeSet>
+</databaseChangeLog>

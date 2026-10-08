@@ -1,0 +1,17 @@
+{
+  "tenant_id": "10000000-0000-0000-0000-000000000001",
+  "tenant_code": "fictional",
+  "schema_name": "tenant_import_fixture",
+  "db_host": "127.0.0.1",
+  "connection_host": "127.0.0.1",
+  "db_name": "postgres",
+  "actor_id": "10000000-0000-0000-0000-000000000002",
+  "preserved_usernames": ["fixture.admin"],
+  "reviewed_absent_usernames": [],
+  "login_by_employee_code": {"EXAMPLE-001": "fixture.employee"},
+  "payroll_excluded_employee_ids": ["10000000-0000-0000-0000-000000000003"],
+  "runtime_contract_version": 1,
+  "review_reference": "Fictional example; replace every target identity after review",
+  "reset_delete_tables": [],
+  "reset_retain_tables": []
+}

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+  <changeSet id="0093-001-tax-configuration-history" author="kabipay-dev">
+    <sql splitStatements="false"><![CDATA[
+CREATE TABLE "${schema}".employee_tax_settings (
+ id UUID PRIMARY KEY, tenant_id UUID NOT NULL, employee_id UUID NOT NULL,
+ revision INTEGER NOT NULL CHECK(revision > 0), effective_from DATE NOT NULL,
+ effective_until DATE, payload JSONB NOT NULL, actor_id UUID NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ CHECK(effective_until IS NULL OR effective_until >= effective_from),
+ UNIQUE(tenant_id,employee_id,revision), UNIQUE(tenant_id,id),
+ FOREIGN KEY(tenant_id,employee_id) REFERENCES "${schema}".employee(tenant_id,id),
+ FOREIGN KEY(tenant_id,actor_id) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE TABLE "${schema}".company_payroll_rule (
+ id UUID PRIMARY KEY, tenant_id UUID NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0),
+ effective_from DATE NOT NULL, effective_until DATE, payload JSONB NOT NULL,
+ reason TEXT NOT NULL CHECK(length(trim(reason)) BETWEEN 1 AND 2000),
+ actor_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ CHECK(effective_until IS NULL OR effective_until >= effective_from),
+ UNIQUE(tenant_id,revision), UNIQUE(tenant_id,id),
+ FOREIGN KEY(tenant_id,actor_id) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE TABLE "${schema}".employee_tax_declaration (
+ tenant_id UUID NOT NULL, employee_id UUID NOT NULL, fiscal_year INTEGER NOT NULL CHECK(fiscal_year BETWEEN 2000 AND 2199),
+ revision INTEGER NOT NULL CHECK(revision > 0), payload JSONB NOT NULL,
+ approved_deductions NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK(approved_deductions >= 0),
+ actor_id UUID NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(tenant_id,employee_id,fiscal_year),
+ FOREIGN KEY(tenant_id,employee_id) REFERENCES "${schema}".employee(tenant_id,id),
+ FOREIGN KEY(tenant_id,actor_id) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE TABLE "${schema}".employee_tax_history (
+ id UUID PRIMARY KEY, tenant_id UUID NOT NULL, employee_id UUID NOT NULL,
+ fiscal_year INTEGER NOT NULL CHECK(fiscal_year BETWEEN 2000 AND 2199),
+ source_key VARCHAR(128) NOT NULL CHECK(length(trim(source_key)) > 0), revision INTEGER NOT NULL CHECK(revision > 0),
+ period_start DATE NOT NULL, period_end DATE NOT NULL, employer VARCHAR(128) NOT NULL,
+ earnings NUMERIC(18,2) NOT NULL CHECK(earnings >= 0), tds NUMERIC(18,2) CHECK(tds >= 0),
+ coverage VARCHAR(16) NOT NULL CHECK(coverage IN ('COMPLETE','INCOMPLETE')),
+ payload JSONB NOT NULL, actor_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ CHECK(coverage <> 'COMPLETE' OR tds IS NOT NULL),
+ CHECK(period_start <= period_end AND period_start >= make_date(fiscal_year,4,1) AND period_end < make_date(fiscal_year+1,4,1)),
+ UNIQUE(tenant_id,employee_id,fiscal_year,source_key,revision), UNIQUE(tenant_id,id),
+ FOREIGN KEY(tenant_id,employee_id) REFERENCES "${schema}".employee(tenant_id,id),
+ FOREIGN KEY(tenant_id,actor_id) REFERENCES "${schema}"."user"(tenant_id,id)
+);
+CREATE FUNCTION "${schema}".guard_tax_history() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE latest_revision INTEGER;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended(NEW.tenant_id::text || ':' || NEW.employee_id::text || ':tax',0));
+ SELECT max(revision) INTO latest_revision FROM "${schema}".employee_tax_history
+ WHERE tenant_id=NEW.tenant_id AND employee_id=NEW.employee_id AND fiscal_year=NEW.fiscal_year AND source_key=NEW.source_key;
+ IF NEW.revision <> coalesce(latest_revision,0)+1 THEN RAISE EXCEPTION 'stale tax history revision'; END IF;
+ IF EXISTS(SELECT 1 FROM "${schema}".employee_tax_history h
+   WHERE h.tenant_id=NEW.tenant_id AND h.employee_id=NEW.employee_id AND h.fiscal_year=NEW.fiscal_year
+   AND h.source_key<>NEW.source_key AND h.employer=NEW.employer
+   AND h.period_start<=NEW.period_end AND h.period_end>=NEW.period_start
+   AND NOT EXISTS(SELECT 1 FROM "${schema}".employee_tax_history newer WHERE newer.tenant_id=h.tenant_id
+     AND newer.employee_id=h.employee_id AND newer.fiscal_year=h.fiscal_year AND newer.source_key=h.source_key AND newer.revision>h.revision))
+ THEN RAISE EXCEPTION 'tax history coverage overlaps existing source'; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER tax_history_guard BEFORE INSERT ON "${schema}".employee_tax_history FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_tax_history();
+CREATE FUNCTION "${schema}".reject_tax_audit_update() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'tax configuration and history are append-only'; END $$;
+CREATE TRIGGER tax_history_immutable BEFORE UPDATE ON "${schema}".employee_tax_history FOR EACH ROW EXECUTE FUNCTION "${schema}".reject_tax_audit_update();
+CREATE TRIGGER tax_settings_immutable BEFORE UPDATE ON "${schema}".employee_tax_settings FOR EACH ROW EXECUTE FUNCTION "${schema}".reject_tax_audit_update();
+CREATE TRIGGER company_rule_immutable BEFORE UPDATE ON "${schema}".company_payroll_rule FOR EACH ROW EXECUTE FUNCTION "${schema}".reject_tax_audit_update();
+    ]]></sql>
+  </changeSet>
+</databaseChangeLog>
