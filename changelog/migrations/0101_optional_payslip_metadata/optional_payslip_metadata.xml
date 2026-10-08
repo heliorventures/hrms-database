@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0101-001-optional-payslip-metadata" author="kabipay-dev">
+  <sql><![CDATA[
+   ALTER TABLE "${schema}".payroll_compliance_setting
+    DROP CONSTRAINT ck_payslip_employee_fields;
+   ALTER TABLE "${schema}".payroll_compliance_setting
+    ADD CONSTRAINT ck_payslip_employee_fields CHECK (
+     jsonb_typeof(payslip_employee_fields) = 'array' AND
+     payslip_employee_fields <@ '["EMPLOYEE_NAME","EMPLOYEE_CODE","DEPARTMENT","DESIGNATION","JOINING_DATE","GENDER","MARITAL_STATUS","UAN","ESIC","PAYSLIP_STATUS","GENERATED_DATE"]'::jsonb);
+  ]]></sql>
+  <rollback>
+   <sql><![CDATA[
+    ALTER TABLE "${schema}".payroll_compliance_setting
+     DROP CONSTRAINT ck_payslip_employee_fields;
+    UPDATE "${schema}".payroll_compliance_setting
+     SET payslip_employee_fields = payslip_employee_fields - 'PAYSLIP_STATUS' - 'GENERATED_DATE'
+     WHERE payslip_employee_fields ?| ARRAY['PAYSLIP_STATUS', 'GENERATED_DATE'];
+    ALTER TABLE "${schema}".payroll_compliance_setting
+     ADD CONSTRAINT ck_payslip_employee_fields CHECK (
+      jsonb_typeof(payslip_employee_fields) = 'array' AND
+      payslip_employee_fields <@ '["EMPLOYEE_NAME","EMPLOYEE_CODE","DEPARTMENT","DESIGNATION","JOINING_DATE","GENDER","MARITAL_STATUS","UAN","ESIC"]'::jsonb);
+   ]]></sql>
+  </rollback>
+ </changeSet>
+</databaseChangeLog>

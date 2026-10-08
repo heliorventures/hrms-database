@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0102-001-payslip-company-address" author="kabipay-dev">
+  <sql><![CDATA[
+   ALTER TABLE "${schema}".payroll_compliance_setting
+    ADD COLUMN payslip_company_address TEXT,
+    ADD CONSTRAINT ck_payslip_company_address_length
+     CHECK (char_length(payslip_company_address) <= 1000);
+  ]]></sql>
+  <rollback>
+   <sql><![CDATA[
+    ALTER TABLE "${schema}".payroll_compliance_setting
+     DROP CONSTRAINT ck_payslip_company_address_length,
+     DROP COLUMN payslip_company_address;
+   ]]></sql>
+  </rollback>
+ </changeSet>
+</databaseChangeLog>
