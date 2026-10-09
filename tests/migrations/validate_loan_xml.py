@@ -14,6 +14,6 @@ with ZipFile(jar) as archive:
     parser=etree.XMLParser(no_network=True)
     parser.resolvers.add(JarResolver())
     schema=etree.XMLSchema(etree.fromstring(archive.read('www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd'),parser,base_url='http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd'))
-    for file in [root/'changelog/migrations/0103_employee_loans/employee_loans.xml',*sorted((root/'changelog/migrations/0104_loan_module_catalog').glob('*.xml'))]:
+    for file in [root/'changelog/migrations/0103_employee_loans/employee_loans.xml',*sorted((root/'changelog/migrations/0104_loan_module_catalog').glob('*.xml')),root/'changelog/migrations/0105_payslip_loan_evidence/payslip_loan_evidence.xml']:
         schema.assertValid(etree.fromstring(file.read_bytes(),etree.XMLParser(no_network=True,resolve_entities=False)))
         print(file.name+' XSD valid')

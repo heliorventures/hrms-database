@@ -121,4 +121,5 @@
     <include file="migrations/0102_payslip_company_address/payslip_company_address.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0103_employee_loans/employee_loans.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0104_loan_module_catalog/loan_permissions.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0105_payslip_loan_evidence/payslip_loan_evidence.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

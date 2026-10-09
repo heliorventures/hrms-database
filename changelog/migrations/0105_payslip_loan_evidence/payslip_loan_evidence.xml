@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0105-001-payslip-loan-evidence" author="kabipay-dev">
+  <createTable tableName="payslip_loan_snapshot" schemaName="${schema}">
+   <column name="payslip_id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="cycle_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="source_revision" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="value_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="currency" type="VARCHAR(3)"><constraints nullable="false"/></column>
+   <column name="recovery_total" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="snapshot" type="JSONB"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".payslip ADD CONSTRAINT uq_payslip_loan_evidence_owner UNIQUE(tenant_id,id,employee_id,payroll_cycle_id);
+ALTER TABLE "${schema}".payslip_loan_snapshot
+ ADD CONSTRAINT fk_payslip_loan_evidence_owner FOREIGN KEY(tenant_id,payslip_id,employee_id,cycle_id)
+ REFERENCES "${schema}".payslip(tenant_id,id,employee_id,payroll_cycle_id),
+ ADD CONSTRAINT ck_payslip_loan_evidence_total CHECK(recovery_total >= 0 AND scale(recovery_total) <= 4 AND source_revision > 0),
+ ADD CONSTRAINT ck_payslip_loan_evidence_currency CHECK(currency ~ '^[A-Z]{3}$'),
+ ADD CONSTRAINT ck_payslip_loan_evidence_json CHECK((jsonb_typeof(snapshot)='object'
+ AND snapshot ?& ARRAY['lines','quoteFingerprint','postingIds','sourceId','sourceRevision','employeeId','valueDate','periodStart','currency','total','employeeRevision']
+ AND jsonb_typeof(snapshot->'lines')='array' AND jsonb_typeof(snapshot->'postingIds')='array'
+ AND length(snapshot->>'quoteFingerprint')=64
+ AND snapshot->>'sourceId'=cycle_id::text AND snapshot->>'employeeId'=employee_id::text
+ AND snapshot->>'valueDate'=value_date::text AND snapshot->>'currency'=currency
+ AND snapshot->>'sourceRevision'=source_revision::text
+ AND (snapshot->>'total')::numeric=recovery_total) IS TRUE);
+CREATE INDEX idx_payslip_loan_evidence_employee ON "${schema}".payslip_loan_snapshot(tenant_id,employee_id,cycle_id);
+CREATE FUNCTION "${schema}".guard_payslip_loan_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ RAISE EXCEPTION 'issued payslip loan evidence is immutable';
+END $$;
+CREATE TRIGGER guard_payslip_loan_snapshot BEFORE UPDATE OR DELETE ON "${schema}".payslip_loan_snapshot
+ FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_payslip_loan_snapshot();
+CREATE FUNCTION "${schema}".guard_issued_loan_payslip() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE source_id UUID;
+BEGIN
+ IF TG_TABLE_NAME='payslip' THEN source_id=OLD.id; ELSE source_id=OLD.payslip_id; END IF;
+ IF EXISTS(SELECT 1 FROM "${schema}".payslip_loan_snapshot WHERE tenant_id=OLD.tenant_id AND payslip_id=source_id) THEN
+  IF TG_OP='DELETE' OR TG_TABLE_NAME='payslip_statement' THEN
+   RAISE EXCEPTION 'issued payslip with loan evidence is immutable';
+  END IF;
+  IF ROW(NEW.id,NEW.tenant_id,NEW.employee_id,NEW.payroll_cycle_id,NEW.gross_salary,NEW.total_deductions,NEW.net_salary)
+   IS DISTINCT FROM ROW(OLD.id,OLD.tenant_id,OLD.employee_id,OLD.payroll_cycle_id,OLD.gross_salary,OLD.total_deductions,OLD.net_salary) THEN
+   RAISE EXCEPTION 'issued loan payslip financial figures are immutable';
+  END IF;
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER guard_issued_loan_payslip BEFORE UPDATE OR DELETE ON "${schema}".payslip
+ FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_issued_loan_payslip();
+CREATE TRIGGER guard_issued_loan_statement BEFORE UPDATE OR DELETE ON "${schema}".payslip_statement
+ FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_issued_loan_payslip();
+  ]]></sql>
+ </changeSet>
+</databaseChangeLog>
