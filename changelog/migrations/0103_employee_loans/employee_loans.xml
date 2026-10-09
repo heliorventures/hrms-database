@@ -1,0 +1,462 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0103-001-employee-loans" author="kabipay-dev" runInTransaction="true">
+  <comment>Tenant-owned employee loans. No policy defaults, subscriptions, financial grants or opening balances.</comment>
+  <addUniqueConstraint schemaName="${schema}" tableName="employee" columnNames="tenant_id,id" constraintName="uq_employee_loan_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_policy_version">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="policy_key" type="VARCHAR(100)"><constraints nullable="false"/></column>
+   <column name="version" type="INT"><constraints nullable="false"/></column>
+   <column name="status" type="VARCHAR(24)"><constraints nullable="false"/></column>
+   <column name="currency" type="VARCHAR(3)"><constraints nullable="false"/></column>
+   <column name="minor_units" type="INT"><constraints nullable="false"/></column>
+   <column name="effective_from" type="DATE"><constraints nullable="false"/></column>
+   <column name="effective_to" type="DATE"><constraints nullable="true"/></column>
+   <column name="rules" type="JSONB"><constraints nullable="false"/></column>
+   <column name="calculator_version" type="VARCHAR(32)"><constraints nullable="false"/></column>
+   <column name="approved_by" type="UUID"><constraints nullable="true"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_policy_version" columnNames="tenant_id,id" constraintName="uq_loan_policy_version_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_request">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="requested_amount" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="currency" type="VARCHAR(3)"><constraints nullable="false"/></column>
+   <column name="purpose" type="VARCHAR(255)"><constraints nullable="false"/></column>
+   <column name="employee_notes" type="TEXT"><constraints nullable="true"/></column>
+   <column name="management_notes" type="TEXT"><constraints nullable="true"/></column>
+   <column name="preferences" type="JSONB"><constraints nullable="false"/></column>
+   <column name="state" type="VARCHAR(24)"><constraints nullable="false"/></column>
+   <column name="workflow_instance_id" type="UUID"><constraints nullable="true"/></column>
+   <column name="version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_request" columnNames="tenant_id,id" constraintName="uq_loan_request_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_account">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="request_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_number" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="approved_principal" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="currency" type="VARCHAR(3)"><constraints nullable="false"/></column>
+   <column name="minor_units" type="INT"><constraints nullable="false"/></column>
+   <column name="state" type="VARCHAR(16)"><constraints nullable="false"/></column>
+   <column name="funding_state" type="VARCHAR(24)"><constraints nullable="false"/></column>
+   <column name="current_terms_id" type="UUID"><constraints nullable="true"/></column>
+   <column name="accrued_through" type="DATE"><constraints nullable="true"/></column>
+   <column name="rounding_carry" type="NUMERIC(38,28)"><constraints nullable="false"/></column>
+   <column name="version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_account" columnNames="tenant_id,id" constraintName="uq_loan_account_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_terms_version">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="policy_version_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="effective_from" type="DATE"><constraints nullable="false"/></column>
+   <column name="terms" type="JSONB"><constraints nullable="false"/></column>
+   <column name="approved_by" type="UUID"><constraints nullable="false"/></column>
+   <column name="agreement_evidence" type="JSONB"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_terms_version" columnNames="tenant_id,id" constraintName="uq_loan_terms_version_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_schedule_version">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="terms_version_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="effective_from" type="DATE"><constraints nullable="false"/></column>
+   <column name="monthly_amount" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="recovery_mode" type="VARCHAR(24)"><constraints nullable="false"/></column>
+   <column name="reason" type="TEXT"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_schedule_version" columnNames="tenant_id,id" constraintName="uq_loan_schedule_version_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_schedule_item">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="schedule_version_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="due_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="principal" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="interest" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="total" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_schedule_item" columnNames="tenant_id,id" constraintName="uq_loan_schedule_item_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_period_override">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="period_start" type="DATE"><constraints nullable="false"/></column>
+   <column name="action" type="VARCHAR(16)"><constraints nullable="false"/></column>
+   <column name="amount" type="NUMERIC(20,4)"><constraints nullable="true"/></column>
+   <column name="accrual_treatment" type="VARCHAR(24)"><constraints nullable="false"/></column>
+   <column name="reason" type="TEXT"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_period_override" columnNames="tenant_id,id" constraintName="uq_loan_period_override_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_disbursement">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="amount" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="value_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="method" type="VARCHAR(32)"><constraints nullable="false"/></column>
+   <column name="external_reference" type="VARCHAR(128)"><constraints nullable="false"/></column>
+   <column name="evidence" type="JSONB"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_disbursement" columnNames="tenant_id,id" constraintName="uq_loan_disbursement_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_receipt">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="amount" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="value_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="method" type="VARCHAR(32)"><constraints nullable="false"/></column>
+   <column name="external_reference" type="VARCHAR(128)"><constraints nullable="false"/></column>
+   <column name="evidence" type="JSONB"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_receipt" columnNames="tenant_id,id" constraintName="uq_loan_receipt_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_posting">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="kind" type="VARCHAR(24)"><constraints nullable="false"/></column>
+   <column name="source_kind" type="VARCHAR(32)"><constraints nullable="false"/></column>
+   <column name="source_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="source_revision" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="value_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="amount" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="principal_delta" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="interest_delta" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="terms_version_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="reversal_of" type="UUID"><constraints nullable="true"/></column>
+   <column name="calculation_evidence" type="JSONB"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_posting" columnNames="tenant_id,id" constraintName="uq_loan_posting_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_ledger_entry">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="posting_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="sequence" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="principal_delta" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="interest_delta" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_ledger_entry" columnNames="tenant_id,id" constraintName="uq_loan_ledger_entry_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_allocation">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="posting_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="principal" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="interest" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="direction" type="VARCHAR(16)"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_allocation" columnNames="tenant_id,id" constraintName="uq_loan_allocation_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_unapplied_credit">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="receipt_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="amount" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="remaining_amount" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_unapplied_credit" columnNames="tenant_id,id" constraintName="uq_loan_unapplied_credit_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_employee_state">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="revision" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_employee_state" columnNames="tenant_id,id" constraintName="uq_loan_employee_state_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_command_receipt">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="idempotency_key" type="VARCHAR(128)"><constraints nullable="false"/></column>
+   <column name="command" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="payload_hash" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="result" type="JSONB"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_command_receipt" columnNames="tenant_id,id" constraintName="uq_loan_command_receipt_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_audit_event">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="true"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="true"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="action" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="before_version" type="BIGINT"><constraints nullable="true"/></column>
+   <column name="after_version" type="BIGINT"><constraints nullable="true"/></column>
+   <column name="reason" type="TEXT"><constraints nullable="true"/></column>
+   <column name="references" type="JSONB"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_audit_event" columnNames="tenant_id,id" constraintName="uq_loan_audit_event_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_internal_outbox">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="event_type" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="aggregate_revision" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="payload" type="JSONB"><constraints nullable="false"/></column>
+   <column name="available_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+   <column name="attempts" type="INT"><constraints nullable="false"/></column>
+   <column name="delivered_at" type="TIMESTAMPTZ"><constraints nullable="true"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_internal_outbox" columnNames="tenant_id,id" constraintName="uq_loan_internal_outbox_tenant"/>
+  <createTable schemaName="${schema}" tableName="loan_consumer_receipt">
+   <column name="id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="event_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="consumer" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="processed_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <addUniqueConstraint schemaName="${schema}" tableName="loan_consumer_receipt" columnNames="tenant_id,id" constraintName="uq_loan_consumer_receipt_tenant"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_request" baseColumnNames="tenant_id,employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="tenant_id,id" constraintName="fk_loan_request_employee" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_account" baseColumnNames="tenant_id,employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="tenant_id,id" constraintName="fk_loan_account_employee" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_terms_version" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_terms_version_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_schedule_version" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_schedule_version_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_schedule_item" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_schedule_item_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_period_override" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_period_override_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_disbursement" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_disbursement_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_receipt" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_receipt_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_posting" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_posting_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_ledger_entry" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_ledger_entry_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_allocation" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_allocation_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_unapplied_credit" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_unapplied_credit_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_employee_state" baseColumnNames="tenant_id,employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="tenant_id,id" constraintName="fk_loan_employee_state_employee" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_audit_event" baseColumnNames="tenant_id,employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="tenant_id,id" constraintName="fk_loan_audit_event_employee" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_audit_event" baseColumnNames="tenant_id,loan_id" referencedTableSchemaName="${schema}" referencedTableName="loan_account" referencedColumnNames="tenant_id,id" constraintName="fk_loan_audit_event_account" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_internal_outbox" baseColumnNames="tenant_id,employee_id" referencedTableSchemaName="${schema}" referencedTableName="employee" referencedColumnNames="tenant_id,id" constraintName="fk_loan_internal_outbox_employee" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_account" baseColumnNames="tenant_id,request_id" referencedTableSchemaName="${schema}" referencedTableName="loan_request" referencedColumnNames="tenant_id,id" constraintName="fk_loan_account_request" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_terms_version" baseColumnNames="tenant_id,policy_version_id" referencedTableSchemaName="${schema}" referencedTableName="loan_policy_version" referencedColumnNames="tenant_id,id" constraintName="fk_loan_terms_policy" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_account" baseColumnNames="tenant_id,current_terms_id" referencedTableSchemaName="${schema}" referencedTableName="loan_terms_version" referencedColumnNames="tenant_id,id" constraintName="fk_loan_current_terms" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_schedule_version" baseColumnNames="tenant_id,terms_version_id" referencedTableSchemaName="${schema}" referencedTableName="loan_terms_version" referencedColumnNames="tenant_id,id" constraintName="fk_loan_schedule_version_terms" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_posting" baseColumnNames="tenant_id,terms_version_id" referencedTableSchemaName="${schema}" referencedTableName="loan_terms_version" referencedColumnNames="tenant_id,id" constraintName="fk_loan_posting_terms" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_ledger_entry" baseColumnNames="tenant_id,posting_id" referencedTableSchemaName="${schema}" referencedTableName="loan_posting" referencedColumnNames="tenant_id,id" constraintName="fk_loan_ledger_entry_posting" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_allocation" baseColumnNames="tenant_id,posting_id" referencedTableSchemaName="${schema}" referencedTableName="loan_posting" referencedColumnNames="tenant_id,id" constraintName="fk_loan_allocation_posting" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_schedule_item" baseColumnNames="tenant_id,schedule_version_id" referencedTableSchemaName="${schema}" referencedTableName="loan_schedule_version" referencedColumnNames="tenant_id,id" constraintName="fk_loan_item_schedule" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_unapplied_credit" baseColumnNames="tenant_id,receipt_id" referencedTableSchemaName="${schema}" referencedTableName="loan_receipt" referencedColumnNames="tenant_id,id" constraintName="fk_loan_credit_receipt" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_posting" baseColumnNames="tenant_id,reversal_of" referencedTableSchemaName="${schema}" referencedTableName="loan_posting" referencedColumnNames="tenant_id,id" constraintName="fk_loan_posting_reversal" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <addForeignKeyConstraint baseTableSchemaName="${schema}" baseTableName="loan_consumer_receipt" baseColumnNames="tenant_id,event_id" referencedTableSchemaName="${schema}" referencedTableName="loan_internal_outbox" referencedColumnNames="tenant_id,id" constraintName="fk_loan_consumer_event" onDelete="RESTRICT" deferrable="true" initiallyDeferred="true"/>
+  <sql splitStatements="false"><![CDATA[
+
+ALTER TABLE "${schema}".loan_request ADD CONSTRAINT uq_loan_request_employee UNIQUE(tenant_id,employee_id,id),
+ ADD CONSTRAINT ck_loan_request_amount CHECK(requested_amount > 0),
+ ADD CONSTRAINT ck_loan_request_state CHECK(state IN ('DRAFT','SUBMITTED','UNDER_REVIEW','RETURNED','APPROVED','REJECTED','WITHDRAWN')),
+ ADD CONSTRAINT ck_loan_request_version CHECK(version > 0);
+ALTER TABLE "${schema}".loan_account DROP CONSTRAINT fk_loan_account_request,
+ ADD CONSTRAINT fk_loan_account_request_employee FOREIGN KEY(tenant_id,employee_id,request_id)
+ REFERENCES "${schema}".loan_request(tenant_id,employee_id,id) DEFERRABLE INITIALLY DEFERRED,
+ ADD CONSTRAINT uq_loan_number UNIQUE(tenant_id,loan_number),
+ ADD CONSTRAINT uq_loan_account_request UNIQUE(tenant_id,request_id),
+ ADD CONSTRAINT ck_loan_account_principal CHECK(approved_principal > 0 AND version > 0 AND minor_units BETWEEN 0 AND 4),
+ ADD CONSTRAINT ck_loan_account_state CHECK(state IN ('OPEN','CLOSED')),
+ ADD CONSTRAINT ck_loan_funding_state CHECK(funding_state IN ('UNFUNDED','PARTIALLY_FUNDED','FUNDED','CANCELLED')),
+ ADD CONSTRAINT ck_loan_account_currency CHECK(currency ~ '^[A-Z]{3}$');
+ALTER TABLE "${schema}".loan_policy_version ADD CONSTRAINT uq_loan_policy_version UNIQUE(tenant_id,policy_key,version),
+ ADD CONSTRAINT ck_loan_policy_status CHECK(status IN ('DRAFT','ACTIVE','RETIRED')),
+ ADD CONSTRAINT ck_loan_policy_dates CHECK(effective_to IS NULL OR effective_to > effective_from),
+ ADD CONSTRAINT ck_loan_policy_activation CHECK(version > 0 AND minor_units BETWEEN 0 AND 4 AND
+ (status = 'DRAFT' OR (approved_by IS NOT NULL AND jsonb_typeof(rules) = 'object' AND
+ rules ?& ARRAY['eligibility','exposure','interest','recovery','shortSalary','allocation','excessCredit','earlySettlement','exitRecovery','taxTreatment','approval'])));
+ALTER TABLE "${schema}".loan_terms_version ADD CONSTRAINT uq_loan_terms_version UNIQUE(tenant_id,loan_id,version),
+ ADD CONSTRAINT uq_loan_terms_account UNIQUE(tenant_id,loan_id,id);
+ALTER TABLE "${schema}".loan_account DROP CONSTRAINT fk_loan_current_terms,
+ ADD CONSTRAINT fk_loan_current_terms_account FOREIGN KEY(tenant_id,id,current_terms_id)
+ REFERENCES "${schema}".loan_terms_version(tenant_id,loan_id,id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "${schema}".loan_schedule_version ADD CONSTRAINT uq_loan_schedule_version UNIQUE(tenant_id,loan_id,version),
+ ADD CONSTRAINT uq_loan_schedule_account UNIQUE(tenant_id,loan_id,id),
+ ADD CONSTRAINT ck_loan_schedule_amount CHECK(monthly_amount > 0 AND version > 0 AND recovery_mode IN ('PAYROLL','EXTERNAL','MIXED'));
+ALTER TABLE "${schema}".loan_schedule_item DROP CONSTRAINT fk_loan_item_schedule,
+ ADD CONSTRAINT fk_loan_item_schedule_account FOREIGN KEY(tenant_id,loan_id,schedule_version_id)
+ REFERENCES "${schema}".loan_schedule_version(tenant_id,loan_id,id) DEFERRABLE INITIALLY DEFERRED,
+ ADD CONSTRAINT uq_loan_schedule_due UNIQUE(tenant_id,schedule_version_id,due_date),
+ ADD CONSTRAINT ck_loan_schedule_total CHECK(principal >= 0 AND interest >= 0 AND total = principal + interest);
+ALTER TABLE "${schema}".loan_period_override ADD CONSTRAINT uq_loan_period_override UNIQUE(tenant_id,loan_id,period_start),
+ ADD CONSTRAINT ck_loan_override_action CHECK((action='SKIP' AND amount IS NULL) OR (action='AMOUNT' AND amount > 0)),
+ ADD CONSTRAINT ck_loan_override_period CHECK(EXTRACT(DAY FROM period_start)=1 AND version > 0 AND length(btrim(reason)) > 0),
+ ADD CONSTRAINT ck_loan_override_accrual CHECK(accrual_treatment IN ('CONTINUE','PAUSE'));
+ALTER TABLE "${schema}".loan_posting ADD CONSTRAINT uq_loan_posting_source UNIQUE(tenant_id,loan_id,source_kind,source_id),
+ ADD CONSTRAINT uq_loan_posting_account UNIQUE(tenant_id,loan_id,id),
+ ADD CONSTRAINT uq_loan_posting_reversal UNIQUE(tenant_id,reversal_of),
+ ADD CONSTRAINT ck_loan_posting_kind CHECK(kind IN ('DISBURSEMENT','INTEREST','REPAYMENT','REVERSAL','ADJUSTMENT')),
+ ADD CONSTRAINT ck_loan_posting_amount CHECK(amount >= 0 AND source_revision > 0),
+ ADD CONSTRAINT ck_loan_posting_direction CHECK(
+ (kind='DISBURSEMENT' AND principal_delta=amount AND interest_delta=0 AND reversal_of IS NULL) OR
+ (kind='INTEREST' AND principal_delta=0 AND interest_delta=amount AND reversal_of IS NULL) OR
+ (kind='REPAYMENT' AND principal_delta<=0 AND interest_delta<=0 AND amount=-(principal_delta+interest_delta) AND reversal_of IS NULL) OR
+ (kind='REVERSAL' AND reversal_of IS NOT NULL) OR
+ (kind='ADJUSTMENT' AND source_kind='HISTORICAL_RECONCILIATION' AND reversal_of IS NULL AND amount=abs(principal_delta)+abs(interest_delta) AND amount>0));
+ALTER TABLE "${schema}".loan_ledger_entry DROP CONSTRAINT fk_loan_ledger_entry_posting,
+ ADD CONSTRAINT fk_loan_ledger_posting_account FOREIGN KEY(tenant_id,loan_id,posting_id)
+ REFERENCES "${schema}".loan_posting(tenant_id,loan_id,id) DEFERRABLE INITIALLY DEFERRED,
+ ADD CONSTRAINT uq_loan_ledger_sequence UNIQUE(tenant_id,loan_id,sequence),
+ ADD CONSTRAINT ck_loan_ledger_sequence CHECK(sequence > 0);
+ALTER TABLE "${schema}".loan_allocation DROP CONSTRAINT fk_loan_allocation_posting,
+ ADD CONSTRAINT fk_loan_allocation_posting_account FOREIGN KEY(tenant_id,loan_id,posting_id)
+ REFERENCES "${schema}".loan_posting(tenant_id,loan_id,id) DEFERRABLE INITIALLY DEFERRED,
+ ADD CONSTRAINT uq_loan_allocation_posting UNIQUE(tenant_id,posting_id),
+ ADD CONSTRAINT ck_loan_allocation_nonnegative CHECK(principal>=0 AND interest>=0 AND direction IN ('RECOVER','REVERSE'));
+ALTER TABLE "${schema}".loan_unapplied_credit ADD CONSTRAINT uq_loan_credit_receipt UNIQUE(tenant_id,receipt_id),
+ ADD CONSTRAINT ck_loan_credit_amount CHECK(amount > 0 AND remaining_amount BETWEEN 0 AND amount AND version > 0);
+ALTER TABLE "${schema}".loan_employee_state ADD CONSTRAINT uq_loan_employee_state UNIQUE(tenant_id,employee_id),
+ ADD CONSTRAINT ck_loan_employee_revision CHECK(revision >= 0);
+ALTER TABLE "${schema}".loan_command_receipt ADD CONSTRAINT uq_loan_command_receipt UNIQUE(tenant_id,actor_id,idempotency_key),
+ ADD CONSTRAINT ck_loan_command_key CHECK(length(btrim(idempotency_key)) > 0 AND length(payload_hash)=64);
+ALTER TABLE "${schema}".loan_consumer_receipt ADD CONSTRAINT uq_loan_consumer_receipt UNIQUE(tenant_id,event_id,consumer);
+ALTER TABLE "${schema}".loan_disbursement ADD CONSTRAINT ck_loan_disbursement_positive CHECK(amount>0 AND version>0),
+ ADD CONSTRAINT uq_loan_disbursement_reference UNIQUE(tenant_id,loan_id,method,external_reference);
+ALTER TABLE "${schema}".loan_receipt ADD CONSTRAINT ck_loan_receipt_positive CHECK(amount>0 AND version>0),
+ ADD CONSTRAINT uq_loan_receipt_reference UNIQUE(tenant_id,loan_id,method,external_reference);
+ALTER TABLE "${schema}".loan_posting DROP CONSTRAINT fk_loan_posting_terms,
+ ADD CONSTRAINT fk_loan_posting_terms_account FOREIGN KEY(tenant_id,loan_id,terms_version_id)
+ REFERENCES "${schema}".loan_terms_version(tenant_id,loan_id,id) DEFERRABLE INITIALLY DEFERRED,
+ DROP CONSTRAINT fk_loan_posting_reversal,
+ ADD CONSTRAINT fk_loan_reversal_same_account FOREIGN KEY(tenant_id,loan_id,reversal_of)
+ REFERENCES "${schema}".loan_posting(tenant_id,loan_id,id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "${schema}".loan_schedule_version DROP CONSTRAINT fk_loan_schedule_version_terms,
+ ADD CONSTRAINT fk_loan_schedule_terms_account FOREIGN KEY(tenant_id,loan_id,terms_version_id)
+ REFERENCES "${schema}".loan_terms_version(tenant_id,loan_id,id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "${schema}".loan_receipt ADD CONSTRAINT uq_loan_receipt_account UNIQUE(tenant_id,loan_id,id);
+ALTER TABLE "${schema}".loan_unapplied_credit DROP CONSTRAINT fk_loan_credit_receipt,
+ ADD CONSTRAINT fk_loan_credit_receipt_account FOREIGN KEY(tenant_id,loan_id,receipt_id)
+ REFERENCES "${schema}".loan_receipt(tenant_id,loan_id,id) DEFERRABLE INITIALLY DEFERRED;
+CREATE INDEX idx_loan_account_employee ON "${schema}".loan_account(tenant_id,employee_id,state,id);
+CREATE INDEX idx_loan_request_queue ON "${schema}".loan_request(tenant_id,state,created_at,id);
+CREATE INDEX idx_loan_schedule_due ON "${schema}".loan_schedule_item(tenant_id,due_date,loan_id);
+CREATE INDEX idx_loan_outbox_delivery ON "${schema}".loan_internal_outbox(available_at,id) WHERE delivered_at IS NULL;
+
+CREATE FUNCTION "${schema}".loan_reject_financial_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'posted loan evidence is immutable; use a linked reversal' USING ERRCODE='23514'; END $$;
+CREATE FUNCTION "${schema}".loan_validate_policy() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended(NEW.tenant_id::text || ':loan-policy',0));
+ IF TG_OP='UPDATE' AND OLD.status<>'DRAFT' AND NOT (OLD.status='ACTIVE' AND NEW.status='RETIRED' AND
+  (to_jsonb(NEW)-'status')=(to_jsonb(OLD)-'status')) THEN
+  RAISE EXCEPTION 'active or used loan policy is immutable' USING ERRCODE='23514';
+ END IF;
+ IF NEW.status='ACTIVE' AND EXISTS(SELECT 1 FROM "${schema}".loan_policy_version p
+  WHERE p.tenant_id=NEW.tenant_id AND p.policy_key=NEW.policy_key AND p.id<>NEW.id
+  AND p.status='ACTIVE' AND daterange(p.effective_from,p.effective_to,'[)') &&
+  daterange(NEW.effective_from,NEW.effective_to,'[)')) THEN
+  RAISE EXCEPTION 'active loan policy dates overlap' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER loan_policy_validate BEFORE INSERT OR UPDATE ON "${schema}".loan_policy_version FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_validate_policy();
+CREATE TRIGGER loan_policy_no_delete BEFORE DELETE ON "${schema}".loan_policy_version FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+
+CREATE FUNCTION "${schema}".loan_check_posting_balance() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE p "${schema}".loan_posting; original "${schema}".loan_posting;
+ principal NUMERIC; interest NUMERIC; n BIGINT; allocated_principal NUMERIC; allocated_interest NUMERIC;
+BEGIN
+ IF TG_TABLE_NAME='loan_posting' THEN
+  SELECT * INTO p FROM "${schema}".loan_posting WHERE id=NEW.id AND tenant_id=NEW.tenant_id;
+ ELSE
+  SELECT * INTO p FROM "${schema}".loan_posting WHERE id=NEW.posting_id AND tenant_id=NEW.tenant_id;
+ END IF;
+ SELECT COALESCE(sum(principal_delta),0),COALESCE(sum(interest_delta),0),count(*) INTO principal,interest,n
+ FROM "${schema}".loan_ledger_entry WHERE tenant_id=p.tenant_id AND posting_id=p.id;
+ IF n=0 OR principal<>p.principal_delta OR interest<>p.interest_delta THEN
+  RAISE EXCEPTION 'loan posting ledger does not reconcile' USING ERRCODE='23514';
+ END IF;
+ IF p.kind='REPAYMENT' THEN
+  SELECT a.principal,a.interest INTO allocated_principal,allocated_interest FROM "${schema}".loan_allocation a
+   WHERE a.tenant_id=p.tenant_id AND a.posting_id=p.id AND a.direction='RECOVER';
+  IF NOT FOUND OR allocated_principal<>-p.principal_delta OR allocated_interest<>-p.interest_delta THEN
+   RAISE EXCEPTION 'loan repayment allocation does not reconcile' USING ERRCODE='23514';
+  END IF;
+ ELSIF p.kind='REVERSAL' THEN
+  SELECT * INTO original FROM "${schema}".loan_posting WHERE tenant_id=p.tenant_id AND id=p.reversal_of AND loan_id=p.loan_id;
+  IF NOT FOUND OR original.kind='REVERSAL' OR p.principal_delta<>-original.principal_delta OR
+   p.interest_delta<>-original.interest_delta OR p.amount<>original.amount THEN
+   RAISE EXCEPTION 'loan reversal does not reconcile with its source' USING ERRCODE='23514';
+  END IF;
+ ELSIF p.kind='ADJUSTMENT' THEN
+  IF NOT EXISTS(SELECT 1 FROM "${schema}".loan_posting o JOIN "${schema}".loan_posting r
+    ON r.tenant_id=o.tenant_id AND r.loan_id=o.loan_id AND r.reversal_of=o.id
+    WHERE o.tenant_id=p.tenant_id AND o.loan_id=p.loan_id AND o.id=p.source_id
+    AND o.source_kind IN ('EXTERNAL_DISBURSEMENT','EXTERNAL_RECEIPT')) OR
+    NOT (p.calculation_evidence ?& ARRAY['classification','reason','reconciliationReference','preview']) THEN
+   RAISE EXCEPTION 'loan reconciliation must link a reviewed external reversal' USING ERRCODE='23514';
+  END IF;
+ END IF;
+ SELECT COALESCE(sum(principal_delta),0),COALESCE(sum(interest_delta),0) INTO principal,interest
+ FROM "${schema}".loan_ledger_entry WHERE tenant_id=p.tenant_id AND loan_id=p.loan_id;
+ IF principal<0 OR interest<0 THEN RAISE EXCEPTION 'loan balance cannot be negative' USING ERRCODE='23514'; END IF;
+ RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER loan_posting_balance AFTER INSERT ON "${schema}".loan_posting DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_check_posting_balance();
+CREATE CONSTRAINT TRIGGER loan_ledger_entry_balance AFTER INSERT ON "${schema}".loan_ledger_entry DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_check_posting_balance();
+CREATE CONSTRAINT TRIGGER loan_allocation_balance AFTER INSERT ON "${schema}".loan_allocation DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_check_posting_balance();
+CREATE TRIGGER loan_posting_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_posting FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_ledger_entry_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_ledger_entry FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_allocation_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_allocation FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_terms_version_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_terms_version FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_schedule_version_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_schedule_version FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_schedule_item_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_schedule_item FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_disbursement_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_disbursement FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_receipt_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_receipt FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_command_receipt_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_command_receipt FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_audit_event_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_audit_event FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_consumer_receipt_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_consumer_receipt FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $$ BEGIN IF EXISTS(SELECT 1 FROM "${schema}".loan_account) OR EXISTS(SELECT 1 FROM "${schema}".loan_posting) THEN RAISE EXCEPTION 'loan rollback refused: financial records exist'; END IF; END $$;
+ALTER TABLE "${schema}".loan_account DROP CONSTRAINT fk_loan_current_terms_account;
+DROP TABLE "${schema}".loan_consumer_receipt;
+DROP TABLE "${schema}".loan_internal_outbox;
+DROP TABLE "${schema}".loan_audit_event;
+DROP TABLE "${schema}".loan_command_receipt;
+DROP TABLE "${schema}".loan_employee_state;
+DROP TABLE "${schema}".loan_unapplied_credit;
+DROP TABLE "${schema}".loan_allocation;
+DROP TABLE "${schema}".loan_ledger_entry;
+DROP TABLE "${schema}".loan_posting;
+DROP TABLE "${schema}".loan_receipt;
+DROP TABLE "${schema}".loan_disbursement;
+DROP TABLE "${schema}".loan_period_override;
+DROP TABLE "${schema}".loan_schedule_item;
+DROP TABLE "${schema}".loan_schedule_version;
+DROP TABLE "${schema}".loan_terms_version;
+DROP TABLE "${schema}".loan_account;
+DROP TABLE "${schema}".loan_request;
+DROP TABLE "${schema}".loan_policy_version;
+DROP FUNCTION "${schema}".loan_check_posting_balance();
+DROP FUNCTION "${schema}".loan_validate_policy();
+DROP FUNCTION "${schema}".loan_reject_financial_mutation();
+ALTER TABLE "${schema}".employee DROP CONSTRAINT uq_employee_loan_tenant;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

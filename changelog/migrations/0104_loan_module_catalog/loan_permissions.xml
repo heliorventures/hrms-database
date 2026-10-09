@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0104-002-loans-permissions" author="kabipay-dev">
+  <comment>Catalog capabilities without granting them. HR/Admin configures authorized scopes before activation.</comment>
+  <sql splitStatements="false"><![CDATA[
+DO $$ BEGIN
+ IF (SELECT count(*) FROM kabipay_ops.module WHERE code='LOANS')<>1 OR
+    (SELECT count(*) FROM kabipay_ops.module WHERE code='EMPLOYEE')<>1 THEN
+  RAISE EXCEPTION 'Loan catalog requires LOANS and EMPLOYEE modules before tenant provisioning';
+ END IF;
+ IF EXISTS(SELECT 1 FROM "${schema}".permission p JOIN kabipay_ops.module m ON m.id=p.module_id
+   WHERE p.resource='loan' AND m.code<>'LOANS') THEN
+  RAISE EXCEPTION 'Existing loan permission has a conflicting module owner';
+ END IF;
+END $$;
+INSERT INTO "${schema}".permission(id,resource,action,module_id,description)
+SELECT gen_random_uuid(),'loan',a.action,m.id,'Employee loans: '||a.action
+FROM kabipay_ops.module m CROSS JOIN (VALUES ('read'),('submit'),('approve'),('disburse'),('repay'),('manage'),('policy'),('correct'),('exit-review'),('export')) a(action)
+WHERE m.code='LOANS' AND NOT EXISTS(SELECT 1 FROM "${schema}".permission p WHERE p.resource='loan' AND p.action=a.action);
+INSERT INTO kabipay_ops.module_dependency(id,module_id,depends_on_module_id)
+SELECT gen_random_uuid(),l.id,e.id FROM kabipay_ops.module l CROSS JOIN kabipay_ops.module e
+WHERE l.code='LOANS' AND e.code='EMPLOYEE'
+ON CONFLICT(module_id,depends_on_module_id) DO NOTHING;
+  ]]></sql>
+  <rollback><sql>DO $$ BEGIN RAISE EXCEPTION 'Loan permission rollback requires reviewed forward correction'; END $$;</sql></rollback>
+ </changeSet>
+</databaseChangeLog>
