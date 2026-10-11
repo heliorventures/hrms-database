@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0106-001-exit-financial-coordination" author="kabipay-dev">
+  <createTable schemaName="${schema}" tableName="employee_exit_operation">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="separation_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="review_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="separation_fingerprint" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="payload_hash" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="authorization_id" type="UUID"/>
+   <column name="state" type="VARCHAR(32)"><constraints nullable="false"/></column>
+   <column name="result" type="JSONB"/>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+   <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <createTable schemaName="${schema}" tableName="employee_finance_outbox">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="operation_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="event_type" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="payload" type="JSONB"><constraints nullable="false"/></column>
+   <column name="attempts" type="INT" defaultValueNumeric="0"><constraints nullable="false"/></column>
+   <column name="available_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+   <column name="delivered_at" type="TIMESTAMPTZ"/>
+   <column name="last_error" type="VARCHAR(512)"/>
+  </createTable>
+  <createTable schemaName="${schema}" tableName="loan_exit_review">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="separation_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="separation_fingerprint" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="last_working_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="settlement_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="employee_revision" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="quote_fingerprint" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="preview" type="JSONB"><constraints nullable="false"/></column>
+   <column name="decision" type="JSONB"><constraints nullable="false"/></column>
+   <column name="decision_hash" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <createTable schemaName="${schema}" tableName="loan_exit_approval_guard">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="separation_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="review_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="operation_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="payload_hash" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="state" type="VARCHAR(32)"><constraints nullable="false"/></column>
+   <column name="expires_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+   <column name="confirmed_at" type="TIMESTAMPTZ"/>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+   <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <createTable schemaName="${schema}" tableName="fnf_financial_review">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="fnf_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="revision" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="value_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="currency" type="VARCHAR(3)"><constraints nullable="false"/></column>
+   <column name="minor_units" type="INT"><constraints nullable="false"/></column>
+   <column name="input_hash" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="snapshot" type="JSONB"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="finalized_at" type="TIMESTAMPTZ"/>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+   <column name="updated_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <createTable schemaName="${schema}" tableName="fnf_payout_source">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="fnf_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="source_kind" type="VARCHAR(32)"><constraints nullable="false"/></column>
+   <column name="source_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="amount" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="already_paid" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="other_recovery" type="NUMERIC(20,4)"><constraints nullable="false"/></column>
+   <column name="eligible_for_loan" type="BOOLEAN"><constraints nullable="false"/></column>
+   <column name="approval_reference" type="TEXT"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <createTable schemaName="${schema}" tableName="loan_exit_arrangement">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="separation_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="origin_kind" type="VARCHAR(20)"><constraints nullable="false"/></column>
+   <column name="origin_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="last_working_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="settlement_date" type="DATE"><constraints nullable="false"/></column>
+   <column name="decision" type="JSONB"><constraints nullable="false"/></column>
+   <column name="decision_hash" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="actor_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="NOW()"><constraints nullable="false"/></column>
+  </createTable>
+  <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".loan_account ADD CONSTRAINT uq_loan_exit_account_owner UNIQUE(tenant_id,id,employee_id);
+ALTER TABLE "${schema}".separation ADD CONSTRAINT uq_separation_finance_owner UNIQUE(tenant_id,id,employee_id);
+ALTER TABLE "${schema}".loan_exit_arrangement
+ ADD CONSTRAINT fk_loan_exit_arrangement_owner FOREIGN KEY(tenant_id,loan_id,employee_id) REFERENCES "${schema}".loan_account(tenant_id,id,employee_id),
+ ADD CONSTRAINT fk_loan_exit_arrangement_separation FOREIGN KEY(tenant_id,separation_id,employee_id) REFERENCES "${schema}".separation(tenant_id,id,employee_id),
+ ADD CONSTRAINT uq_loan_exit_arrangement_source UNIQUE(tenant_id,origin_kind,origin_id,loan_id),
+ ADD CONSTRAINT ck_loan_exit_arrangement_evidence CHECK(origin_kind IN ('HR_APPROVAL','FNF') AND length(decision_hash)=64 AND jsonb_typeof(decision)='object');
+CREATE INDEX idx_loan_exit_arrangement_servicing ON "${schema}".loan_exit_arrangement(tenant_id,loan_id,created_at,id);
+ALTER TABLE "${schema}".fnf_settlement ADD CONSTRAINT uq_fnf_finance_owner UNIQUE(tenant_id,id);
+ALTER TABLE "${schema}".fnf_settlement ADD CONSTRAINT uq_fnf_separation UNIQUE(tenant_id,separation_id);
+ALTER TABLE "${schema}".employee_exit_operation ADD CONSTRAINT uq_exit_operation_tenant UNIQUE(tenant_id,id),
+ ADD CONSTRAINT fk_exit_operation_separation FOREIGN KEY(tenant_id,separation_id,employee_id) REFERENCES "${schema}".separation(tenant_id,id,employee_id),
+ ADD CONSTRAINT ck_exit_operation_state CHECK(state IN ('REGISTERED','COMMITTED','CANCELLED')),
+ ADD CONSTRAINT ck_exit_operation_binding CHECK(length(payload_hash)=64 AND length(separation_fingerprint)=64);
+CREATE UNIQUE INDEX uq_registered_exit_operation ON "${schema}".employee_exit_operation(tenant_id,separation_id) WHERE state='REGISTERED';
+ALTER TABLE "${schema}".employee_finance_outbox ADD CONSTRAINT fk_employee_finance_event_operation FOREIGN KEY(tenant_id,operation_id) REFERENCES "${schema}".employee_exit_operation(tenant_id,id),
+ ADD CONSTRAINT uq_employee_finance_operation_event UNIQUE(tenant_id,operation_id,event_type),
+ ADD CONSTRAINT ck_employee_finance_event CHECK(event_type IN ('EXIT_APPROVAL_COMMITTED','EXIT_APPROVAL_CANCELLED') AND jsonb_typeof(payload)='object' AND attempts>=0);
+CREATE INDEX idx_employee_finance_outbox_due ON "${schema}".employee_finance_outbox(available_at,id) WHERE delivered_at IS NULL;
+CREATE FUNCTION "${schema}".guard_hr_finance_operation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' OR OLD.state IN ('COMMITTED','CANCELLED') THEN
+  RAISE EXCEPTION 'terminal HR Finance operations are immutable';
+ END IF;
+ IF (to_jsonb(NEW)-ARRAY['state','authorization_id','result','updated_at'])
+  IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['state','authorization_id','result','updated_at']) THEN
+  RAISE EXCEPTION 'registered HR Finance approval bindings are immutable';
+ END IF;
+ IF NEW.state='COMMITTED' AND NEW.authorization_id IS NULL THEN
+  RAISE EXCEPTION 'committed HR approval requires Finance authorization';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER guard_hr_finance_operation BEFORE UPDATE OR DELETE ON "${schema}".employee_exit_operation FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_hr_finance_operation();
+CREATE FUNCTION "${schema}".guard_private_finance_event() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' OR OLD.delivered_at IS NOT NULL THEN
+  RAISE EXCEPTION 'delivered private Finance events are immutable';
+ END IF;
+ IF (to_jsonb(NEW)-ARRAY['attempts','available_at','delivered_at','last_error'])
+  IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['attempts','available_at','delivered_at','last_error']) THEN
+  RAISE EXCEPTION 'private Finance event bindings are immutable';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER guard_private_finance_event BEFORE UPDATE OR DELETE ON "${schema}".employee_finance_outbox FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_private_finance_event();
+ALTER TABLE "${schema}".loan_exit_review ADD CONSTRAINT uq_exit_review_tenant UNIQUE(tenant_id,id),
+ ADD CONSTRAINT fk_exit_review_separation FOREIGN KEY(tenant_id,separation_id,employee_id) REFERENCES "${schema}".separation(tenant_id,id,employee_id),
+ ADD CONSTRAINT ck_exit_review_hashes CHECK(length(separation_fingerprint)=64 AND length(quote_fingerprint)=64 AND length(decision_hash)=64 AND employee_revision>=0),
+ ADD CONSTRAINT ck_exit_review_documents CHECK(jsonb_typeof(preview)='object' AND jsonb_typeof(decision)='object');
+ALTER TABLE "${schema}".loan_exit_approval_guard ADD CONSTRAINT fk_exit_guard_review FOREIGN KEY(tenant_id,review_id) REFERENCES "${schema}".loan_exit_review(tenant_id,id),
+ ADD CONSTRAINT uq_exit_guard_operation UNIQUE(tenant_id,operation_id),
+ ADD CONSTRAINT ck_exit_guard_state CHECK(state IN ('AUTHORIZED','CONFIRMED','CANCELLED','RECONCILIATION_PENDING')),
+ ADD CONSTRAINT ck_exit_guard_hash CHECK(length(payload_hash)=64);
+CREATE UNIQUE INDEX uq_active_exit_guard ON "${schema}".loan_exit_approval_guard(tenant_id,employee_id) WHERE state IN ('AUTHORIZED','RECONCILIATION_PENDING');
+CREATE INDEX idx_exit_guard_reconciliation ON "${schema}".loan_exit_approval_guard(expires_at,id) WHERE state IN ('AUTHORIZED','RECONCILIATION_PENDING');
+ALTER TABLE "${schema}".fnf_financial_review ADD CONSTRAINT fk_fnf_review_source FOREIGN KEY(tenant_id,fnf_id) REFERENCES "${schema}".fnf_settlement(tenant_id,id),
+ ADD CONSTRAINT uq_fnf_financial_review UNIQUE(tenant_id,fnf_id),
+ ADD CONSTRAINT ck_fnf_review_version CHECK(revision>0 AND minor_units BETWEEN 0 AND 4 AND currency ~ '^[A-Z]{3}$' AND length(input_hash)=64),
+ ADD CONSTRAINT ck_fnf_review_snapshot CHECK(jsonb_typeof(snapshot)='object');
+ALTER TABLE "${schema}".fnf_payout_source ADD CONSTRAINT fk_fnf_payout_source FOREIGN KEY(tenant_id,fnf_id) REFERENCES "${schema}".fnf_settlement(tenant_id,id),
+ ADD CONSTRAINT uq_fnf_source_allocation UNIQUE(tenant_id,source_kind,source_id),
+ ADD CONSTRAINT ck_fnf_payout_source_amount CHECK(amount>=0 AND already_paid>=0 AND other_recovery>=0 AND already_paid+other_recovery<=amount AND length(trim(approval_reference))>0),
+ ADD CONSTRAINT ck_fnf_payout_source_kind CHECK(source_kind IN ('LEAVE_ENCASHMENT','GRATUITY','BONUS','PAYROLL_REFERENCE'));
+CREATE FUNCTION "${schema}".guard_issued_fnf() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE source_id UUID; original JSONB; next_value JSONB;
+BEGIN
+ IF TG_OP='INSERT' THEN next_value=to_jsonb(NEW); ELSE original=to_jsonb(OLD); next_value=original; END IF;
+ IF TG_TABLE_NAME='fnf_settlement' THEN
+  source_id=(next_value->>'id')::uuid;
+  IF original->>'status'='PROCESSED' THEN RAISE EXCEPTION 'issued FNF financial records are immutable'; END IF;
+ ELSE source_id=(next_value->>'fnf_id')::uuid; END IF;
+ IF EXISTS(
+  SELECT 1 FROM "${schema}".fnf_financial_review WHERE tenant_id=(next_value->>'tenant_id')::uuid AND fnf_id=source_id AND finalized_at IS NOT NULL
+ ) THEN
+  IF TG_TABLE_NAME='fnf_settlement' AND TG_OP='UPDATE' THEN
+   IF original->>'status'='DRAFT' AND NEW.status='PROCESSED'
+    AND (to_jsonb(NEW)-ARRAY['status','processed_at','processed_by','updated_at'])=(original-ARRAY['status','processed_at','processed_by','updated_at'])
+    THEN RETURN NEW; END IF;
+  END IF;
+  RAISE EXCEPTION 'issued FNF financial records are immutable';
+ END IF;
+ IF TG_TABLE_NAME<>'fnf_settlement' AND EXISTS(SELECT 1 FROM "${schema}".fnf_settlement WHERE tenant_id=(next_value->>'tenant_id')::uuid AND id=source_id AND status='PROCESSED') THEN
+  RAISE EXCEPTION 'issued FNF financial records are immutable';
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW;
+END $$;
+CREATE TRIGGER guard_issued_fnf BEFORE UPDATE OR DELETE ON "${schema}".fnf_settlement FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_issued_fnf();
+CREATE TRIGGER guard_issued_fnf_review BEFORE UPDATE OR DELETE ON "${schema}".fnf_financial_review FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_issued_fnf();
+CREATE TRIGGER guard_issued_fnf_source BEFORE INSERT OR UPDATE OR DELETE ON "${schema}".fnf_payout_source FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_issued_fnf();
+CREATE FUNCTION "${schema}".guard_exit_loan_inputs() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE value JSONB; affected_employee UUID; affected_tenant UUID;
+BEGIN
+ IF TG_OP='DELETE' THEN value=to_jsonb(OLD); ELSE value=to_jsonb(NEW); END IF;
+ affected_tenant=(value->>'tenant_id')::uuid;
+ IF value ? 'employee_id' THEN affected_employee=(value->>'employee_id')::uuid;
+ ELSE SELECT employee_id INTO affected_employee FROM "${schema}".loan_account WHERE tenant_id=affected_tenant AND id=(value->>'loan_id')::uuid; END IF;
+ IF EXISTS(SELECT 1 FROM "${schema}".loan_exit_approval_guard WHERE tenant_id=affected_tenant AND employee_id=affected_employee AND state IN ('AUTHORIZED','RECONCILIATION_PENDING')) THEN
+  RAISE EXCEPTION 'loan_exit_approval_guard: reviewed loan inputs await authoritative HR confirmation';
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW;
+END $$;
+DO $$ DECLARE guarded_table TEXT; BEGIN
+ FOREACH guarded_table IN ARRAY ARRAY['loan_account','loan_request','loan_terms_version','loan_schedule_version','loan_schedule_item','loan_period_override','loan_disbursement','loan_receipt','loan_posting','loan_ledger_entry','loan_allocation','loan_unapplied_credit','loan_employee_state'] LOOP
+  EXECUTE format('CREATE TRIGGER guard_exit_loan_inputs BEFORE INSERT OR UPDATE OR DELETE ON %I.%I FOR EACH ROW EXECUTE FUNCTION %I.guard_exit_loan_inputs()', '${schema}', guarded_table, '${schema}');
+ END LOOP;
+END $$;
+CREATE FUNCTION "${schema}".guard_exit_review_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'exit financial review evidence is immutable'; END $$;
+CREATE TRIGGER guard_exit_review_history BEFORE UPDATE OR DELETE ON "${schema}".loan_exit_review FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_exit_review_history();
+CREATE TRIGGER guard_exit_arrangement_history BEFORE UPDATE OR DELETE ON "${schema}".loan_exit_arrangement FOR EACH ROW EXECUTE FUNCTION "${schema}".guard_exit_review_history();
+  ]]></sql>
+ </changeSet>
+</databaseChangeLog>

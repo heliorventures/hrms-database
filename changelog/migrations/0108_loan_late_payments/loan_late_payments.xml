@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0108-001-reviewed-late-loan-payments" author="kabipay-dev">
+  <sql splitStatements="false"><![CDATA[
+CREATE FUNCTION "${schema}".loan_is_reviewed_late_adjustment(p "${schema}".loan_posting) RETURNS boolean LANGUAGE sql STABLE AS $$
+ SELECT COALESCE(p.source_kind='HISTORICAL_RECONCILIATION'
+ AND p.calculation_evidence->>'classification'='LATE_EXTERNAL_PAYMENT_RECONCILIATION'
+ AND length(btrim(p.calculation_evidence->>'reason')) BETWEEN 1 AND 2000
+ AND length(btrim(p.calculation_evidence->>'reconciliationReference')) BETWEEN 1 AND 500
+ AND p.calculation_evidence->'preview'->>'loanId'=p.loan_id::text
+ AND p.calculation_evidence->'preview'->>'accountVersion'=p.source_revision::text
+ AND p.calculation_evidence->'preview'->>'postingDate'=p.value_date::text
+ AND EXISTS(SELECT 1 FROM "${schema}".loan_posting b
+   WHERE b.tenant_id=p.tenant_id AND b.loan_id=p.loan_id AND b.source_id=p.source_id
+   AND b.source_kind IN ('EXTERNAL_DISBURSEMENT','EXTERNAL_RECEIPT') AND b.actor_id=p.actor_id AND b.value_date=p.value_date
+   AND b.calculation_evidence->>'classification'='LATE_EXTERNAL_PAYMENT'
+   AND b.calculation_evidence->>'reviewFingerprint'=p.calculation_evidence->'preview'->>'reviewFingerprint'
+   AND p.principal_delta=(p.calculation_evidence->'preview'->>'correctedPrincipal')::numeric-(p.calculation_evidence->'preview'->>'currentPrincipal')::numeric-b.principal_delta
+   AND p.interest_delta=(p.calculation_evidence->'preview'->>'correctedInterest')::numeric-(p.calculation_evidence->'preview'->>'currentInterest')::numeric-b.interest_delta),FALSE);
+$$;
+CREATE FUNCTION "${schema}".loan_validate_late_payment() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE evidence JSONB; occurrence DATE;
+BEGIN
+ IF NEW.source_kind='EXTERNAL_DISBURSEMENT' THEN
+  SELECT d.evidence,d.value_date INTO evidence,occurrence FROM "${schema}".loan_disbursement d WHERE d.tenant_id=NEW.tenant_id AND d.loan_id=NEW.loan_id AND d.id=NEW.source_id AND d.amount=NEW.amount AND d.actor_id=NEW.actor_id;
+ ELSIF NEW.source_kind='EXTERNAL_RECEIPT' THEN
+  SELECT r.evidence,r.value_date INTO evidence,occurrence FROM "${schema}".loan_receipt r WHERE r.tenant_id=NEW.tenant_id AND r.loan_id=NEW.loan_id AND r.id=NEW.source_id AND r.amount=NEW.amount AND r.actor_id=NEW.actor_id;
+ END IF;
+ IF NOT (evidence->>'classification'='LATE_EXTERNAL_PAYMENT'
+   AND evidence->>'reviewFingerprint' ~ '^[a-f0-9]{64}$'
+   AND evidence->>'reviewFingerprint'=NEW.calculation_evidence->>'reviewFingerprint'
+   AND NEW.calculation_evidence->>'occurrenceDate'=occurrence::text AND NEW.value_date>=occurrence
+   AND length(btrim(evidence->>'reason')) BETWEEN 1 AND 2000
+   AND length(btrim(evidence->>'reconciliationReference')) BETWEEN 1 AND 500) IS TRUE THEN
+  RAISE EXCEPTION 'late payment must retain reviewed external source evidence' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER loan_late_payment_evidence BEFORE INSERT ON "${schema}".loan_posting FOR EACH ROW WHEN(NEW.calculation_evidence->>'classification'='LATE_EXTERNAL_PAYMENT') EXECUTE FUNCTION "${schema}".loan_validate_late_payment();
+CREATE OR REPLACE FUNCTION "${schema}".loan_check_posting_balance() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE p "${schema}".loan_posting; original "${schema}".loan_posting;
+ principal NUMERIC; interest NUMERIC; n BIGINT; allocated_principal NUMERIC; allocated_interest NUMERIC;
+BEGIN
+ IF TG_TABLE_NAME='loan_posting' THEN
+  SELECT * INTO p FROM "${schema}".loan_posting WHERE id=NEW.id AND tenant_id=NEW.tenant_id;
+ ELSE
+  SELECT * INTO p FROM "${schema}".loan_posting WHERE id=NEW.posting_id AND tenant_id=NEW.tenant_id;
+ END IF;
+ SELECT COALESCE(sum(principal_delta),0),COALESCE(sum(interest_delta),0),count(*) INTO principal,interest,n
+ FROM "${schema}".loan_ledger_entry WHERE tenant_id=p.tenant_id AND posting_id=p.id;
+ IF n=0 OR principal<>p.principal_delta OR interest<>p.interest_delta THEN
+  RAISE EXCEPTION 'loan posting ledger does not reconcile' USING ERRCODE='23514';
+ END IF;
+ IF p.kind='REPAYMENT' THEN
+  SELECT a.principal,a.interest INTO allocated_principal,allocated_interest FROM "${schema}".loan_allocation a
+   WHERE a.tenant_id=p.tenant_id AND a.posting_id=p.id AND a.direction='RECOVER';
+  IF NOT FOUND OR allocated_principal<>-p.principal_delta OR allocated_interest<>-p.interest_delta THEN
+   RAISE EXCEPTION 'loan repayment allocation does not reconcile' USING ERRCODE='23514';
+  END IF;
+ ELSIF p.kind='REVERSAL' THEN
+  SELECT * INTO original FROM "${schema}".loan_posting WHERE tenant_id=p.tenant_id AND id=p.reversal_of AND loan_id=p.loan_id;
+  IF NOT FOUND OR original.kind='REVERSAL' OR p.principal_delta<>-original.principal_delta OR
+   p.interest_delta<>-original.interest_delta OR p.amount<>original.amount THEN
+   RAISE EXCEPTION 'loan reversal does not reconcile with its source' USING ERRCODE='23514';
+  END IF;
+ ELSIF p.kind='ADJUSTMENT' THEN
+  IF (NOT EXISTS(SELECT 1 FROM "${schema}".loan_posting o JOIN "${schema}".loan_posting r
+    ON r.tenant_id=o.tenant_id AND r.loan_id=o.loan_id AND r.reversal_of=o.id
+    WHERE o.tenant_id=p.tenant_id AND o.loan_id=p.loan_id AND o.id=p.source_id
+    AND o.source_kind IN ('EXTERNAL_DISBURSEMENT','EXTERNAL_RECEIPT')) AND NOT "${schema}".loan_is_reviewed_late_adjustment(p)) OR
+    NOT (p.calculation_evidence ?& ARRAY['classification','reason','reconciliationReference','preview']) THEN
+   RAISE EXCEPTION 'loan reconciliation must link a reviewed external reversal' USING ERRCODE='23514';
+  END IF;
+ END IF;
+ SELECT COALESCE(sum(principal_delta),0),COALESCE(sum(interest_delta),0) INTO principal,interest
+ FROM "${schema}".loan_ledger_entry WHERE tenant_id=p.tenant_id AND loan_id=p.loan_id;
+ IF principal<0 OR interest<0 THEN RAISE EXCEPTION 'loan balance cannot be negative' USING ERRCODE='23514'; END IF;
+ RETURN NULL;
+END $$;
+]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+CREATE OR REPLACE FUNCTION "${schema}".loan_check_posting_balance() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE p "${schema}".loan_posting; original "${schema}".loan_posting;
+ principal NUMERIC; interest NUMERIC; n BIGINT; allocated_principal NUMERIC; allocated_interest NUMERIC;
+BEGIN
+ IF TG_TABLE_NAME='loan_posting' THEN
+  SELECT * INTO p FROM "${schema}".loan_posting WHERE id=NEW.id AND tenant_id=NEW.tenant_id;
+ ELSE
+  SELECT * INTO p FROM "${schema}".loan_posting WHERE id=NEW.posting_id AND tenant_id=NEW.tenant_id;
+ END IF;
+ SELECT COALESCE(sum(principal_delta),0),COALESCE(sum(interest_delta),0),count(*) INTO principal,interest,n
+ FROM "${schema}".loan_ledger_entry WHERE tenant_id=p.tenant_id AND posting_id=p.id;
+ IF n=0 OR principal<>p.principal_delta OR interest<>p.interest_delta THEN
+  RAISE EXCEPTION 'loan posting ledger does not reconcile' USING ERRCODE='23514';
+ END IF;
+ IF p.kind='REPAYMENT' THEN
+  SELECT a.principal,a.interest INTO allocated_principal,allocated_interest FROM "${schema}".loan_allocation a
+   WHERE a.tenant_id=p.tenant_id AND a.posting_id=p.id AND a.direction='RECOVER';
+  IF NOT FOUND OR allocated_principal<>-p.principal_delta OR allocated_interest<>-p.interest_delta THEN
+   RAISE EXCEPTION 'loan repayment allocation does not reconcile' USING ERRCODE='23514';
+  END IF;
+ ELSIF p.kind='REVERSAL' THEN
+  SELECT * INTO original FROM "${schema}".loan_posting WHERE tenant_id=p.tenant_id AND id=p.reversal_of AND loan_id=p.loan_id;
+  IF NOT FOUND OR original.kind='REVERSAL' OR p.principal_delta<>-original.principal_delta OR
+   p.interest_delta<>-original.interest_delta OR p.amount<>original.amount THEN
+   RAISE EXCEPTION 'loan reversal does not reconcile with its source' USING ERRCODE='23514';
+  END IF;
+ ELSIF p.kind='ADJUSTMENT' THEN
+  IF NOT EXISTS(SELECT 1 FROM "${schema}".loan_posting o JOIN "${schema}".loan_posting r
+    ON r.tenant_id=o.tenant_id AND r.loan_id=o.loan_id AND r.reversal_of=o.id
+    WHERE o.tenant_id=p.tenant_id AND o.loan_id=p.loan_id AND o.id=p.source_id
+    AND o.source_kind IN ('EXTERNAL_DISBURSEMENT','EXTERNAL_RECEIPT')) OR
+    NOT (p.calculation_evidence ?& ARRAY['classification','reason','reconciliationReference','preview']) THEN
+   RAISE EXCEPTION 'loan reconciliation must link a reviewed external reversal' USING ERRCODE='23514';
+  END IF;
+ END IF;
+ SELECT COALESCE(sum(principal_delta),0),COALESCE(sum(interest_delta),0) INTO principal,interest
+ FROM "${schema}".loan_ledger_entry WHERE tenant_id=p.tenant_id AND loan_id=p.loan_id;
+ IF principal<0 OR interest<0 THEN RAISE EXCEPTION 'loan balance cannot be negative' USING ERRCODE='23514'; END IF;
+ RETURN NULL;
+END $$;
+DROP TRIGGER loan_late_payment_evidence ON "${schema}".loan_posting;
+DROP FUNCTION "${schema}".loan_validate_late_payment();
+DROP FUNCTION "${schema}".loan_is_reviewed_late_adjustment("${schema}".loan_posting);
+]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0107-001-loan-financial-reconciliation" author="kabipay-dev">
+  <createTable schemaName="${schema}" tableName="loan_reconciliation_run">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="loan_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="employee_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="account_version" type="BIGINT"><constraints nullable="false"/></column>
+   <column name="checked_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+   <column name="trigger_kind" type="VARCHAR(32)"><constraints nullable="false"/></column>
+   <column name="initiated_by" type="UUID"/>
+   <column name="fingerprint" type="VARCHAR(64)"><constraints nullable="false"/></column>
+   <column name="report" type="JSONB"><constraints nullable="false"/></column>
+  </createTable>
+  <createTable schemaName="${schema}" tableName="loan_reconciliation_status">
+   <column name="id" type="UUID"><constraints primaryKey="true" nullable="false"/></column>
+   <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="last_run_id" type="UUID"><constraints nullable="false"/></column>
+   <column name="blocked" type="BOOLEAN"><constraints nullable="false"/></column>
+   <column name="checked_at" type="TIMESTAMPTZ"><constraints nullable="false"/></column>
+  </createTable>
+  <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".loan_reconciliation_run
+ ADD CONSTRAINT uq_loan_reconciliation_result UNIQUE(tenant_id,loan_id,id),
+ ADD CONSTRAINT fk_loan_reconciliation_owner FOREIGN KEY(tenant_id,loan_id,employee_id) REFERENCES "${schema}".loan_account(tenant_id,id,employee_id),
+ ADD CONSTRAINT ck_loan_reconciliation_version CHECK(account_version>0),
+ ADD CONSTRAINT ck_loan_reconciliation_trigger CHECK(trigger_kind IN ('SCHEDULED','HR_REVIEW')),
+ ADD CONSTRAINT ck_loan_reconciliation_actor CHECK((trigger_kind='HR_REVIEW' AND initiated_by IS NOT NULL) OR (trigger_kind='SCHEDULED' AND initiated_by IS NULL)),
+ ADD CONSTRAINT ck_loan_reconciliation_report CHECK((jsonb_typeof(report->'issues')='array'
+ AND report->>'id'=id::text AND report->>'loanId'=loan_id::text
+ AND report->>'employeeId'=employee_id::text AND report->>'accountVersion'=account_version::text
+ AND report->>'fingerprint'=fingerprint AND length(fingerprint)=64) IS TRUE);
+ALTER TABLE "${schema}".loan_reconciliation_status
+ ADD CONSTRAINT fk_loan_reconciliation_account FOREIGN KEY(tenant_id,id) REFERENCES "${schema}".loan_account(tenant_id,id),
+ ADD CONSTRAINT fk_loan_reconciliation_result FOREIGN KEY(tenant_id,id,last_run_id) REFERENCES "${schema}".loan_reconciliation_run(tenant_id,loan_id,id);
+CREATE FUNCTION "${schema}".validate_loan_reconciliation_status() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE result "${schema}".loan_reconciliation_run%ROWTYPE;
+BEGIN
+ SELECT * INTO STRICT result FROM "${schema}".loan_reconciliation_run WHERE tenant_id=NEW.tenant_id AND loan_id=NEW.id AND id=NEW.last_run_id;
+ IF NEW.blocked IS DISTINCT FROM (jsonb_array_length(result.report->'issues')>0)
+    OR NEW.checked_at IS DISTINCT FROM result.checked_at THEN
+  RAISE EXCEPTION 'loan reconciliation status must match its immutable result';
+ END IF;
+ IF TG_OP='UPDATE' AND (NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.checked_at<OLD.checked_at) THEN
+  RAISE EXCEPTION 'loan reconciliation status cannot change ownership or move backwards';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER loan_reconciliation_status_check BEFORE INSERT OR UPDATE ON "${schema}".loan_reconciliation_status FOR EACH ROW EXECUTE FUNCTION "${schema}".validate_loan_reconciliation_status();
+CREATE TRIGGER loan_reconciliation_run_immutable BEFORE UPDATE OR DELETE ON "${schema}".loan_reconciliation_run FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE TRIGGER loan_reconciliation_status_no_delete BEFORE DELETE ON "${schema}".loan_reconciliation_status FOR EACH ROW EXECUTE FUNCTION "${schema}".loan_reject_financial_mutation();
+CREATE INDEX idx_loan_reconciliation_due ON "${schema}".loan_reconciliation_status(tenant_id,checked_at,id);
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DROP TABLE "${schema}".loan_reconciliation_status;
+DROP FUNCTION "${schema}".validate_loan_reconciliation_status();
+DROP TABLE "${schema}".loan_reconciliation_run;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

@@ -4,6 +4,7 @@ This does not replace Liquibase validation or authorize live migration.
 """
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import re
 
 NS = '{http://www.liquibase.org/xml/ns/dbchangelog}'
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +26,11 @@ def migration_sql(file):
                     if flags.get('nullable') == 'false': declaration += ' NOT NULL'
                     if flags.get('primaryKey') == 'true': declaration += ' PRIMARY KEY'
                     if 'defaultValueComputed' in c: declaration += ' DEFAULT ' + c['defaultValueComputed']
+                    elif 'defaultValueNumeric' in c:
+                        value = c['defaultValueNumeric']
+                        if not re.fullmatch(r'-?\d+(?:\.\d+)?', value):
+                            raise ValueError('unsupported numeric default in test migration')
+                        declaration += ' DEFAULT ' + value
                     columns.append(declaration)
                 result.append(f'CREATE TABLE "{schema}".{a["tableName"]} (' + ','.join(columns) + ');')
             elif name == 'addUniqueConstraint':

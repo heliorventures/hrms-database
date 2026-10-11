@@ -122,4 +122,7 @@
     <include file="migrations/0103_employee_loans/employee_loans.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0104_loan_module_catalog/loan_permissions.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0105_payslip_loan_evidence/payslip_loan_evidence.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0106_loan_exit_coordination/loan_exit_coordination.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0107_loan_reconciliation/loan_reconciliation.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0108_loan_late_payments/loan_late_payments.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>
