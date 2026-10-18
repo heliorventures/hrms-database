@@ -1,6 +1,13 @@
 \set ON_ERROR_STOP on
-DO $$ DECLARE policy_id UUID:=gen_random_uuid(); rules JSONB; BEGIN
+DO $$ DECLARE policy_id UUID:=gen_random_uuid(); rules JSONB; required_key TEXT; BEGIN
  SELECT jsonb_object_agg(key,'{}'::jsonb) INTO rules FROM unnest(ARRAY['eligibility','exposure','interest','recovery','shortSalary','allocation','excessCredit','earlySettlement','exitRecovery','taxTreatment','approval']) AS fields(key);
+ FOR required_key IN SELECT jsonb_object_keys(rules) LOOP
+  BEGIN
+   INSERT INTO loan_test.loan_policy_version(id,tenant_id,policy_key,version,status,currency,minor_units,effective_from,rules,calculator_version,approved_by)
+   VALUES(gen_random_uuid(),'10000000-0000-0000-0000-000000000001','missing-'||required_key,1,'ACTIVE','INR',2,DATE '2026-10-01',rules-required_key,'fixture',gen_random_uuid());
+   RAISE EXCEPTION 'active policy accepted missing required key %', required_key;
+  EXCEPTION WHEN check_violation THEN NULL; END;
+ END LOOP;
  INSERT INTO loan_test.loan_policy_version(id,tenant_id,policy_key,version,status,currency,minor_units,effective_from,effective_to,rules,calculator_version,approved_by)
  VALUES(policy_id,'10000000-0000-0000-0000-000000000001','schema-policy-overlap',1,'ACTIVE','INR',2,DATE '2026-10-01',DATE '2026-11-01',rules,'fixture',gen_random_uuid());
  BEGIN

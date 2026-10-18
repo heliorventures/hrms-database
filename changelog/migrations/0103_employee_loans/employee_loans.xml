@@ -2,6 +2,8 @@
 <databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
  <changeSet id="0103-001-employee-loans" author="kabipay-dev" runInTransaction="true">
+  <validCheckSum>9:636b7e9268358e8ea225d1b9e7da5c78</validCheckSum>
+  <!-- Accept only the prior SQL-equivalent definition; jsonb_exists_all avoids JDBC bind-marker parsing. -->
   <comment>Tenant-owned employee loans. No policy defaults, subscriptions, financial grants or opening balances.</comment>
   <addUniqueConstraint schemaName="${schema}" tableName="employee" columnNames="tenant_id,id" constraintName="uq_employee_loan_tenant"/>
   <createTable schemaName="${schema}" tableName="loan_policy_version">
@@ -289,7 +291,7 @@ ALTER TABLE "${schema}".loan_policy_version ADD CONSTRAINT uq_loan_policy_versio
  ADD CONSTRAINT ck_loan_policy_dates CHECK(effective_to IS NULL OR effective_to > effective_from),
  ADD CONSTRAINT ck_loan_policy_activation CHECK(version > 0 AND minor_units BETWEEN 0 AND 4 AND
  (status = 'DRAFT' OR (approved_by IS NOT NULL AND jsonb_typeof(rules) = 'object' AND
- rules ?& ARRAY['eligibility','exposure','interest','recovery','shortSalary','allocation','excessCredit','earlySettlement','exitRecovery','taxTreatment','approval'])));
+ jsonb_exists_all(rules, ARRAY['eligibility','exposure','interest','recovery','shortSalary','allocation','excessCredit','earlySettlement','exitRecovery','taxTreatment','approval']))));
 ALTER TABLE "${schema}".loan_terms_version ADD CONSTRAINT uq_loan_terms_version UNIQUE(tenant_id,loan_id,version),
  ADD CONSTRAINT uq_loan_terms_account UNIQUE(tenant_id,loan_id,id);
 ALTER TABLE "${schema}".loan_account DROP CONSTRAINT fk_loan_current_terms,
@@ -408,7 +410,7 @@ BEGIN
     ON r.tenant_id=o.tenant_id AND r.loan_id=o.loan_id AND r.reversal_of=o.id
     WHERE o.tenant_id=p.tenant_id AND o.loan_id=p.loan_id AND o.id=p.source_id
     AND o.source_kind IN ('EXTERNAL_DISBURSEMENT','EXTERNAL_RECEIPT')) OR
-    NOT (p.calculation_evidence ?& ARRAY['classification','reason','reconciliationReference','preview']) THEN
+    NOT jsonb_exists_all(p.calculation_evidence, ARRAY['classification','reason','reconciliationReference','preview']) THEN
    RAISE EXCEPTION 'loan reconciliation must link a reviewed external reversal' USING ERRCODE='23514';
   END IF;
  END IF;

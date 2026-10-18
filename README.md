@@ -41,6 +41,23 @@ rtk proxy powershell -NoProfile -File tests/unit/maintenance/test-indian-tenant-
 
 The commands above are offline. Migration-contract PowerShell checks in `tests/migrations/` are also offline; the asset SQL verification reads an explicitly selected tenant when the operator runs it. Integration tests create their own disposable database/container fixtures and have separate prerequisites described in the operation notes. None of these commands is an instruction to run a live import/reset.
 
+### Full disposable Liquibase rehearsal
+
+With Node, `npm install`, Java 17 (located by the bundled runner), Docker running,
+and `postgres:16-alpine` already cached:
+
+```powershell
+powershell -NoProfile -File tests/migrations/test-full-liquibase.ps1
+```
+
+This runs both complete changelogs, seeds a synthetic tenant, verifies repeat
+updates leave migration history unchanged, and checks the exact original loan
+checksums remain accepted and preserved. It uses a unique disposable container,
+random dummy credentials, a random loopback port, and unique temporary files;
+it never reads repository `.env`. Use `-SkipPriorChecksumVerification` only when
+checking fresh/repeat updates alone. A fresh rehearsal does not replace an
+upgrade rehearsal against a disposable restored production tenant.
+
 ## Dependencies
 
 | Requirement | Notes |

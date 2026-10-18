@@ -2,6 +2,8 @@
 <databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
  <changeSet id="0108-001-reviewed-late-loan-payments" author="kabipay-dev">
+  <validCheckSum>9:19c6187bb7148d08fcd662e2674dc4ec</validCheckSum>
+  <!-- Preserve the prior SQL-equivalent checksum without allowing arbitrary migration edits. -->
   <sql splitStatements="false"><![CDATA[
 CREATE FUNCTION "${schema}".loan_is_reviewed_late_adjustment(p "${schema}".loan_posting) RETURNS boolean LANGUAGE sql STABLE AS $$
  SELECT COALESCE(p.source_kind='HISTORICAL_RECONCILIATION'
@@ -69,7 +71,7 @@ BEGIN
     ON r.tenant_id=o.tenant_id AND r.loan_id=o.loan_id AND r.reversal_of=o.id
     WHERE o.tenant_id=p.tenant_id AND o.loan_id=p.loan_id AND o.id=p.source_id
     AND o.source_kind IN ('EXTERNAL_DISBURSEMENT','EXTERNAL_RECEIPT')) AND NOT "${schema}".loan_is_reviewed_late_adjustment(p)) OR
-    NOT (p.calculation_evidence ?& ARRAY['classification','reason','reconciliationReference','preview']) THEN
+    NOT jsonb_exists_all(p.calculation_evidence, ARRAY['classification','reason','reconciliationReference','preview']) THEN
    RAISE EXCEPTION 'loan reconciliation must link a reviewed external reversal' USING ERRCODE='23514';
   END IF;
  END IF;
@@ -111,7 +113,7 @@ BEGIN
     ON r.tenant_id=o.tenant_id AND r.loan_id=o.loan_id AND r.reversal_of=o.id
     WHERE o.tenant_id=p.tenant_id AND o.loan_id=p.loan_id AND o.id=p.source_id
     AND o.source_kind IN ('EXTERNAL_DISBURSEMENT','EXTERNAL_RECEIPT')) OR
-    NOT (p.calculation_evidence ?& ARRAY['classification','reason','reconciliationReference','preview']) THEN
+    NOT jsonb_exists_all(p.calculation_evidence, ARRAY['classification','reason','reconciliationReference','preview']) THEN
    RAISE EXCEPTION 'loan reconciliation must link a reviewed external reversal' USING ERRCODE='23514';
   END IF;
  END IF;

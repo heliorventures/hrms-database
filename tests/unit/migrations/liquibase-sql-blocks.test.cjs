@@ -71,6 +71,7 @@ test("private cleanup claims and blocked upload stages have durable database sta
 test("post-migration verification covers normalized identifiers and claim ownership", () => {
   const verification = readRepositoryFile(
     "tests",
+    "migrations",
     "asset_management_lifecycle_verification.sql",
   );
 

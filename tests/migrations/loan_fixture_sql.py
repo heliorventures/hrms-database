@@ -38,7 +38,7 @@ def migration_sql(file):
             elif name == 'addForeignKeyConstraint':
                 result.append(f'ALTER TABLE "{schema}".{a["baseTableName"]} ADD CONSTRAINT {a["constraintName"]} FOREIGN KEY({a["baseColumnNames"]}) REFERENCES "{a["referencedTableSchemaName"]}".{a["referencedTableName"]}({a["referencedColumnNames"]}) ON DELETE {a.get("onDelete","NO ACTION")} DEFERRABLE INITIALLY DEFERRED;')
             elif name == 'sql': result.append(node.text or '')
-            elif name not in ('comment','rollback','preConditions'): raise ValueError(f'unsupported Liquibase test element: {name}')
+            elif name not in ('comment','rollback','preConditions','validCheckSum'): raise ValueError(f'unsupported Liquibase test element: {name}')
     return '\n'.join(result).replace('${schema}', 'loan_test')
 
 if __name__ == '__main__':

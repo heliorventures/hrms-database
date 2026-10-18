@@ -3,6 +3,8 @@
  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
  <changeSet id="0105-001-payslip-loan-evidence" author="kabipay-dev">
+  <validCheckSum>9:8d7a799d027b2661b3607fb6e724ac53</validCheckSum>
+  <!-- Preserve the prior SQL-equivalent checksum without allowing arbitrary migration edits. -->
   <createTable tableName="payslip_loan_snapshot" schemaName="${schema}">
    <column name="payslip_id" type="UUID"><constraints nullable="false" primaryKey="true"/></column>
    <column name="tenant_id" type="UUID"><constraints nullable="false"/></column>
@@ -23,7 +25,7 @@ ALTER TABLE "${schema}".payslip_loan_snapshot
  ADD CONSTRAINT ck_payslip_loan_evidence_total CHECK(recovery_total >= 0 AND scale(recovery_total) <= 4 AND source_revision > 0),
  ADD CONSTRAINT ck_payslip_loan_evidence_currency CHECK(currency ~ '^[A-Z]{3}$'),
  ADD CONSTRAINT ck_payslip_loan_evidence_json CHECK((jsonb_typeof(snapshot)='object'
- AND snapshot ?& ARRAY['lines','quoteFingerprint','postingIds','sourceId','sourceRevision','employeeId','valueDate','periodStart','currency','total','employeeRevision']
+ AND jsonb_exists_all(snapshot, ARRAY['lines','quoteFingerprint','postingIds','sourceId','sourceRevision','employeeId','valueDate','periodStart','currency','total','employeeRevision'])
  AND jsonb_typeof(snapshot->'lines')='array' AND jsonb_typeof(snapshot->'postingIds')='array'
  AND length(snapshot->>'quoteFingerprint')=64
  AND snapshot->>'sourceId'=cycle_id::text AND snapshot->>'employeeId'=employee_id::text
