@@ -8,7 +8,8 @@
     "migrate-ops": "node migrate-ops.cjs",
     "test": "node tests/unit/migrations/liquibase-sql-blocks.test.cjs && node tests/unit/rbac/admin-hr-permissions.test.cjs",
     "check:permission-defaults": "node scripts/reusable/rbac/check-permission-defaults.cjs",
-    "test:permission-defaults:integration": "node tests/integration/rbac/admin-hr-permissions.integration.cjs"
+    "test:permission-defaults:integration": "node tests/integration/rbac/admin-hr-permissions.integration.cjs",
+    "test:loan-scopes:integration": "node tests/integration/rbac/loan-role-scopes.integration.cjs"
   },
   "repository": {
     "type": "git",

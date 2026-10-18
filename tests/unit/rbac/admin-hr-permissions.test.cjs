@@ -18,6 +18,20 @@ test('loan capabilities require deliberate grants rather than Admin or HR defaul
   }
 });
 
+test('loan scope backfill is forward-only, transactional and cannot grant permissions', () => {
+  const relative = 'migrations/0110_loan_role_scopes/loan_role_scopes.xml';
+  const xml = fs.readFileSync(path.join(root, 'changelog', relative), 'utf8');
+  const master = fs.readFileSync(path.join(root, 'changelog/tenant.changelog-master.xml'), 'utf8');
+  assert.ok(master.includes(`<include file="${relative}"`));
+  assert.match(xml, /runInTransaction="true"/);
+  assert.match(xml, /splitStatements="false"/);
+  assert.match(xml, /JOIN "\$\{schema\}"\.role_permission rp ON rp\.role_id=r\.id/);
+  assert.match(xml, /\('submit','SELF'\)/);
+  assert.doesNotMatch(xml, /(?:INSERT INTO|UPDATE|DELETE FROM)\s+"\$\{schema\}"\.(?:role_permission|permission)\b/i);
+  assert.doesNotMatch(xml, /(?:UPDATE|DELETE FROM)\s+"\$\{schema\}"\.permission_scope\b/i);
+  assert.match(xml, /forward corrective migration/);
+});
+
 test('every UI permission has an explicit Admin/HR default decision in a registered migration', () => {
   const { checkCoverage } = require('../../../scripts/reusable/rbac/check-permission-defaults.cjs');
   const source = fs.readFileSync(path.join(root, '../hrms-ui/src/auth/permissions.ts'), 'utf8');

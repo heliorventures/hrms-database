@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0110-001-loan-role-scopes" author="kabipay-dev" runInTransaction="true">
+  <comment>Fill missing loan scopes for existing grants on active canonical HR and ADMIN roles.
+No permission grants, subscription changes, or replacement of existing valid scopes.
+This conditional backfill does not change the NONE/NONE default-grant decisions in 0104.
+  </comment>
+  <sql splitStatements="false"><![CDATA[
+LOCK TABLE "${schema}".role, "${schema}".permission, "${schema}".role_permission,
+ "${schema}".permission_scope IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+LOCK TABLE kabipay_ops.tenant_database, kabipay_ops.module IN SHARE MODE NOWAIT;
+
+CREATE TEMP TABLE loan_scope_defaults (
+ action TEXT PRIMARY KEY, scope_type TEXT NOT NULL CHECK(scope_type IN ('SELF','ALL'))
+) ON COMMIT DROP;
+INSERT INTO loan_scope_defaults(action,scope_type) VALUES
+ ('read','ALL'),('submit','SELF'),('approve','ALL'),('disburse','ALL'),('repay','ALL'),
+ ('manage','ALL'),('policy','ALL'),('correct','ALL'),('exit-review','ALL'),('export','ALL');
+
+CREATE TEMP TABLE loan_scope_tenant ON COMMIT DROP AS
+ SELECT tenant_id FROM kabipay_ops.tenant_database WHERE schema_name='${schema}';
+
+DO $$
+BEGIN
+ IF (SELECT count(*) FROM loan_scope_tenant) <> 1 THEN
+  RAISE EXCEPTION '0110 requires exactly one tenant mapping for schema %', '${schema}';
+ END IF;
+ IF (SELECT count(*) FROM kabipay_ops.module WHERE code='LOANS') <> 1 THEN
+  RAISE EXCEPTION '0110 requires the LOANS module catalog; apply master migrations first';
+ END IF;
+ IF EXISTS (
+  SELECT upper(btrim(r.name)) FROM "${schema}".role r
+  WHERE r.tenant_id=(SELECT tenant_id FROM loan_scope_tenant) AND NOT r.is_deleted
+   AND upper(btrim(r.name)) IN ('ADMIN','HR')
+  GROUP BY upper(btrim(r.name)) HAVING count(*) > 1
+ ) THEN
+  RAISE EXCEPTION '0110 found ambiguous active canonical HR or ADMIN roles';
+ END IF;
+ IF EXISTS (
+  SELECT d.action FROM loan_scope_defaults d
+  LEFT JOIN "${schema}".permission p ON lower(btrim(p.resource))='loan' AND lower(btrim(p.action))=d.action
+  LEFT JOIN kabipay_ops.module m ON m.id=p.module_id
+  GROUP BY d.action
+  HAVING count(p.id) <> 1 OR bool_or(m.code IS DISTINCT FROM 'LOANS')
+   OR bool_or(p.resource <> btrim(p.resource) OR p.action <> btrim(p.action))
+ ) THEN
+  RAISE EXCEPTION '0110 missing, ambiguous or invalid loan permission catalog; repair prerequisites first';
+ END IF;
+END $$;
+
+CREATE TEMP TABLE loan_scope_expected ON COMMIT DROP AS
+ SELECT r.id AS role_id,r.tenant_id,'loan'::text AS resource,d.action,d.scope_type
+ FROM "${schema}".role r
+ JOIN "${schema}".role_permission rp ON rp.role_id=r.id
+ JOIN "${schema}".permission p ON p.id=rp.permission_id
+ JOIN loan_scope_defaults d ON lower(btrim(p.action))=d.action
+ JOIN kabipay_ops.module m ON m.id=p.module_id AND m.code='LOANS'
+ WHERE r.tenant_id=(SELECT tenant_id FROM loan_scope_tenant) AND NOT r.is_deleted
+  AND upper(btrim(r.name)) IN ('ADMIN','HR') AND lower(btrim(p.resource))='loan';
+
+DO $$
+BEGIN
+ IF EXISTS (
+  SELECT e.role_id,e.action FROM loan_scope_expected e
+  JOIN "${schema}".permission_scope s ON s.role_id=e.role_id
+   AND lower(btrim(s.resource))=e.resource AND lower(btrim(s.action))=e.action
+  GROUP BY e.role_id,e.action
+  HAVING count(*) > 1
+   OR bool_or(s.tenant_id <> (SELECT tenant_id FROM loan_scope_tenant))
+   OR bool_or(s.resource <> btrim(s.resource) OR s.action <> btrim(s.action))
+   OR bool_or(upper(btrim(s.scope_type)) NOT IN ('SELF','TEAM','DEPARTMENT','ALL'))
+ ) THEN
+  RAISE EXCEPTION '0110 ambiguous, cross-tenant or invalid existing loan scope; resolve before migrating';
+ END IF;
+END $$;
+
+INSERT INTO "${schema}".permission_scope(id,tenant_id,role_id,resource,action,scope_type)
+ SELECT gen_random_uuid(),e.tenant_id,e.role_id,e.resource,e.action,e.scope_type
+ FROM loan_scope_expected e WHERE NOT EXISTS (
+  SELECT 1 FROM "${schema}".permission_scope s WHERE s.role_id=e.role_id
+   AND lower(btrim(s.resource))=e.resource AND lower(btrim(s.action))=e.action
+ );
+
+DO $$
+DECLARE preserved_count BIGINT;
+BEGIN
+ IF EXISTS (
+  SELECT 1 FROM loan_scope_expected e WHERE NOT EXISTS (
+   SELECT 1 FROM "${schema}".permission_scope s WHERE s.role_id=e.role_id AND s.tenant_id=e.tenant_id
+    AND lower(btrim(s.resource))=e.resource AND lower(btrim(s.action))=e.action
+  )
+ ) THEN RAISE EXCEPTION '0110 missing scope after loan backfill'; END IF;
+ SELECT count(*) INTO preserved_count FROM loan_scope_expected e
+ JOIN "${schema}".permission_scope s ON s.role_id=e.role_id
+  AND lower(btrim(s.resource))=e.resource AND lower(btrim(s.action))=e.action
+ WHERE upper(btrim(s.scope_type)) <> e.scope_type;
+ RAISE NOTICE '0110 complete; % existing non-default loan scopes preserved. Sign in again to refresh claims.', preserved_count;
+END $$;
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $$ BEGIN
+ RAISE EXCEPTION '0110 requires a reviewed forward corrective migration; existing and subsequently edited scopes cannot be removed safely';
+END $$;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

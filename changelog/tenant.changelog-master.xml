@@ -126,4 +126,5 @@
     <include file="migrations/0107_loan_reconciliation/loan_reconciliation.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0108_loan_late_payments/loan_late_payments.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0109_loan_schedule_anchor/loan_schedule_anchor.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0110_loan_role_scopes/loan_role_scopes.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

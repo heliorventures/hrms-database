@@ -547,3 +547,38 @@ not load `.env`, and retains its temporary directory for diagnostics. It execute
 the migration's column declarations and SQL against a fixture schema and checks
 legacy defaults, immutable published modes, permanent closure and content limits.
 This is not proof that Liquibase ran against a deployed tenant.
+
+## Existing loan permission scopes (0110)
+
+Migration `0110_loan_role_scopes/loan_role_scopes.xml` adds missing scopes only
+for loan permissions already granted to active canonical `HR` and `ADMIN` roles.
+`loan:submit` receives `SELF`; other assigned cataloged loan actions receive `ALL`.
+Existing valid scopes and permission grants remain unchanged. Employee, Manager,
+custom, deleted and other-tenant roles are excluded. Relevant ambiguous or invalid
+metadata halts the transaction. Automatic rollback is deliberately disabled;
+corrections require a reviewed forward migration.
+
+After reviewing all pending changes and verifying `hrms-database/.env` points to
+the intended database, run the normal tenant update:
+
+```powershell
+$loanScopeTenant = Read-Host 'Enter the verified tenant schema'
+.\scripts\reusable\migrations\update-tenant-liquibase.ps1 -Schema $loanScopeTenant
+```
+
+This applies **all pending tenant migrations**. Apply pending ops/master changes
+first if the LOANS catalog is absent. The backfill does not enable LOANS for a
+tenant. Sign out and back in to refresh authorization claims. Permissions granted
+after `0110` runs still need explicit matching scopes through Access Management.
+
+Focused local verification, using a cached `postgres:16-alpine` Docker image:
+
+```powershell
+npm run test:loan-scopes:integration
+```
+
+The test creates and removes its own disposable database, uses synthetic grants,
+and never loads `.env`. It checks scope defaults, preservation, idempotence,
+tenant/role isolation and failure rollback. `--baseline` intentionally reproduces
+the old missing-scope failure without executing the migration. The separate
+`tests/migrations/test-full-liquibase.ps1` exercises the actual JDBC chain.
