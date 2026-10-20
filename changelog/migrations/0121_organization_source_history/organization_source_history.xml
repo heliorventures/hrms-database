@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0121-001-organization-source-capture-history" author="kabipay-dev">
+ <sql splitStatements="false"><![CDATA[
+ALTER TABLE "${schema}".company_event_outbox ADD COLUMN source_position bigserial NOT NULL;
+ALTER TABLE "${schema}".audit_log ADD COLUMN organization_history_position bigserial NOT NULL;
+CREATE UNIQUE INDEX organization_audit_history_position ON "${schema}".audit_log(organization_history_position);
+CREATE UNIQUE INDEX organization_outbox_source_position ON "${schema}".company_event_outbox(source_position);
+CREATE TABLE "${schema}".organization_outbox_cleanup_receipt (
+ id uuid PRIMARY KEY,evidence_id uuid NOT NULL,policy_id uuid NOT NULL,policy_version bigint NOT NULL,
+ source_kind text NOT NULL CHECK(source_kind='company'),source_tenant_id uuid NOT NULL,organization_id uuid NOT NULL,
+ manifest_sha256 char(64) NOT NULL,candidate_ids uuid[] NOT NULL,deleted_rows integer NOT NULL CHECK(deleted_rows BETWEEN 1 AND 100),
+ committed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE "${schema}".organization_capture_marker (
+ marker_id uuid PRIMARY KEY,organization_id uuid NOT NULL,tenant_id uuid NOT NULL,membership_id uuid NOT NULL,
+ membership_version bigint NOT NULL CHECK(membership_version>0),source_marker_at timestamptz NOT NULL,source_lsn text NOT NULL CHECK(source_lsn ~ '^[0-9A-F]+/[0-9A-F]+$'),bootstrap_complete boolean NOT NULL
+);
+CREATE INDEX organization_source_marker_age ON "${schema}".organization_capture_marker(tenant_id,organization_id,source_marker_at DESC);
+CREATE FUNCTION "${schema}".organization_capture_tick(company uuid) RETURNS integer LANGUAGE plpgsql AS $fn$
+DECLARE m record;n integer:=0;
+BEGIN
+ FOR m IN SELECT * FROM "${schema}".organization_membership_installation i WHERE i.tenant_id=company AND i.status='ACTIVE' ORDER BY i.organization_id FOR SHARE LOOP
+  IF NOT EXISTS(SELECT 1 FROM "${schema}".organization_capture_marker x WHERE x.tenant_id=company AND x.organization_id=m.organization_id AND x.membership_id=m.membership_id AND x.membership_version=m.version AND x.source_marker_at>clock_timestamp()-interval '30 seconds') THEN
+   INSERT INTO "${schema}".organization_capture_marker VALUES(gen_random_uuid(),m.organization_id,company,m.membership_id,m.version,clock_timestamp(),pg_current_wal_insert_lsn()::text,EXISTS(SELECT 1 FROM "${schema}".organization_metric_bootstrap b WHERE b.tenant_id=company AND b.organization_id=m.organization_id AND b.membership_version=m.version AND b.status='COMPLETE'));n:=n+1;
+  END IF;
+ END LOOP;RETURN n;
+END $fn$;
+-- Deterministic event identity excludes mutable content, so conflicting content
+-- at an existing version is detected instead of receiving a new identity.
+CREATE FUNCTION "${schema}".organization_fact_uuid(identity_text text) RETURNS uuid LANGUAGE sql IMMUTABLE STRICT AS $fn$
+ SELECT (substr(h,1,8)||'-'||substr(h,9,4)||'-8'||substr(h,14,3)||'-8'||substr(h,18,3)||'-'||substr(h,21,12))::uuid FROM (SELECT encode(sha256(convert_to(identity_text,'UTF8')),'hex') AS h) x;
+$fn$;
+CREATE FUNCTION "${schema}".organization_emit_metric(r jsonb,kind text,ver bigint,org uuid,deleted boolean,evtype text,fact jsonb) RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE eid uuid;body jsonb;previous jsonb;
+BEGIN
+ eid:="${schema}".organization_fact_uuid(concat_ws(':','organization-fact-v1',org,r->>'tenant_id',evtype,kind,r->>'id',ver));
+ body:=jsonb_build_object('schema_version',1,'event_id',eid,'event_type',evtype,'organization_id',org,'source_tenant_id',r->>'tenant_id','aggregate_type',kind,'aggregate_id',r->>'id','aggregate_version',ver,'occurred_at',COALESCE((r->>'__source_occurred_at')::timestamptz,clock_timestamp()),'deleted',deleted,'actor',COALESCE(r->'__source_actor',NULLIF(current_setting('kabipay.organization_actor',true),'')::jsonb,jsonb_build_object('kind','system')),'payload',fact);
+ SELECT event_envelope INTO previous FROM "${schema}".company_event_outbox WHERE id=eid;
+ IF FOUND THEN IF previous<>body THEN RAISE EXCEPTION 'Organization fact version conflict' USING ERRCODE='23514';END IF;RETURN;END IF;
+ INSERT INTO "${schema}".company_event_outbox(id,source_tenant_id,organization_id,event_type,aggregate_type,aggregate_id,aggregate_version,event_envelope) VALUES(eid,(r->>'tenant_id')::uuid,org,evtype,kind,(r->>'id')::uuid,ver,body);
+END $fn$;
+ALTER FUNCTION "${schema}".organization_emit_fact(jsonb,text,bigint,uuid,boolean) RENAME TO organization_emit_fact_0115;
+CREATE FUNCTION "${schema}".organization_emit_fact(r jsonb,kind text,ver bigint,org uuid,deleted boolean) RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE fact jsonb;seconds bigint;
+BEGIN
+ IF NOT COALESCE((r->>'__metric_snapshot')::boolean,false) THEN PERFORM "${schema}".organization_emit_fact_0115(r,kind,ver,org,deleted);END IF;
+ IF kind='attendance' THEN
+  seconds:=CASE WHEN r->>'check_in_at' IS NOT NULL AND r->>'check_out_at' IS NOT NULL AND (r->>'check_out_at')::timestamptz>=(r->>'check_in_at')::timestamptz THEN floor(extract(epoch FROM ((r->>'check_out_at')::timestamptz-(r->>'check_in_at')::timestamptz)))::bigint ELSE NULL END;
+  fact:=jsonb_build_object('employee_id',r->>'employee_id','work_date',r->>'work_date','status',COALESCE(r->>'status','UNKNOWN'),'observed_seconds',seconds,'overtime_seconds',CASE WHEN r->>'overtime_hours' IS NULL THEN NULL ELSE ((r->>'overtime_hours')::numeric*3600)::bigint END,'late_minutes',(r->>'late_minutes')::integer,'early_exit_minutes',(r->>'early_exit_minutes')::integer);
+  PERFORM "${schema}".organization_emit_metric(r,kind,ver,org,deleted,'attendance.changed',fact);
+ ELSIF kind='leave_request' THEN
+  fact:=jsonb_build_object('employee_id',r->>'employee_id','from_date',r->>'from_date','to_date',r->>'to_date','requested_centidays',((r->>'days_requested')::numeric*100)::bigint,'status',r->>'status');
+  -- Older bootstrap callers omitted leave quantities. Keep their approval fact,
+  -- and let the expanded source-owned snapshot emit the supported metrics.
+  IF r->>'from_date' IS NOT NULL AND r->>'days_requested' IS NOT NULL THEN PERFORM "${schema}".organization_emit_metric(r,kind,ver,org,deleted,'leave.changed',fact);END IF;
+ ELSIF kind='timesheet_entry' AND r ? 'project_code' THEN
+  fact:=jsonb_build_object('employee_id',r->>'employee_id','work_date',r->>'work_date','project_code',r->>'project_code','logged_seconds',CASE WHEN deleted THEN 0 ELSE ((r->>'hours_worked')::numeric*3600)::bigint END,'approved_seconds',CASE WHEN NOT deleted AND r->>'status'='APPROVED' THEN ((r->>'hours_worked')::numeric*3600)::bigint ELSE 0 END);
+  PERFORM "${schema}".organization_emit_metric(r,kind,ver,org,deleted,'project_time.changed',fact);
+ END IF;
+END $fn$;
+CREATE TRIGGER organization_attendance_fact AFTER INSERT OR UPDATE OR DELETE ON "${schema}".attendance FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('attendance');
+INSERT INTO "${schema}".organization_resource_version(tenant_id,resource_type,resource_id,last_actor,fact_occurred_at) SELECT tenant_id,'attendance',id,'{"kind":"system"}'::jsonb,updated_at FROM "${schema}".attendance ON CONFLICT DO NOTHING;
+CREATE TABLE "${schema}".organization_metric_bootstrap (
+ tenant_id uuid NOT NULL,organization_id uuid NOT NULL,membership_id uuid NOT NULL,membership_version bigint NOT NULL,
+ phase integer NOT NULL DEFAULT 0 CHECK(phase BETWEEN 0 AND 3),after_id uuid,status text NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','COMPLETE')),
+ PRIMARY KEY(tenant_id,organization_id)
+);
+CREATE FUNCTION "${schema}".organization_metric_bootstrap_once(company uuid,batch_size integer DEFAULT 100) RETURNS boolean LANGUAGE plpgsql AS $fn$
+DECLARE m record;j record;r record;tbl text;kind text;last_id uuid;n integer;next_phase integer;body jsonb;
+BEGIN
+ IF batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid metric bootstrap bound';END IF;
+ FOR m IN SELECT * FROM "${schema}".organization_membership_installation WHERE tenant_id=company AND status='ACTIVE' ORDER BY organization_id FOR SHARE LOOP
+  INSERT INTO "${schema}".organization_metric_bootstrap(tenant_id,organization_id,membership_id,membership_version) VALUES(company,m.organization_id,m.membership_id,m.version)
+  ON CONFLICT(tenant_id,organization_id) DO UPDATE SET membership_id=excluded.membership_id,membership_version=excluded.membership_version,phase=0,after_id=NULL,status='PENDING'
+  WHERE organization_metric_bootstrap.membership_id<>excluded.membership_id OR organization_metric_bootstrap.membership_version<>excluded.membership_version;
+  SELECT * INTO j FROM "${schema}".organization_metric_bootstrap WHERE tenant_id=company AND organization_id=m.organization_id AND status='PENDING' FOR UPDATE SKIP LOCKED;
+  IF NOT FOUND THEN CONTINUE;END IF;
+  tbl:=CASE j.phase WHEN 0 THEN 'attendance' WHEN 1 THEN 'leave_request' ELSE 'timesheet_entry' END;kind:=tbl;n:=0;last_id:=NULL;
+  FOR r IN EXECUTE format('SELECT s.id,to_jsonb(s) AS body,v.version,v.last_actor,v.fact_occurred_at FROM %I.%I s JOIN %I.organization_resource_version v ON v.tenant_id=s.tenant_id AND v.resource_id=s.id AND v.resource_type=$2 WHERE s.tenant_id=$1 AND ($3::uuid IS NULL OR s.id>$3) ORDER BY s.id LIMIT $4','${schema}',tbl,'${schema}') USING company,kind,j.after_id,batch_size LOOP
+   body:=r.body||jsonb_build_object('__metric_snapshot',true,'__source_actor',r.last_actor,'__source_occurred_at',r.fact_occurred_at);
+   PERFORM "${schema}".organization_emit_fact(body,kind,r.version,m.organization_id,COALESCE((body->>'is_deleted')::boolean,false));n:=n+1;last_id:=r.id;
+  END LOOP;
+  next_phase:=j.phase+CASE WHEN n<batch_size THEN 1 ELSE 0 END;
+  UPDATE "${schema}".organization_metric_bootstrap SET phase=next_phase,after_id=CASE WHEN next_phase<>j.phase THEN NULL ELSE last_id END,status=CASE WHEN next_phase=3 THEN 'COMPLETE' ELSE 'PENDING' END WHERE tenant_id=company AND organization_id=m.organization_id;
+  RETURN true;
+ END LOOP;RETURN false;
+END $fn$;
+CREATE FUNCTION "${schema}".organization_emit_administration(company uuid,org uuid,resource_type text,resource uuid,ver bigint,action text,status text) RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE allowed boolean;body jsonb;fact_time timestamptz;
+BEGIN
+ allowed:=CASE resource_type WHEN 'employee' THEN action=ANY(ARRAY['employee_create','employee_update','employee_employment']) WHEN 'user' THEN action=ANY(ARRAY['account_create','account_update','account_access','account_roles']) WHEN 'workflow_definition' THEN action=ANY(ARRAY['workflow_save','workflow_activation']) WHEN 'separation' THEN action=ANY(ARRAY['separation_create','separation_reject','separation_cancel_approval']) WHEN 'clearance_checklist' THEN action='clearance_update' WHEN 'payroll_job' THEN action='payroll_job_cancel_before_execution' ELSE false END;
+ IF resource_type='employee' AND action='employee_login_provision' THEN allowed:=true;END IF;
+ -- Payroll state/version has exactly one owner: its narrow AFTER trigger.
+ IF resource_type='payroll_job' OR NOT COALESCE(allowed,false) OR ver<=0 OR status IS DISTINCT FROM 'RECORDED' THEN RAISE EXCEPTION 'Invalid administration history contract';END IF;
+ PERFORM 1 FROM "${schema}".organization_membership_installation m WHERE m.tenant_id=company AND m.organization_id=org AND m.status='ACTIVE' FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Inactive administration history membership';END IF;
+ SELECT fact_occurred_at INTO fact_time FROM "${schema}".organization_resource_version v WHERE v.tenant_id=company AND v.resource_type=organization_emit_administration.resource_type AND v.resource_id=resource AND v.version=ver;
+ body:=jsonb_build_object('id',resource,'tenant_id',company,'__source_occurred_at',COALESCE(fact_time,clock_timestamp()));
+ PERFORM "${schema}".organization_emit_metric(body,resource_type,ver,org,false,'administration.changed',jsonb_build_object('resource_type',resource_type,'resource_id',resource,'action',action,'status',status));
+END $fn$;
+CREATE FUNCTION "${schema}".organization_payroll_status_history() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE ref jsonb;actor jsonb;body jsonb;membership record;
+BEGIN
+ IF TG_OP='UPDATE' AND OLD.state=NEW.state THEN RETURN NULL;END IF;
+ ref:=NEW.authority_reference;
+ IF NOT ref ?& ARRAY['tenant_id','organization_id','membership_id','principal_id','authority_id','authority_version','source_tenant_id','source_user_id','membership_version','identity_version','actor','authority_kind'] OR (ref->>'tenant_id')::uuid IS DISTINCT FROM NEW.tenant_id OR (ref->>'organization_id')::uuid IS DISTINCT FROM NEW.organization_id OR (ref->>'membership_id')::uuid IS DISTINCT FROM NEW.membership_id OR (ref->>'principal_id')::uuid IS DISTINCT FROM NEW.principal_id OR (ref->>'authority_id')::uuid IS DISTINCT FROM NEW.authority_id OR (ref->>'authority_version')::bigint IS DISTINCT FROM NEW.authority_version OR (ref#>>'{actor,principal_id}')::uuid IS DISTINCT FROM NEW.principal_id OR (ref#>>'{actor,identity_version}')::bigint IS DISTINCT FROM (ref->>'identity_version')::bigint OR ref->>'authority_kind' IS DISTINCT FROM 'organization_grant' OR ref->>'source_tenant_id' IS NULL OR ref->>'source_user_id' IS NULL OR ref#>>'{actor,display_name}' IS NULL OR length(ref#>>'{actor,display_name}')>255 THEN RAISE EXCEPTION 'Payroll history immutable actor conflict';END IF;
+ SELECT * INTO membership FROM "${schema}".organization_membership_installation m WHERE m.tenant_id=NEW.tenant_id AND m.organization_id=NEW.organization_id AND m.membership_id=NEW.membership_id AND m.version>=(ref->>'membership_version')::bigint AND m.status IN ('ACTIVE','SUSPENDED','DETACHING','DETACHED') FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Payroll history membership is unrecognized';END IF;
+ actor:=jsonb_build_object('kind','organization_principal','principal_id',NEW.principal_id,'display_name',ref#>>'{actor,display_name}','identity_version',(ref->>'identity_version')::bigint,'source_tenant_id',ref->>'source_tenant_id','source_user_id',ref->>'source_user_id','authority_kind',ref->>'authority_kind','authority_id',NEW.authority_id,'authority_version',NEW.authority_version,'command_id',NEW.id);
+ -- Each persisted state transition is a new fact. Retry/recovery must not
+ -- inherit the first started_at or creation time from the immutable job intent.
+ body:=jsonb_build_object('id',NEW.id,'tenant_id',NEW.tenant_id,'__source_actor',actor,'__source_occurred_at',clock_timestamp());
+ -- Narrow operational status of an already accepted immutable job. This does
+ -- not authorize business writes and cannot emit arbitrary historical admin.
+ PERFORM "${schema}".organization_emit_metric(body,'payroll_job',NEW.version,NEW.organization_id,false,'administration.changed',jsonb_build_object('resource_type','payroll_job','resource_id',NEW.id,'action','payroll_job_status','status',NEW.state));
+ RETURN NULL;
+END $fn$;
+DO $install$ BEGIN
+ IF to_regclass('"${schema}".organization_payroll_job') IS NOT NULL THEN
+  CREATE TRIGGER organization_payroll_status_history AFTER INSERT OR UPDATE ON "${schema}".organization_payroll_job FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_payroll_status_history();
+ END IF;
+END $install$;
+CREATE TABLE "${schema}".organization_history_export (
+ id uuid PRIMARY KEY,tenant_id uuid NOT NULL,organization_id uuid NOT NULL,membership_id uuid NOT NULL,membership_version bigint NOT NULL,
+ source_kind text NOT NULL DEFAULT 'OUTBOX' CHECK(source_kind IN ('OUTBOX','LEGACY_AUDIT')),
+ cutoff_position bigint NOT NULL CHECK(cutoff_position>=0),after_position bigint NOT NULL DEFAULT 0 CHECK(after_position>=0),
+ state text NOT NULL DEFAULT 'PENDING' CHECK(state IN ('PENDING','COMPLETE','FAILED')),
+ legacy_before timestamptz,legacy_gap text NOT NULL DEFAULT 'Only retained genuine source events are exportable; earlier actions are not reconstructed',
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE "${schema}".organization_history_export_chunk (
+ export_id uuid NOT NULL REFERENCES "${schema}".organization_history_export(id),chunk_index integer NOT NULL CHECK(chunk_index>=0),
+ after_position bigint NOT NULL,through_position bigint NOT NULL CHECK(through_position>=after_position),
+ row_count integer NOT NULL CHECK(row_count BETWEEN 0 AND 200),events jsonb NOT NULL,manifest jsonb NOT NULL,
+ manifest_sha256 char(64) NOT NULL,published_at timestamptz,PRIMARY KEY(export_id,chunk_index)
+);
+CREATE FUNCTION "${schema}".organization_history_export_start(company uuid,org uuid,job uuid) RETURNS uuid LANGUAGE plpgsql AS $fn$
+DECLARE m record;cutoff bigint;old record;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended(concat_ws(':','organization-history-retention',company,org),0));
+ SELECT * INTO old FROM "${schema}".organization_history_export WHERE id=job;
+ IF FOUND THEN IF old.tenant_id<>company OR old.organization_id<>org OR old.source_kind<>'OUTBOX' THEN RAISE EXCEPTION 'Export scope conflict';END IF;RETURN job;END IF;
+ SELECT * INTO m FROM "${schema}".organization_membership_installation WHERE tenant_id=company AND organization_id=org AND status='ACTIVE' FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Inactive source export membership';END IF;
+ LOCK TABLE "${schema}".company_event_outbox IN SHARE MODE;
+ SELECT COALESCE(max(source_position),0) INTO cutoff FROM "${schema}".company_event_outbox WHERE source_tenant_id=company AND organization_id=org;
+ INSERT INTO "${schema}".organization_history_export(id,tenant_id,organization_id,membership_id,membership_version,cutoff_position,legacy_before)
+ SELECT job,company,org,m.membership_id,m.version,cutoff,min(created_at) FROM "${schema}".company_event_outbox WHERE source_tenant_id=company AND organization_id=org;
+ RETURN job;
+END $fn$;
+CREATE FUNCTION "${schema}".organization_legacy_audit_event(r jsonb,org uuid) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $fn$
+DECLARE eid uuid;entity text;action text;before_status text;after_status text;body jsonb;
+BEGIN
+ eid:="${schema}".organization_fact_uuid(concat_ws(':','legacy-audit-v1',org,r->>'tenant_id',r->>'id'));
+ entity:=CASE WHEN r->>'entity_type' IN ('LEAVE_REQUEST','employee_profile_change_request','employee_education','employee_work_experience','company_location','working_calendar_profile','holiday','roster') THEN r->>'entity_type' ELSE 'UNMAPPED' END;
+ action:=CASE WHEN r->>'action' IN ('approved','rejected','submitted','created','updated','deleted','APPROVED','REJECTED','CREATE','UPDATE','DELETE','CANCEL_APPROVED_COMP_OFF_LEAVE') THEN r->>'action' ELSE 'UNMAPPED' END;
+ before_status:=COALESCE(r#>>'{before_state,status}',r#>>'{before_state,verificationStatus}');after_status:=COALESCE(r#>>'{after_state,status}',r#>>'{after_state,verificationStatus}');
+ IF before_status NOT IN ('PENDING','APPROVED','REJECTED','CANCELLED','VERIFIED','DRAFT','SUBMITTED','ACTIVE','INACTIVE') THEN before_status:=NULL;END IF;
+ IF after_status NOT IN ('PENDING','APPROVED','REJECTED','CANCELLED','VERIFIED','DRAFT','SUBMITTED','ACTIVE','INACTIVE') THEN after_status:=NULL;END IF;
+ body:=jsonb_build_object('source_audit_id',r->>'id','source_entity_type',entity,'source_entity_id',r->>'entity_id','source_action',action,'source_user_id',r->>'user_id','before_status',before_status,'after_status',after_status,'source_sha256',encode(sha256(convert_to(r::text,'UTF8')),'hex'));
+ RETURN jsonb_build_object('schema_version',1,'event_id',eid,'event_type','legacy_audit.recorded','organization_id',org,'source_tenant_id',r->>'tenant_id','aggregate_type','legacy_audit','aggregate_id',r->>'id','aggregate_version',1,'occurred_at',r->>'created_at','deleted',false,'actor',CASE WHEN r->>'user_id' IS NULL THEN NULL ELSE jsonb_build_object('kind','local_user','local_user_id',r->>'user_id','source_tenant_id',r->>'tenant_id') END,'payload',body);
+END $fn$;
+CREATE FUNCTION "${schema}".organization_legacy_export_start(company uuid,org uuid,job uuid) RETURNS uuid LANGUAGE plpgsql AS $fn$
+DECLARE m record;cutoff bigint;old record;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended(concat_ws(':','organization-history-retention',company,org),0));
+ SELECT * INTO old FROM "${schema}".organization_history_export WHERE id=job;
+ IF FOUND THEN IF old.tenant_id<>company OR old.organization_id<>org OR old.source_kind<>'LEGACY_AUDIT' THEN RAISE EXCEPTION 'Export scope conflict';END IF;RETURN job;END IF;
+ SELECT * INTO m FROM "${schema}".organization_membership_installation WHERE tenant_id=company AND organization_id=org AND status='ACTIVE' FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Inactive source export membership';END IF;
+ LOCK TABLE "${schema}".audit_log IN SHARE MODE;
+ SELECT COALESCE(max(organization_history_position),0) INTO cutoff FROM "${schema}".audit_log WHERE tenant_id=company;
+ INSERT INTO "${schema}".organization_history_export(id,tenant_id,organization_id,membership_id,membership_version,source_kind,cutoff_position,legacy_before)
+ SELECT job,company,org,m.membership_id,m.version,'LEGACY_AUDIT',cutoff,min(created_at) FROM "${schema}".audit_log WHERE tenant_id=company;
+ RETURN job;
+END $fn$;
+CREATE FUNCTION "${schema}".organization_history_export_next(company uuid,job uuid,batch_size integer DEFAULT 200) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE j record;m record;rows jsonb;facts jsonb;through bigint;count_rows integer;idx integer;manifest jsonb;
+BEGIN
+ IF batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid bounded export batch';END IF;
+ SELECT * INTO j FROM "${schema}".organization_history_export WHERE id=job AND tenant_id=company FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Unknown source export';END IF;
+ SELECT * INTO m FROM "${schema}".organization_membership_installation WHERE tenant_id=company AND organization_id=j.organization_id AND membership_id=j.membership_id AND version=j.membership_version AND status='ACTIVE' FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Source export authority changed';END IF;
+ IF j.state='COMPLETE' THEN RETURN NULL;END IF;
+ IF j.source_kind='LEGACY_AUDIT' THEN
+ SELECT COALESCE(jsonb_agg(to_jsonb(x) ORDER BY x.source_position),'[]'::jsonb) INTO rows FROM (
+  SELECT organization_history_position AS source_position,id,"${schema}".organization_legacy_audit_event(to_jsonb(a)-'organization_history_position',j.organization_id)::text AS raw,
+  encode(sha256(convert_to("${schema}".organization_legacy_audit_event(to_jsonb(a)-'organization_history_position',j.organization_id)::text,'UTF8')),'hex') AS sha256
+  FROM "${schema}".audit_log a WHERE tenant_id=company AND organization_history_position>j.after_position AND organization_history_position<=j.cutoff_position ORDER BY organization_history_position LIMIT batch_size
+ ) x;
+ ELSE
+ SELECT COALESCE(jsonb_agg(to_jsonb(x) ORDER BY x.source_position),'[]'::jsonb) INTO rows FROM (
+  SELECT source_position,id,event_envelope::text AS raw,encode(sha256(convert_to(event_envelope::text,'UTF8')),'hex') AS sha256 FROM "${schema}".company_event_outbox
+  WHERE source_tenant_id=company AND organization_id=j.organization_id AND source_position>j.after_position AND source_position<=j.cutoff_position ORDER BY source_position LIMIT batch_size
+ ) x;
+ END IF;
+ count_rows:=jsonb_array_length(rows);SELECT COALESCE(max((r->>'source_position')::bigint),j.cutoff_position),COALESCE(jsonb_agg(r->>'raw' ORDER BY (r->>'source_position')::bigint),'[]'::jsonb) INTO through,facts FROM jsonb_array_elements(rows) r;
+ SELECT count(*) INTO idx FROM "${schema}".organization_history_export_chunk WHERE export_id=job;
+ manifest:=jsonb_build_object('schema_version',1,'export_id',job,'source_kind',j.source_kind,'tenant_id',company,'organization_id',j.organization_id,'membership_id',j.membership_id,'membership_version',j.membership_version,'chunk_index',idx,'after_position',j.after_position,'through_position',through,'cutoff_position',j.cutoff_position,'row_count',count_rows,'canonicalization','POSTGRES_JSONB_TEXT_UTF8_V1','rows',rows);
+ INSERT INTO "${schema}".organization_history_export_chunk(export_id,chunk_index,after_position,through_position,row_count,events,manifest,manifest_sha256) VALUES(job,idx,j.after_position,through,count_rows,facts,manifest,encode(sha256(convert_to(manifest::text,'UTF8')),'hex'));
+ UPDATE "${schema}".organization_history_export SET after_position=through,state=CASE WHEN through=cutoff_position OR count_rows<batch_size THEN 'COMPLETE' ELSE 'PENDING' END,updated_at=clock_timestamp() WHERE id=job;
+ RETURN manifest;
+END $fn$;
+ ]]></sql>
+ </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0114-001-organization-execution" author="kabipay-dev">
+  <sql splitStatements="false"><![CDATA[
+ALTER TABLE kabipay_ops.organization_company ADD COLUMN installed_version BIGINT, ADD COLUMN installed_hash VARCHAR(64), ADD COLUMN runtime_status VARCHAR(16) NOT NULL DEFAULT 'UNINSTALLED' CHECK(runtime_status IN ('UNINSTALLED','ACTIVE','SUSPENDED','DETACHED'));
+
+ALTER TABLE kabipay_ops.employment_ref ADD COLUMN source_user_id UUID;
+ALTER TABLE kabipay_ops.employment_ref ADD COLUMN department_id UUID;
+ALTER TABLE kabipay_ops.employment_ref ADD COLUMN designation_id UUID;
+ALTER TABLE kabipay_ops.employment_ref ADD COLUMN employee_code VARCHAR(100);
+ALTER TABLE kabipay_ops.employment_ref ADD COLUMN legacy_manager_employee_id UUID;
+ALTER TABLE kabipay_ops.employment_ref ADD CONSTRAINT uq_employment_org_id UNIQUE(organization_id,id);
+CREATE INDEX idx_employment_source_login ON kabipay_ops.employment_ref(source_tenant_id,source_user_id) WHERE source_user_id IS NOT NULL;
+CREATE TABLE kabipay_ops.organization_graph (
+ organization_id UUID PRIMARY KEY REFERENCES kabipay_ops.organization(id),
+ version BIGINT NOT NULL DEFAULT 1 CHECK(version>0)
+);
+CREATE TABLE kabipay_ops.organization_directory_sync (
+ membership_id UUID PRIMARY KEY,
+ organization_id UUID NOT NULL,
+ membership_version BIGINT NOT NULL CHECK(membership_version>0),
+ run_id UUID NOT NULL,
+ source_after UUID,
+ status VARCHAR(20) NOT NULL CHECK(status IN ('RUNNING','COMPLETE')),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ FOREIGN KEY(organization_id,membership_id) REFERENCES kabipay_ops.organization_company(organization_id,id)
+);
+CREATE TABLE kabipay_ops.organization_relationship (
+ id UUID PRIMARY KEY,
+ organization_id UUID NOT NULL REFERENCES kabipay_ops.organization(id),
+ organization_company_id UUID NOT NULL,
+ source_tenant_id UUID NOT NULL,
+ subject_employment_ref_id UUID NOT NULL,
+ manager_employment_ref_id UUID NOT NULL,
+ relationship_type VARCHAR(20) NOT NULL CHECK(relationship_type IN ('PRIMARY','DOTTED_LINE','PROJECT','REVIEWER')),
+ status VARCHAR(20) NOT NULL CHECK(status IN ('PENDING','ACTIVE','ENDED')),
+ effective_from TIMESTAMPTZ NOT NULL,
+ effective_to TIMESTAMPTZ,
+ version BIGINT NOT NULL DEFAULT 1 CHECK(version>0),
+ graph_version BIGINT NOT NULL CHECK(graph_version>0),
+ capabilities JSONB NOT NULL CHECK(jsonb_typeof(capabilities)='array'),
+ installed_version BIGINT CHECK(installed_version>0),
+ installed_hash CHAR(64),
+ installed_configuration JSONB,
+ created_by UUID NOT NULL REFERENCES kabipay_ops.principal(id),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ CONSTRAINT fk_org_relationship_company FOREIGN KEY(organization_id,organization_company_id,source_tenant_id) REFERENCES kabipay_ops.organization_company(organization_id,id,tenant_id),
+ CONSTRAINT fk_org_relationship_subject FOREIGN KEY(organization_id,subject_employment_ref_id) REFERENCES kabipay_ops.employment_ref(organization_id,id),
+ CONSTRAINT fk_org_relationship_manager FOREIGN KEY(organization_id,manager_employment_ref_id) REFERENCES kabipay_ops.employment_ref(organization_id,id),
+ CHECK(subject_employment_ref_id<>manager_employment_ref_id),
+ CHECK(effective_to IS NULL OR effective_to>effective_from)
+);
+CREATE INDEX idx_org_relationship_subject ON kabipay_ops.organization_relationship(organization_id,subject_employment_ref_id,status);
+CREATE INDEX idx_org_relationship_manager ON kabipay_ops.organization_relationship(organization_id,manager_employment_ref_id,status);
+CREATE TABLE kabipay_ops.organization_command_intent (
+ membership_version BIGINT NOT NULL CHECK(membership_version>0),
+ command_id UUID PRIMARY KEY,
+ organization_id UUID NOT NULL REFERENCES kabipay_ops.organization(id),
+ membership_id UUID NOT NULL,
+ tenant_id UUID NOT NULL,
+ principal_id UUID NOT NULL REFERENCES kabipay_ops.principal(id),
+ source_tenant_id UUID NOT NULL REFERENCES kabipay_ops.tenant(id),
+ source_user_id UUID NOT NULL,
+ operation VARCHAR(40) NOT NULL,
+ resource_id UUID NOT NULL,
+ expected_version BIGINT NOT NULL CHECK(expected_version>0),
+ request_hash CHAR(64) NOT NULL,
+ authority_kind VARCHAR(30) NOT NULL CHECK(authority_kind IN ('organization_grant','management_assignment')),
+ authority_id UUID NOT NULL,
+ authority_version BIGINT NOT NULL CHECK(authority_version>0),
+ employee_id UUID,
+ status VARCHAR(30) NOT NULL DEFAULT 'SUBMITTED' CHECK(status IN ('SUBMITTED','COMMITTED','AWAITING_CONFIRMATION','REJECTED','CANCELLED_NOT_EXECUTED')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ CONSTRAINT fk_org_command_company FOREIGN KEY(organization_id,membership_id,tenant_id) REFERENCES kabipay_ops.organization_company(organization_id,id,tenant_id)
+);
+CREATE INDEX idx_org_command_actor ON kabipay_ops.organization_command_intent(principal_id,created_at);
+ALTER TABLE kabipay_ops.role_binding_company ADD COLUMN installed_hash CHAR(64);
+CREATE TABLE kabipay_ops.organization_outbox_sequence (
+ aggregate_id UUID PRIMARY KEY,
+ version BIGINT NOT NULL CHECK(version>0)
+);
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+ALTER TABLE kabipay_ops.organization_company DROP COLUMN installed_version, DROP COLUMN installed_hash, DROP COLUMN runtime_status;
+ALTER TABLE kabipay_ops.role_binding_company DROP COLUMN installed_hash;
+DROP TABLE kabipay_ops.organization_outbox_sequence;
+DROP TABLE kabipay_ops.organization_command_intent;
+DROP TABLE kabipay_ops.organization_relationship;
+DROP TABLE kabipay_ops.organization_graph;
+DROP TABLE kabipay_ops.organization_directory_sync;
+ALTER TABLE kabipay_ops.employment_ref DROP CONSTRAINT uq_employment_org_id;
+ALTER TABLE kabipay_ops.employment_ref DROP COLUMN source_user_id;
+ALTER TABLE kabipay_ops.employment_ref DROP COLUMN department_id;
+ALTER TABLE kabipay_ops.employment_ref DROP COLUMN designation_id;
+ALTER TABLE kabipay_ops.employment_ref DROP COLUMN employee_code;
+ALTER TABLE kabipay_ops.employment_ref DROP COLUMN legacy_manager_employee_id;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

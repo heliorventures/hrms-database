@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0119-001-organization-payroll-jobs" author="kabipay-dev" runInTransaction="true">
+  <sql splitStatements="false"><![CDATA[
+CREATE TABLE "${schema}".organization_payroll_job (
+ tenant_id uuid NOT NULL, id uuid NOT NULL, cycle_id uuid NOT NULL,
+ principal_id uuid NOT NULL, organization_id uuid NOT NULL, membership_id uuid NOT NULL,
+ authority_id uuid NOT NULL, authority_version bigint NOT NULL CHECK(authority_version>0),
+ operation text NOT NULL CHECK(operation IN ('payroll_draft','payroll_finalize')),
+ request_body bytea NOT NULL CHECK(octet_length(request_body)<=65536),
+ request_hash char(64) NOT NULL CHECK(request_hash ~ '^[a-f0-9]{64}$'),
+ authority_reference jsonb NOT NULL CHECK(jsonb_typeof(authority_reference)='object' AND octet_length(authority_reference::text)<=32768),
+ expected_version bigint NOT NULL CHECK(expected_version>0), version bigint NOT NULL DEFAULT 1 CHECK(version>0),
+ state text NOT NULL DEFAULT 'QUEUED' CHECK(state IN ('QUEUED','RUNNING','SUCCEEDED','FAILED','CANCELLED')),
+ attempts integer NOT NULL DEFAULT 0 CHECK(attempts>=0),
+ lease_token uuid, lease_expires_at timestamptz, next_attempt_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ result jsonb, failure_code text, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ started_at timestamptz, finished_at timestamptz,
+ PRIMARY KEY(tenant_id,id),
+ FOREIGN KEY(cycle_id) REFERENCES "${schema}".payroll_cycle(id),
+ CHECK((state='RUNNING' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR (state<>'RUNNING' AND lease_token IS NULL AND lease_expires_at IS NULL)),
+ CHECK((state IN ('SUCCEEDED','FAILED','CANCELLED'))=(finished_at IS NOT NULL))
+);
+CREATE INDEX organization_payroll_job_due ON "${schema}".organization_payroll_job(tenant_id,next_attempt_at,created_at,id) WHERE state IN ('QUEUED','RUNNING');
+CREATE UNIQUE INDEX organization_payroll_job_active_cycle ON "${schema}".organization_payroll_job(tenant_id,cycle_id) WHERE state IN ('QUEUED','RUNNING');
+CREATE INDEX organization_payroll_job_actor ON "${schema}".organization_payroll_job(tenant_id,membership_id,principal_id,id);
+CREATE FUNCTION "${schema}".organization_payroll_job_fence() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog AS $job$
+BEGIN
+ IF TG_OP='UPDATE' AND (OLD.tenant_id,OLD.id,OLD.cycle_id,OLD.principal_id,OLD.organization_id,OLD.membership_id,OLD.authority_id,OLD.authority_version,OLD.operation,OLD.request_body,OLD.request_hash,OLD.authority_reference,OLD.expected_version,OLD.created_at)
+  IS DISTINCT FROM (NEW.tenant_id,NEW.id,NEW.cycle_id,NEW.principal_id,NEW.organization_id,NEW.membership_id,NEW.authority_id,NEW.authority_version,NEW.operation,NEW.request_body,NEW.request_hash,NEW.authority_reference,NEW.expected_version,NEW.created_at) THEN
+  RAISE EXCEPTION 'Payroll job intent is immutable';
+ END IF;
+ IF TG_OP='UPDATE' AND OLD.state IN ('SUCCEEDED','FAILED','CANCELLED') THEN RAISE EXCEPTION 'Terminal payroll job is immutable'; END IF;
+ IF TG_OP='UPDATE' THEN NEW.version:=OLD.version+1; END IF;
+ INSERT INTO "${schema}".organization_resource_version(tenant_id,resource_type,resource_id,version) VALUES(NEW.tenant_id,'payroll_job',NEW.id,NEW.version)
+ ON CONFLICT(tenant_id,resource_type,resource_id) DO UPDATE SET version=EXCLUDED.version;
+ RETURN NEW;
+END $job$;
+CREATE TRIGGER organization_payroll_job_fence BEFORE INSERT OR UPDATE ON "${schema}".organization_payroll_job FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_payroll_job_fence();
+CREATE FUNCTION "${schema}".organization_payroll_job_commit_fence() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog AS $commit$
+BEGIN
+ IF NEW.state='SUCCEEDED' AND OLD.state='RUNNING' AND OLD.lease_expires_at<=clock_timestamp() THEN
+  RAISE EXCEPTION 'Payroll job lease expired before business commit';
+ END IF;
+ RETURN NULL;
+END $commit$;
+CREATE CONSTRAINT TRIGGER organization_payroll_job_commit_fence AFTER UPDATE ON "${schema}".organization_payroll_job DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_payroll_job_commit_fence();
+COMMENT ON TABLE "${schema}".organization_payroll_job IS 'Source-owned durable business job state, bounded immutable input and actor reference; contains no login or delegation token. Preserve with payroll business data and acceptance receipts.';
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $guard$ BEGIN IF EXISTS(SELECT 1 FROM "${schema}".organization_payroll_job) THEN RAISE EXCEPTION 'Cannot remove durable payroll jobs'; END IF; END $guard$;
+DROP TABLE "${schema}".organization_payroll_job;
+DROP FUNCTION "${schema}".organization_payroll_job_commit_fence();
+DROP FUNCTION "${schema}".organization_payroll_job_fence();
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

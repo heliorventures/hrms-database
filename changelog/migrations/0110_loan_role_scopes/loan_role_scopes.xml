@@ -70,7 +70,8 @@ BEGIN
   HAVING count(*) > 1
    OR bool_or(s.tenant_id <> (SELECT tenant_id FROM loan_scope_tenant))
    OR bool_or(s.resource <> btrim(s.resource) OR s.action <> btrim(s.action))
-   OR bool_or(upper(btrim(s.scope_type)) NOT IN ('SELF','TEAM','DEPARTMENT','ALL'))
+   -- Match Rust str::trim() Unicode White_Space handling used by ScopeType::parse_loose.
+   OR bool_or(translate(btrim(s.scope_type,U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ') NOT IN ('SELF','TEAM','DEPARTMENT','ALL'))
  ) THEN
   RAISE EXCEPTION '0110 ambiguous, cross-tenant or invalid existing loan scope; resolve before migrating';
  END IF;
@@ -95,7 +96,7 @@ BEGIN
  SELECT count(*) INTO preserved_count FROM loan_scope_expected e
  JOIN "${schema}".permission_scope s ON s.role_id=e.role_id
   AND lower(btrim(s.resource))=e.resource AND lower(btrim(s.action))=e.action
- WHERE upper(btrim(s.scope_type)) <> e.scope_type;
+ WHERE translate(btrim(s.scope_type,U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ') <> e.scope_type;
  RAISE NOTICE '0110 complete; % existing non-default loan scopes preserved. Sign in again to refresh claims.', preserved_count;
 END $$;
   ]]></sql>

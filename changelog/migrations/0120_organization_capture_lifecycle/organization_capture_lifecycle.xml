@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0120-001-organization-independent-consumers" author="kabipay-dev">
+ <sql splitStatements="false"><![CDATA[
+CREATE TABLE kabipay_ops.organization_consumer_checkpoint (
+ consumer_role text NOT NULL CHECK(consumer_role IN ('inbox','history','reporting')),
+ organization_id uuid NOT NULL,source_tenant_id uuid NOT NULL,topic text NOT NULL,
+ partition_id integer NOT NULL CHECK(partition_id>=0),kafka_offset bigint NOT NULL CHECK(kafka_offset>=0),
+ source_observed_at timestamptz,acknowledged_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ state text NOT NULL CHECK(state IN ('READY','PARTIAL','QUARANTINED')),detail_code text,
+ PRIMARY KEY(consumer_role,organization_id,source_tenant_id,topic,partition_id)
+);
+CREATE TABLE kabipay_ops.organization_consumer_identity (
+ consumer_role text NOT NULL CHECK(consumer_role IN ('inbox','history','reporting')),event_id uuid NOT NULL,
+ organization_id uuid NOT NULL,source_tenant_id uuid NOT NULL,aggregate_type text NOT NULL,aggregate_id uuid NOT NULL,event_type text NOT NULL,
+ source_version bigint NOT NULL CHECK(source_version>0),payload_hash char(64) NOT NULL CHECK(payload_hash ~ '^[a-f0-9]{64}$'),
+ PRIMARY KEY(consumer_role,event_id)
+);
+CREATE INDEX organization_consumer_version_identity ON kabipay_ops.organization_consumer_identity(consumer_role,organization_id,source_tenant_id,aggregate_type,aggregate_id,event_type,source_version);
+ALTER TABLE kabipay_ops.organization_consumer_checkpoint ENABLE ROW LEVEL SECURITY;
+ALTER TABLE kabipay_ops.organization_consumer_identity ENABLE ROW LEVEL SECURITY;
+CREATE POLICY organization_checkpoint_role ON kabipay_ops.organization_consumer_checkpoint USING (
+ current_user='organization_projection_reader' OR (current_user='organization_projection_worker' AND consumer_role='inbox') OR (current_user='organization_history_worker' AND consumer_role='history') OR (current_user='organization_reporting_worker' AND consumer_role='reporting'));
+CREATE POLICY organization_identity_role ON kabipay_ops.organization_consumer_identity USING (
+ (current_user='organization_projection_worker' AND consumer_role='inbox') OR (current_user='organization_history_worker' AND consumer_role='history') OR (current_user='organization_reporting_worker' AND consumer_role='reporting'));
+CREATE TABLE kabipay_ops.organization_capture_marker (
+ marker_id uuid PRIMARY KEY,organization_id uuid NOT NULL,source_tenant_id uuid NOT NULL,
+ membership_id uuid NOT NULL,membership_version bigint NOT NULL CHECK(membership_version>0),
+ topic text NOT NULL,source_marker_at timestamptz NOT NULL,source_lsn pg_lsn NOT NULL,cdc_lsn pg_lsn NOT NULL,bootstrap_complete boolean NOT NULL,
+ expected_partitions integer[] NOT NULL CHECK(cardinality(expected_partitions)>0 AND array_position(expected_partitions,NULL) IS NULL AND 0<=ALL(expected_partitions)),
+ cdc_confirmed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(cdc_lsn>=source_lsn)
+);
+CREATE INDEX organization_capture_latest ON kabipay_ops.organization_capture_marker(organization_id,source_tenant_id,source_marker_at DESC);
+CREATE TABLE kabipay_ops.organization_capture_barrier (
+ marker_id uuid NOT NULL REFERENCES kabipay_ops.organization_capture_marker(marker_id),
+ consumer_role text NOT NULL CHECK(consumer_role IN ('inbox','history','reporting')),partition_id integer NOT NULL CHECK(partition_id>=0),
+ kafka_offset bigint NOT NULL CHECK(kafka_offset>=0),acknowledged_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(marker_id,consumer_role,partition_id)
+);
+ALTER TABLE kabipay_ops.organization_capture_barrier ENABLE ROW LEVEL SECURITY;
+CREATE POLICY organization_barrier_role ON kabipay_ops.organization_capture_barrier USING (
+ current_user='organization_projection_reader' OR current_user='organization_archive_worker' OR (current_user='organization_projection_worker' AND consumer_role='inbox') OR (current_user='organization_history_worker' AND consumer_role='history') OR (current_user='organization_reporting_worker' AND consumer_role='reporting'));
+-- Definer exposes only a boolean; live metadata is SHARE locked by callers that
+-- subsequently mutate capture state. Unknown or changed epochs fail closed.
+CREATE FUNCTION kabipay_ops.organization_capture_healthy(org uuid,company uuid,required_roles text[],max_age_seconds integer DEFAULT 120)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,kabipay_ops AS $fn$
+ SELECT COALESCE((SELECT c.acceptance_status='ACCEPTED' AND c.bootstrap_complete AND m.bootstrap_complete
+  AND m.membership_id=c.membership_id AND m.membership_version=c.membership_version
+  AND m.source_marker_at>clock_timestamp()-make_interval(secs=>max_age_seconds)
+  AND m.source_marker_at<=clock_timestamp()+interval '5 seconds'
+  AND m.cdc_confirmed_at>=m.source_marker_at AND m.cdc_lsn>=m.source_lsn
+  AND c.expected_partitions @> m.expected_partitions AND m.expected_partitions @> c.expected_partitions
+  AND max_age_seconds BETWEEN 1 AND 3600 AND cardinality(required_roles)>0
+  AND required_roles <@ ARRAY['inbox','history','reporting']::text[]
+  AND NOT EXISTS(SELECT 1 FROM unnest(required_roles) r CROSS JOIN unnest(c.expected_partitions) p
+   LEFT JOIN kabipay_ops.organization_capture_barrier b ON b.marker_id=m.marker_id AND b.consumer_role=r AND b.partition_id=p
+   LEFT JOIN kabipay_ops.organization_consumer_checkpoint k ON k.consumer_role=r AND k.organization_id=org AND k.source_tenant_id=company AND k.topic=c.topic AND k.partition_id=p
+   WHERE b.marker_id IS NULL OR k.state IS DISTINCT FROM 'READY' OR k.kafka_offset<b.kafka_offset)
+  AND EXISTS(SELECT 1 FROM kabipay_ops.organization_company live JOIN kabipay_ops.organization o ON o.id=live.organization_id JOIN kabipay_ops.tenant t ON t.id=live.tenant_id
+   WHERE live.id=c.membership_id AND live.version=c.membership_version AND live.installed_version=live.version AND live.runtime_status='ACTIVE' AND live.status='ACTIVE'
+   AND live.effective_from<=clock_timestamp() AND (live.effective_to IS NULL OR live.effective_to>clock_timestamp()) AND o.status='ACTIVE' AND t.status='ACTIVE' AND NOT t.is_deleted)
+ FROM kabipay_ops.organization_company_capture c JOIN LATERAL (
+  SELECT * FROM kabipay_ops.organization_capture_marker x WHERE x.organization_id=org AND x.source_tenant_id=company AND x.topic=c.topic ORDER BY x.source_marker_at DESC,x.marker_id DESC LIMIT 1
+ ) m ON true WHERE c.organization_id=org AND c.source_tenant_id=company),false);
+$fn$;
+REVOKE ALL ON FUNCTION kabipay_ops.organization_capture_healthy(uuid,uuid,text[],integer) FROM PUBLIC;
+-- A genuine queued marker from an older epoch is retained history even when the
+-- company has already resumed. Pair recognition alone cannot attest its epoch.
+CREATE FUNCTION kabipay_ops.organization_capture_marker_classification(org uuid,company uuid,member uuid,epoch bigint)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,kabipay_ops AS $fn$
+DECLARE pair_state text; live record;
+BEGIN
+ pair_state := kabipay_ops.organization_capture_member_classification(org,company);
+ IF pair_state='NONE' THEN RETURN 'NONE'; END IF;
+ SELECT m.version,m.installed_version,m.runtime_status,m.status,m.effective_from,m.effective_to INTO live
+ FROM kabipay_ops.organization_company m WHERE m.id=member AND m.organization_id=org AND m.tenant_id=company
+ AND m.status IN ('ACTIVE','SUSPENDED','DETACHING','DETACHED') FOR SHARE;
+ IF NOT FOUND OR epoch IS NULL OR epoch<1 OR epoch>live.version THEN RETURN 'NONE'; END IF;
+ IF pair_state='ACTIVE' AND epoch=live.version AND live.installed_version=live.version AND live.status='ACTIVE'
+ AND live.runtime_status='ACTIVE' AND live.effective_from<=now() AND (live.effective_to IS NULL OR live.effective_to>now()) THEN RETURN 'ACTIVE'; END IF;
+ RETURN 'HISTORICAL';
+END
+$fn$;
+REVOKE ALL ON FUNCTION kabipay_ops.organization_capture_marker_classification(uuid,uuid,uuid,bigint) FROM PUBLIC;
+CREATE TABLE kabipay_ops.organization_checkpoint_reconciliation (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,consumer_role text NOT NULL,organization_id uuid NOT NULL,source_tenant_id uuid NOT NULL,
+ topic text NOT NULL,partition_id integer NOT NULL,kafka_offset bigint NOT NULL,previous_acknowledged_at timestamptz NOT NULL,
+ marker_id uuid NOT NULL REFERENCES kabipay_ops.organization_capture_marker(marker_id),
+ quarantine_review_sha256 char(64) NOT NULL CHECK(quarantine_review_sha256 ~ '^[a-f0-9]{64}$'),
+ accepted_by_principal_id uuid NOT NULL REFERENCES kabipay_ops.principal(id),accepted_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+-- Administrator only. An old historical code could have masked later PARTIAL
+-- detail before the corrected merge. Never clear it automatically or grant this
+-- function to a consumer: an operator must review durable quarantine through the
+-- exact checkpoint offset and retain the review manifest under this hash.
+CREATE FUNCTION kabipay_ops.organization_reconcile_historical_checkpoint(role_name text,org uuid,company uuid,source_topic text,part integer,expected_offset bigint,expected_ack timestamptz,current_marker uuid,review_sha256 text,accepted_by uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,kabipay_ops AS $fn$
+DECLARE k record; marker record; accepted record;
+BEGIN
+ IF review_sha256 IS NULL OR review_sha256 !~ '^[a-f0-9]{64}$' OR accepted_by IS NULL THEN RAISE EXCEPTION 'QUARANTINE_REVIEW_REQUIRED'; END IF;
+ -- Policy lock order matches the workers; row/offset fencing makes concurrent
+ -- deliveries invalidate a stale operator review instead of clearing new faults.
+ PERFORM kabipay_ops.organization_capture_member_classification(org,company);
+ SELECT * INTO k FROM kabipay_ops.organization_consumer_checkpoint c WHERE c.consumer_role=role_name AND c.organization_id=org AND c.source_tenant_id=company AND c.topic=source_topic AND c.partition_id=part FOR UPDATE;
+ IF NOT FOUND OR k.state<>'PARTIAL' OR k.detail_code IS DISTINCT FROM 'HISTORICAL_MEMBERSHIP' OR k.kafka_offset IS DISTINCT FROM expected_offset OR k.acknowledged_at IS DISTINCT FROM expected_ack THEN RAISE EXCEPTION 'HISTORICAL_CHECKPOINT_REQUIRED'; END IF;
+ SELECT * INTO accepted FROM kabipay_ops.organization_company_capture c WHERE c.organization_id=org AND c.source_tenant_id=company FOR SHARE;
+ SELECT * INTO marker FROM kabipay_ops.organization_capture_marker m WHERE m.marker_id=current_marker AND m.organization_id=org AND m.source_tenant_id=company;
+ IF marker.marker_id IS NULL OR accepted.acceptance_status IS DISTINCT FROM 'ACCEPTED' OR NOT accepted.bootstrap_complete OR NOT marker.bootstrap_complete
+ OR marker.membership_id IS DISTINCT FROM accepted.membership_id OR marker.membership_version IS DISTINCT FROM accepted.membership_version
+ OR marker.topic IS DISTINCT FROM source_topic OR accepted.topic IS DISTINCT FROM source_topic
+ OR marker.source_marker_at<clock_timestamp()-interval '120 seconds' OR marker.source_marker_at>clock_timestamp()+interval '5 seconds'
+ OR marker.cdc_confirmed_at<marker.source_marker_at OR marker.cdc_lsn<marker.source_lsn
+ OR NOT (accepted.expected_partitions @> marker.expected_partitions AND marker.expected_partitions @> accepted.expected_partitions)
+ OR part<>ALL(accepted.expected_partitions)
+ OR kabipay_ops.organization_capture_marker_classification(org,company,marker.membership_id,marker.membership_version)<>'ACTIVE'
+ OR EXISTS(SELECT 1 FROM kabipay_ops.organization_capture_marker newer WHERE newer.organization_id=org AND newer.source_tenant_id=company AND newer.topic=source_topic AND (newer.source_marker_at,newer.marker_id)>(marker.source_marker_at,marker.marker_id))
+ OR EXISTS(SELECT 1 FROM unnest(ARRAY['inbox','history','reporting']) r CROSS JOIN unnest(accepted.expected_partitions) p
+  LEFT JOIN kabipay_ops.organization_capture_barrier b ON b.marker_id=current_marker AND b.consumer_role=r AND b.partition_id=p
+  LEFT JOIN kabipay_ops.organization_consumer_checkpoint c ON c.consumer_role=r AND c.organization_id=org AND c.source_tenant_id=company AND c.topic=source_topic AND c.partition_id=p
+  WHERE b.marker_id IS NULL OR c.kafka_offset IS NULL OR c.kafka_offset<b.kafka_offset)
+ THEN RAISE EXCEPTION 'CURRENT_CAPTURE_BARRIERS_REQUIRED'; END IF;
+ INSERT INTO kabipay_ops.organization_checkpoint_reconciliation(consumer_role,organization_id,source_tenant_id,topic,partition_id,kafka_offset,previous_acknowledged_at,marker_id,quarantine_review_sha256,accepted_by_principal_id)
+ VALUES(role_name,org,company,source_topic,part,k.kafka_offset,k.acknowledged_at,current_marker,review_sha256,accepted_by);
+ UPDATE kabipay_ops.organization_consumer_checkpoint c SET state='READY',detail_code=NULL,acknowledged_at=clock_timestamp() WHERE c.consumer_role=role_name AND c.organization_id=org AND c.source_tenant_id=company AND c.topic=source_topic AND c.partition_id=part;
+END
+$fn$;
+REVOKE ALL ON FUNCTION kabipay_ops.organization_reconcile_historical_checkpoint(text,uuid,uuid,text,integer,bigint,timestamptz,uuid,text,uuid) FROM PUBLIC;
+CREATE FUNCTION kabipay_ops.organization_archive_member_recognized(org uuid,company uuid,member uuid) RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,kabipay_ops AS $fn$
+ SELECT kabipay_ops.organization_capture_member_classification(org,company)<>'NONE' AND EXISTS(SELECT 1 FROM kabipay_ops.organization_company m WHERE m.id=member AND m.organization_id=org AND m.tenant_id=company AND m.status IN ('ACTIVE','SUSPENDED','DETACHING','DETACHED'));
+$fn$;
+REVOKE ALL ON FUNCTION kabipay_ops.organization_archive_member_recognized(uuid,uuid,uuid) FROM PUBLIC;
+CREATE TABLE kabipay_ops.organization_archive_manifest (
+ id uuid PRIMARY KEY,organization_id uuid NOT NULL,source_tenant_id uuid NOT NULL,
+ membership_id uuid NOT NULL,membership_version bigint NOT NULL CHECK(membership_version>0),
+ history_from timestamptz NOT NULL,history_through timestamptz NOT NULL CHECK(history_through>=history_from),
+ row_count bigint NOT NULL CHECK(row_count>=0),plaintext_sha256 char(64) NOT NULL CHECK(plaintext_sha256 ~ '^[a-f0-9]{64}$'),
+ ciphertext_sha256 char(64) NOT NULL CHECK(ciphertext_sha256 ~ '^[a-f0-9]{64}$'),key_version text NOT NULL,
+ manifest jsonb NOT NULL,state text NOT NULL CHECK(state IN ('VERIFIED','DAMAGED','RETIRED')),
+ verified_at timestamptz NOT NULL,created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE kabipay_ops.organization_retention_evidence (
+ id uuid PRIMARY KEY,organization_id uuid,source_tenant_id uuid,
+ source_kind text NOT NULL CHECK(source_kind IN ('company','control')),
+ manifest_sha256 char(64) NOT NULL CHECK(manifest_sha256 ~ '^[a-f0-9]{64}$'),
+ capture_verified_at timestamptz NOT NULL,history_verified_at timestamptz NOT NULL,consumer_verified_at timestamptz NOT NULL,
+ restore_verified_at timestamptz NOT NULL,restore_sha256 char(64) NOT NULL,accepted_at timestamptz NOT NULL,
+ expires_at timestamptz NOT NULL,retention_before timestamptz NOT NULL,legacy_cutover_accepted_at timestamptz,
+ CHECK(expires_at>accepted_at)
+);
+CREATE TABLE kabipay_ops.organization_archive_access_audit (
+ id uuid PRIMARY KEY,archive_id uuid NOT NULL REFERENCES kabipay_ops.organization_archive_manifest(id),organization_id uuid NOT NULL,source_tenant_id uuid NOT NULL,
+ operation text NOT NULL CHECK(operation IN ('EXPORT','RETRIEVE')),actor_principal_id uuid NOT NULL,actor_source_tenant_id uuid NOT NULL,actor_source_user_id uuid NOT NULL,
+ row_count bigint NOT NULL CHECK(row_count>=0),created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE kabipay_ops.organization_delivery_cutover (
+ id uuid PRIMARY KEY,source_kind text NOT NULL CHECK(source_kind IN ('company','control')),organization_id uuid,source_tenant_id uuid NOT NULL,
+ legacy_consumer_group text NOT NULL,legacy_final_offsets jsonb NOT NULL,replacement_roles text[] NOT NULL,
+ reconciliation_sha256 char(64) NOT NULL CHECK(reconciliation_sha256 ~ '^[a-f0-9]{64}$'),
+ legacy_stopped_at timestamptz NOT NULL,replacements_verified_at timestamptz NOT NULL,accepted_at timestamptz NOT NULL,
+ CHECK(cardinality(replacement_roles)>0)
+);
+ALTER TABLE kabipay_ops.organization_retention_evidence ADD COLUMN cutover_id uuid REFERENCES kabipay_ops.organization_delivery_cutover(id);
+CREATE TABLE kabipay_ops.organization_retention_policy (
+ id uuid PRIMARY KEY,version bigint NOT NULL CHECK(version>0),source_kind text NOT NULL CHECK(source_kind IN ('company','control')),
+ organization_id uuid,source_tenant_id uuid NOT NULL,source_schema text NOT NULL,source_database text NOT NULL,
+ minimum_age_seconds bigint NOT NULL CHECK(minimum_age_seconds>=0),max_batch integer NOT NULL DEFAULT 100 CHECK(max_batch BETWEEN 1 AND 100),
+ require_restore_verified boolean NOT NULL DEFAULT true CHECK(require_restore_verified),execute_enabled boolean NOT NULL DEFAULT false,
+ state text NOT NULL DEFAULT 'PENDING' CHECK(state IN ('PENDING','ACTIVE','REVOKED')),accepted_at timestamptz,expires_at timestamptz,
+ CHECK(state<>'ACTIVE' OR (accepted_at IS NOT NULL AND expires_at IS NOT NULL AND expires_at>accepted_at))
+);
+ALTER TABLE kabipay_ops.organization_retention_evidence ADD COLUMN retention_policy_id uuid REFERENCES kabipay_ops.organization_retention_policy(id);
+CREATE TABLE kabipay_ops.organization_outbox_cleanup_receipt (
+ id uuid PRIMARY KEY,evidence_id uuid NOT NULL,policy_id uuid NOT NULL,policy_version bigint NOT NULL,
+ source_kind text NOT NULL CHECK(source_kind='control'),source_tenant_id uuid NOT NULL,organization_id uuid,
+ manifest_sha256 char(64) NOT NULL,candidate_ids uuid[] NOT NULL,deleted_rows integer NOT NULL CHECK(deleted_rows BETWEEN 1 AND 100),
+ committed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+ ]]></sql>
+ </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0116-001-organization-current-projections" author="kabipay-dev">
+  <sql splitStatements="false"><![CDATA[
+CREATE TABLE kabipay_ops.organization_inbox_projection (
+ id uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+ organization_id uuid NOT NULL REFERENCES kabipay_ops.organization(id),
+ source_tenant_id uuid NOT NULL REFERENCES kabipay_ops.tenant(id),
+ resource_type text NOT NULL, resource_id uuid NOT NULL,
+ employee_id uuid, employee_display_name text, status text NOT NULL, summary text NOT NULL,
+ source_version bigint NOT NULL CHECK(source_version>0), deleted boolean NOT NULL,
+ occurred_at timestamptz NOT NULL, projected_at timestamptz NOT NULL DEFAULT now(), payload_hash text NOT NULL,
+ PRIMARY KEY(organization_id,source_tenant_id,resource_type,resource_id)
+);
+CREATE INDEX organization_inbox_employee ON kabipay_ops.organization_inbox_projection(organization_id,source_tenant_id,employee_id,status) WHERE NOT deleted;
+CREATE INDEX organization_inbox_cursor ON kabipay_ops.organization_inbox_projection(organization_id,id);
+CREATE TABLE kabipay_ops.organization_projection_fence (
+ organization_id uuid NOT NULL, source_tenant_id uuid NOT NULL, aggregate_type text NOT NULL,
+ aggregate_id uuid NOT NULL, event_type text NOT NULL, source_version bigint NOT NULL CHECK(source_version>0), payload_hash text NOT NULL,
+ PRIMARY KEY(organization_id,source_tenant_id,aggregate_type,aggregate_id,event_type)
+);
+CREATE TABLE kabipay_ops.organization_directory_projection (
+ organization_id uuid NOT NULL REFERENCES kabipay_ops.organization(id), source_tenant_id uuid NOT NULL REFERENCES kabipay_ops.tenant(id), employee_id uuid NOT NULL,
+ display_name text NOT NULL, employment_status text NOT NULL, source_version bigint NOT NULL CHECK(source_version>0), deleted boolean NOT NULL,
+ occurred_at timestamptz NOT NULL, projected_at timestamptz NOT NULL DEFAULT now(), payload_hash text NOT NULL,
+ PRIMARY KEY(organization_id,source_tenant_id,employee_id)
+);
+CREATE TABLE kabipay_ops.organization_projection_watermark (
+ organization_id uuid NOT NULL REFERENCES kabipay_ops.organization(id), source_tenant_id uuid NOT NULL REFERENCES kabipay_ops.tenant(id),
+ topic text NOT NULL, partition_id integer NOT NULL CHECK(partition_id>=0), kafka_offset bigint NOT NULL,
+ source_observed_at timestamptz, projected_at timestamptz NOT NULL DEFAULT now(),
+ state text NOT NULL CHECK(state IN ('READY','PARTIAL','QUARANTINED')), detail_code text,
+ PRIMARY KEY(organization_id,source_tenant_id,topic,partition_id)
+);
+CREATE TABLE kabipay_ops.organization_company_capture (
+ organization_id uuid NOT NULL REFERENCES kabipay_ops.organization(id),
+ source_tenant_id uuid NOT NULL REFERENCES kabipay_ops.tenant(id),
+ acceptance_status text NOT NULL DEFAULT 'PENDING' CHECK(acceptance_status IN ('PENDING','ACCEPTED','REJECTED')),
+ membership_id uuid REFERENCES kabipay_ops.organization_company(id),
+ membership_version bigint CHECK(membership_version IS NULL OR membership_version>0),
+ bootstrap_complete boolean NOT NULL DEFAULT false,
+ schema_version integer NOT NULL DEFAULT 1 CHECK(schema_version=1),
+ topic text NOT NULL, expected_partitions integer[] NOT NULL DEFAULT '{}',
+ history_from timestamptz, source_bootstrap_through timestamptz, accepted_at timestamptz,
+ reconciliation_sha256 text CHECK(reconciliation_sha256 IS NULL OR reconciliation_sha256 ~ '^[a-f0-9]{64}$'),
+ accepted_by_principal_id uuid REFERENCES kabipay_ops.principal(id),
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(organization_id,source_tenant_id),
+ CHECK(array_position(expected_partitions,NULL) IS NULL AND 0<=ALL(expected_partitions)),
+ CHECK(acceptance_status<>'ACCEPTED' OR (membership_id IS NOT NULL AND membership_version IS NOT NULL AND bootstrap_complete AND cardinality(expected_partitions)>0 AND accepted_at IS NOT NULL AND history_from IS NOT NULL AND source_bootstrap_through IS NOT NULL AND history_from<=source_bootstrap_through AND reconciliation_sha256 IS NOT NULL AND accepted_by_principal_id IS NOT NULL))
+);
+COMMENT ON TABLE kabipay_ops.organization_company_capture IS 'Explicit operator bootstrap and partition coverage acceptance; worker has no write permission and cannot infer complete history from observing an event';
+CREATE FUNCTION kabipay_ops.organization_capture_member_classification(org_id uuid,tenant_id uuid)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,kabipay_ops AS $capture_classify$
+DECLARE organization_status text; company_status text; company_deleted boolean;
+ membership record; known boolean := false;
+BEGIN
+ -- Match central configuration order: organization -> tenant -> memberships.
+ SELECT o.status INTO organization_status FROM kabipay_ops.organization o WHERE o.id=org_id FOR SHARE;
+ IF NOT FOUND THEN RETURN 'NONE'; END IF;
+ SELECT t.status,t.is_deleted INTO company_status,company_deleted FROM kabipay_ops.tenant t WHERE t.id=organization_capture_member_classification.tenant_id FOR SHARE;
+ IF NOT FOUND THEN RETURN 'NONE'; END IF;
+ FOR membership IN SELECT m.status,m.effective_from,m.effective_to,m.version,m.installed_version,m.runtime_status FROM kabipay_ops.organization_company m
+  WHERE m.organization_id=org_id AND m.tenant_id=organization_capture_member_classification.tenant_id
+   AND m.status IN ('ACTIVE','SUSPENDED','DETACHING','DETACHED') ORDER BY m.id FOR SHARE
+ LOOP
+  known := true;
+  IF organization_status='ACTIVE' AND company_status='ACTIVE' AND NOT company_deleted
+   AND membership.status='ACTIVE' AND membership.effective_from<=now()
+   AND (membership.effective_to IS NULL OR now()<membership.effective_to)
+   AND membership.installed_version=membership.version AND membership.runtime_status='ACTIVE'
+  THEN RETURN 'ACTIVE'; END IF;
+ END LOOP;
+ IF known THEN RETURN 'HISTORICAL'; END IF;
+ RETURN 'NONE';
+END
+$capture_classify$;
+REVOKE ALL ON FUNCTION kabipay_ops.organization_capture_member_classification(uuid,uuid) FROM PUBLIC;
+CREATE FUNCTION kabipay_ops.organization_capture_member_active(org_id uuid,tenant_id uuid)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,kabipay_ops AS $capture_gate$
+ SELECT kabipay_ops.organization_capture_member_classification($1,$2)='ACTIVE'
+$capture_gate$;
+REVOKE ALL ON FUNCTION kabipay_ops.organization_capture_member_active(uuid,uuid) FROM PUBLIC;
+COMMENT ON FUNCTION kabipay_ops.organization_capture_member_classification(uuid,uuid) IS 'ACTIVE permits current projection; HISTORICAL retains authenticated delayed facts for known accepted pairs without current projection; NONE quarantines unknown/PENDING-only pairs. No historical event-time cutoff or membership-epoch proof is inferred.';
+COMMENT ON TABLE kabipay_ops.organization_projection_fence IS 'Current version and payload hash only; no permanent per-event database history';
+COMMENT ON TABLE kabipay_ops.organization_projection_watermark IS 'PARTIAL/QUARANTINED is sticky until explicit audited reconciliation; missing expected company/partition is incomplete, never zero';
+  ]]></sql>
+  <rollback><sql>DROP FUNCTION kabipay_ops.organization_capture_member_active(uuid,uuid); DROP FUNCTION kabipay_ops.organization_capture_member_classification(uuid,uuid); DROP TABLE kabipay_ops.organization_company_capture; DROP TABLE kabipay_ops.organization_projection_watermark; DROP TABLE kabipay_ops.organization_directory_projection; DROP TABLE kabipay_ops.organization_projection_fence; DROP TABLE kabipay_ops.organization_inbox_projection;</sql></rollback>
+ </changeSet>
+</databaseChangeLog>

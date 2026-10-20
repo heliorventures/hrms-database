@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <!-- Explicit operator retirement only, after accepted archive/restore/cutover gates. -->
+ <include file="migrations/0127_ops_legacy_retirement/ops_legacy_retirement.xml" relativeToChangelogFile="true"/>
+</databaseChangeLog>

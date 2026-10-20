@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+  <changeSet id="0123-organization-job-authority" author="codex" context="ops">
+    <sql splitStatements="false"><![CDATA[
+ALTER TABLE kabipay_ops.organization_command_intent
+ ADD COLUMN identity_version BIGINT CHECK(identity_version IS NULL OR identity_version>0),
+ ADD COLUMN source_link_version BIGINT CHECK(source_link_version IS NULL OR source_link_version>0),
+ ADD CONSTRAINT organization_command_intent_identity_epochs CHECK((identity_version IS NULL)=(source_link_version IS NULL));
+-- Older intents deliberately have unknown epochs. They predate durable source
+-- jobs and cannot acquire a new job execution authorization through a backfill.
+ALTER TABLE kabipay_ops.organization_command_intent DROP CONSTRAINT organization_command_intent_status_check;
+ALTER TABLE kabipay_ops.organization_command_intent ADD CONSTRAINT organization_command_intent_status_check
+ CHECK(status IN ('SUBMITTED','ACCEPTED','COMMITTED','AWAITING_CONFIRMATION','REJECTED','CANCELLED_NOT_EXECUTED'));
+    ]]></sql>
+    <rollback><sql splitStatements="false"><![CDATA[
+DO $guard$ BEGIN
+ IF EXISTS(SELECT 1 FROM kabipay_ops.organization_command_intent WHERE status='ACCEPTED') THEN
+  RAISE EXCEPTION 'Retain durable job acceptance and reconcile jobs before rollback';
+ END IF;
+END $guard$;
+ALTER TABLE kabipay_ops.organization_command_intent DROP CONSTRAINT organization_command_intent_status_check;
+ALTER TABLE kabipay_ops.organization_command_intent ADD CONSTRAINT organization_command_intent_status_check
+ CHECK(status IN ('SUBMITTED','COMMITTED','AWAITING_CONFIRMATION','REJECTED','CANCELLED_NOT_EXECUTED'));
+ALTER TABLE kabipay_ops.organization_command_intent DROP CONSTRAINT organization_command_intent_identity_epochs;
+ALTER TABLE kabipay_ops.organization_command_intent DROP COLUMN identity_version, DROP COLUMN source_link_version;
+    ]]></sql></rollback>
+  </changeSet>
+</databaseChangeLog>

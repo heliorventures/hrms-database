@@ -19,7 +19,7 @@ CREATE TABLE loan_scope_fixture.role_permission(
 CREATE TABLE loan_scope_fixture.permission_scope(
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),tenant_id UUID NOT NULL,
  role_id UUID REFERENCES loan_scope_fixture.role,resource TEXT NOT NULL,action TEXT NOT NULL,
- scope_type TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(role_id,resource,action)
+ scope_type VARCHAR(20) NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(role_id,resource,action)
 );
 INSERT INTO kabipay_ops.module(code) VALUES('LOANS'),('EMPLOYEE'),('PAYROLL');
 INSERT INTO kabipay_ops.tenant_database VALUES('00000000-0000-0000-0000-000000000001','loan_scope_fixture');

@@ -33,4 +33,11 @@
     <include file="migrations/0083_missing_module_subscriptions/missing_module_subscriptions.xml" relativeToChangelogFile="true"/>
 
     <include file="migrations/0104_loan_module_catalog/loan_module_catalog.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0111_organization_foundation/organization_foundation.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0113_organization_control_outbox/organization_control_outbox.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0114_organization_execution/organization_execution.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0116_organization_projections/organization_projections.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0120_organization_capture_lifecycle/organization_capture_lifecycle.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0123_organization_job_authority/organization_job_authority.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0124_private_event_control/private_event_control.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

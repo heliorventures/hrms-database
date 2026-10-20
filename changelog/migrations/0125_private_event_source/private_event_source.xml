@@ -1,0 +1,664 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0125-001-private-event-source" author="kabipay-dev" runInTransaction="true">
+ <sql splitStatements="false"><![CDATA[
+-- A live-company preparation is a bounded maintenance transaction. A busy
+-- source or oversized backfill aborts atomically; do not wait indefinitely.
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '60s';
+-- Forward preparation only. No legacy rows or applied changesets are removed.
+ALTER TABLE "${schema}".company_event_outbox ADD COLUMN event_stream text NOT NULL DEFAULT 'company'
+ CHECK(event_stream IN ('company','audit','delivery'));
+ALTER TABLE "${schema}".company_event_outbox ALTER COLUMN organization_id DROP NOT NULL;
+ALTER TABLE "${schema}".company_event_outbox ADD CONSTRAINT company_private_stream_scope
+ CHECK((event_stream='company' AND organization_id IS NOT NULL) OR (event_stream IN ('audit','delivery') AND organization_id IS NULL));
+CREATE INDEX private_outbox_pending ON "${schema}".company_event_outbox(source_tenant_id,event_stream,created_at,id) WHERE event_stream<>'company';
+
+-- Retire new lossy audit projections during preparation, before any destructive
+-- cutover. Stored manifests/chunks remain readable by historical parsers.
+CREATE OR REPLACE FUNCTION "${schema}".organization_legacy_export_start(company uuid,org uuid,job uuid) RETURNS uuid LANGUAGE plpgsql AS $fn$
+BEGIN
+ RAISE EXCEPTION 'Legacy audit projection export retired; use private full-fidelity source export';
+END $fn$;
+CREATE OR REPLACE FUNCTION "${schema}".organization_legacy_audit_event(r jsonb,org uuid) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $fn$
+BEGIN
+ RAISE EXCEPTION 'Legacy audit projection export retired; use private full-fidelity source export';
+END $fn$;
+CREATE OR REPLACE FUNCTION "${schema}".organization_history_export_next(company uuid,job uuid,batch_size integer DEFAULT 200) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE j record;m record;rows jsonb;facts jsonb;through bigint;count_rows integer;idx integer;manifest jsonb;
+BEGIN
+ IF batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid bounded export batch';END IF;
+ SELECT * INTO j FROM "${schema}".organization_history_export WHERE id=job AND tenant_id=company FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Unknown source export';END IF;
+ IF j.source_kind<>'OUTBOX' THEN RAISE EXCEPTION 'Legacy audit projection export retired; use private full-fidelity source export';END IF;
+ SELECT * INTO m FROM "${schema}".organization_membership_installation WHERE tenant_id=company AND organization_id=j.organization_id AND membership_id=j.membership_id AND version=j.membership_version AND status='ACTIVE' FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Source export authority changed';END IF;
+ IF j.state='COMPLETE' THEN RETURN NULL;END IF;
+ SELECT COALESCE(jsonb_agg(to_jsonb(x) ORDER BY x.source_position),'[]'::jsonb) INTO rows FROM (
+  SELECT source_position,id,event_envelope::text AS raw,encode(sha256(convert_to(event_envelope::text,'UTF8')),'hex') AS sha256 FROM "${schema}".company_event_outbox
+  WHERE event_stream='company' AND source_tenant_id=company AND organization_id=j.organization_id AND source_position>j.after_position AND source_position<=j.cutoff_position ORDER BY source_position LIMIT batch_size
+ ) x;
+ count_rows:=jsonb_array_length(rows);SELECT COALESCE(max((r->>'source_position')::bigint),j.cutoff_position),COALESCE(jsonb_agg(r->>'raw' ORDER BY (r->>'source_position')::bigint),'[]'::jsonb) INTO through,facts FROM jsonb_array_elements(rows) r;
+ SELECT count(*) INTO idx FROM "${schema}".organization_history_export_chunk WHERE export_id=job;
+ manifest:=jsonb_build_object('schema_version',1,'export_id',job,'source_kind',j.source_kind,'tenant_id',company,'organization_id',j.organization_id,'membership_id',j.membership_id,'membership_version',j.membership_version,'chunk_index',idx,'after_position',j.after_position,'through_position',through,'cutoff_position',j.cutoff_position,'row_count',count_rows,'canonicalization','POSTGRES_JSONB_TEXT_UTF8_V1','rows',rows);
+ INSERT INTO "${schema}".organization_history_export_chunk(export_id,chunk_index,after_position,through_position,row_count,events,manifest,manifest_sha256) VALUES(job,idx,j.after_position,through,count_rows,facts,manifest,encode(sha256(convert_to(manifest::text,'UTF8')),'hex'));
+ UPDATE "${schema}".organization_history_export SET after_position=through,state=CASE WHEN through=cutoff_position OR count_rows<batch_size THEN 'COMPLETE' ELSE 'PENDING' END,updated_at=clock_timestamp() WHERE id=job;
+ RETURN manifest;
+END $fn$;
+
+CREATE TABLE "${schema}".private_source_cutover (
+ tenant_id uuid PRIMARY KEY,source_database text NOT NULL DEFAULT current_database(),source_schema text NOT NULL DEFAULT '${schema}',
+ producer_generation bigint NOT NULL DEFAULT 1 CHECK(producer_generation BETWEEN 1 AND 9007199254740991),
+ state text NOT NULL DEFAULT 'PREPARED' CHECK(state IN ('PREPARED','FENCED','RETIRED')),
+ writers_fenced boolean NOT NULL DEFAULT false,reader_switch_complete boolean NOT NULL DEFAULT false,
+ business_state_complete boolean NOT NULL DEFAULT false,pending_ownership_complete boolean NOT NULL DEFAULT false,
+ source_version text NOT NULL DEFAULT 'private-events-v1',updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(source_database=current_database() AND source_schema='${schema}')
+);
+CREATE TABLE "${schema}".private_delivery_receipt (
+ tenant_id uuid NOT NULL,intent_id uuid NOT NULL,destination_id uuid NOT NULL,source_kind text NOT NULL,
+ resource_id uuid NOT NULL,intent_hash char(64) NOT NULL CHECK(intent_hash ~ '^[a-f0-9]{64}$'),
+ destination_version bigint NOT NULL CHECK(destination_version>0),source_generation bigint NOT NULL DEFAULT 1 CHECK(source_generation>0),
+ status text NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','PROCESSING','DELIVERED','DISABLED','RETRYABLE','PERMANENT','UNCERTAIN','NO_DESTINATION')),
+ lease_generation bigint NOT NULL DEFAULT 0 CHECK(lease_generation>=0),lease_until timestamptz,claim_owner uuid,
+ accepted_at timestamptz,acknowledgement_id uuid,broker_owned_at timestamptz,broker_owner_id uuid,broker_receipt_sha256 char(64),outcome_code varchar(80),outcome_sha256 char(64),
+ created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,intent_id,destination_id),
+ CHECK((lease_until IS NULL)=(claim_owner IS NULL)),CHECK((broker_owned_at IS NULL AND broker_owner_id IS NULL AND broker_receipt_sha256 IS NULL) OR (broker_owned_at IS NOT NULL AND broker_owner_id IS NOT NULL AND broker_receipt_sha256 ~ '^[a-f0-9]{64}$')),CHECK(outcome_sha256 IS NULL OR outcome_sha256 ~ '^[a-f0-9]{64}$'),
+ CHECK(status<>'DELIVERED' OR (accepted_at IS NOT NULL AND acknowledgement_id IS NOT NULL))
+);
+CREATE INDEX private_delivery_resource_status ON "${schema}".private_delivery_receipt(tenant_id,source_kind,resource_id,created_at DESC);
+CREATE TABLE "${schema}".private_domain_receipt (
+ id uuid PRIMARY KEY,tenant_id uuid NOT NULL,event_type text NOT NULL,aggregate_type text NOT NULL,
+ aggregate_id uuid NOT NULL,occurred_at timestamptz NOT NULL,source_hash char(64) NOT NULL CHECK(source_hash ~ '^[a-f0-9]{64}$'),
+ UNIQUE(tenant_id,id)
+);
+-- The row identity and original occurrence time survive the FK transfer.
+LOCK TABLE "${schema}".separation,"${schema}".outbox_event IN SHARE ROW EXCLUSIVE MODE;
+INSERT INTO "${schema}".private_domain_receipt(id,tenant_id,event_type,aggregate_type,aggregate_id,occurred_at,source_hash)
+ SELECT o.id,o.tenant_id,o.event_type,o.aggregate_type,o.aggregate_id,o.created_at,
+ encode(sha256(convert_to(to_jsonb(o)::text,'UTF8')),'hex') FROM "${schema}".outbox_event o
+ JOIN "${schema}".separation s ON s.offboarding_event_id=o.id AND s.tenant_id=o.tenant_id;
+ALTER TABLE "${schema}".separation DROP CONSTRAINT fk_separation_offboarding_event;
+ALTER TABLE "${schema}".separation ADD CONSTRAINT fk_separation_offboarding_event
+ FOREIGN KEY(tenant_id,offboarding_event_id) REFERENCES "${schema}".private_domain_receipt(tenant_id,id)
+ ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED;
+
+LOCK TABLE "${schema}".audit_log,"${schema}".survey IN SHARE ROW EXCLUSIVE MODE;
+CREATE UNIQUE INDEX private_survey_tenant_identity ON "${schema}".survey(tenant_id,id);
+CREATE FUNCTION "${schema}".private_legacy_offboarding_receipt() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+ IF NEW.event_type='EMPLOYEE_OFFBOARDED' THEN
+ INSERT INTO "${schema}".private_domain_receipt(id,tenant_id,event_type,aggregate_type,aggregate_id,occurred_at,source_hash)
+ VALUES(NEW.id,NEW.tenant_id,NEW.event_type,NEW.aggregate_type,NEW.aggregate_id,NEW.created_at,encode(sha256(convert_to(to_jsonb(NEW)::text,'UTF8')),'hex'));
+ END IF;RETURN NEW;
+END $fn$;
+CREATE TRIGGER private_legacy_offboarding_receipt AFTER INSERT ON "${schema}".outbox_event FOR EACH ROW EXECUTE FUNCTION "${schema}".private_legacy_offboarding_receipt();
+
+CREATE TABLE "${schema}".private_survey_execution_state (
+ tenant_id uuid NOT NULL,survey_id uuid NOT NULL,opened_at timestamptz,last_transition_action text,
+ last_transition_at timestamptz,last_transition_id uuid,PRIMARY KEY(tenant_id,survey_id),
+ FOREIGN KEY(tenant_id,survey_id) REFERENCES "${schema}".survey(tenant_id,id) ON DELETE CASCADE,
+ CHECK((last_transition_action IS NULL)=(last_transition_at IS NULL)),
+ CHECK((last_transition_at IS NULL)=(last_transition_id IS NULL))
+);
+-- The failure dedupe query orders only these four transition kinds, not SAVED/PUBLISHED.
+INSERT INTO "${schema}".private_survey_execution_state
+ SELECT s.tenant_id,s.id,t.opened_at,t.action,t.created_at,t.id
+ FROM "${schema}".survey s LEFT JOIN (
+  SELECT a.tenant_id,a.entity_id,a.action,a.created_at,a.id,
+   min(a.created_at) FILTER (WHERE a.action IN ('SURVEY_OPENED','SURVEY_MANUALLY_OPENED'))
+    OVER (PARTITION BY a.tenant_id,a.entity_id) AS opened_at,
+   row_number() OVER (PARTITION BY a.tenant_id,a.entity_id ORDER BY a.created_at DESC,a.id DESC) AS latest
+  FROM "${schema}".audit_log a
+  WHERE a.entity_type='SURVEY'
+   AND a.action IN ('SURVEY_OPENED','SURVEY_MANUALLY_OPENED','SURVEY_AUTOMATICALLY_CLOSED','SURVEY_TRANSITION_FAILED')
+ ) t ON t.tenant_id=s.tenant_id AND t.entity_id=s.id AND t.latest=1;
+
+ALTER TABLE "${schema}".webhook_subscription ADD COLUMN signing_key_ref varchar(160),
+ ADD COLUMN config_version bigint NOT NULL DEFAULT 1 CHECK(config_version>0);
+-- Existing one-way hashes never become signing secrets. Explicit key reconciliation is required.
+CREATE FUNCTION "${schema}".private_webhook_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+ IF (to_jsonb(NEW)-ARRAY['updated_at','config_version']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['updated_at','config_version']) THEN NEW.config_version:=OLD.config_version+1;
+ ELSE NEW.config_version:=OLD.config_version;END IF;RETURN NEW;
+END $fn$;
+CREATE TRIGGER private_webhook_version BEFORE UPDATE ON "${schema}".webhook_subscription FOR EACH ROW EXECUTE FUNCTION "${schema}".private_webhook_version();
+
+CREATE TABLE "${schema}".private_capture_source_marker (
+ id uuid PRIMARY KEY,tenant_id uuid NOT NULL,producer_generation bigint NOT NULL,through_position bigint NOT NULL CHECK(through_position>=0),
+ source_lsn text NOT NULL CHECK(source_lsn ~ '^[0-9A-F]+/[0-9A-F]+$'),created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(id,tenant_id,producer_generation,through_position,source_lsn)
+);
+CREATE FUNCTION "${schema}".private_capture_tick(scope uuid,expected_generation bigint) RETURNS uuid LANGUAGE plpgsql AS $fn$
+DECLARE a record;marker uuid:=gen_random_uuid();bound bigint;
+BEGIN
+ LOCK TABLE "${schema}".company_event_outbox IN SHARE ROW EXCLUSIVE MODE;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ IF NOT FOUND OR a.producer_generation<>expected_generation THEN RAISE EXCEPTION 'Capture source generation mismatch';END IF;
+ SELECT COALESCE(max(source_position),0) INTO bound FROM "${schema}".company_event_outbox;
+ INSERT INTO "${schema}".private_capture_source_marker(id,tenant_id,producer_generation,through_position,source_lsn)
+ VALUES(marker,scope,expected_generation,bound,pg_current_wal_insert_lsn()::text);RETURN marker;
+END $fn$;
+REVOKE ALL ON "${schema}".private_capture_source_marker FROM PUBLIC;
+REVOKE ALL ON FUNCTION "${schema}".private_capture_tick(uuid,bigint) FROM PUBLIC;
+
+-- Post-cutoff encrypted pulse on the existing fixed private topic.
+CREATE TABLE "${schema}".private_capture_pulse (
+ marker_id uuid NOT NULL REFERENCES "${schema}".private_capture_source_marker(id),purpose text NOT NULL CHECK(purpose IN ('audit','delivery')),
+ event_id uuid UNIQUE,published_position bigint,frame_sha256 char(64),PRIMARY KEY(marker_id,purpose),
+ CHECK((event_id IS NULL AND published_position IS NULL AND frame_sha256 IS NULL) OR (event_id IS NOT NULL AND published_position>0 AND frame_sha256 ~ '^[a-f0-9]{64}$'))
+);
+CREATE FUNCTION "${schema}".private_capture_pulse_spec(scope uuid,marker uuid,purpose_name text) RETURNS jsonb LANGUAGE plpgsql SET TimeZone='UTC' AS $fn$
+DECLARE a record;m record;p record;raw text;stamp text;frame jsonb;
+BEGIN
+ IF NOT(purpose_name IN ('audit','delivery')) THEN RAISE EXCEPTION 'Invalid capture pulse purpose';END IF;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO m FROM "${schema}".private_capture_source_marker WHERE id=marker AND tenant_id=scope FOR SHARE;
+ IF a.tenant_id IS NULL OR m.id IS NULL OR a.producer_generation<>m.producer_generation OR a.producer_generation>9007199254740991 THEN RAISE EXCEPTION 'Capture pulse source generation changed';END IF;
+ INSERT INTO "${schema}".private_capture_pulse(marker_id,purpose) VALUES(marker,purpose_name) ON CONFLICT DO NOTHING;
+ SELECT * INTO p FROM "${schema}".private_capture_pulse WHERE marker_id=marker AND purpose=purpose_name FOR UPDATE;
+ stamp:=to_char(m.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"');
+ raw:=jsonb_build_object('id',marker,'tenant_id',scope,'source_generation',m.producer_generation,'purpose',purpose_name,'through_position',m.through_position::text,'source_lsn',m.source_lsn,'created_at',stamp)::text;
+ IF p.event_id IS NOT NULL THEN SELECT event_envelope INTO frame FROM "${schema}".company_event_outbox WHERE id=p.event_id;END IF;
+ RETURN jsonb_build_object('raw_source',raw,'occurred_at',stamp,'source_generation',m.producer_generation,'event_id',p.event_id,'published_position',p.published_position::text,'published_envelope',frame);
+END $fn$;
+CREATE FUNCTION "${schema}".private_capture_pulse_publish(scope uuid,marker uuid,purpose_name text,frame jsonb) RETURNS bigint LANGUAGE plpgsql SET TimeZone='UTC' AS $fn$
+DECLARE spec jsonb;p record;pos bigint;hash text;bytes integer;
+BEGIN
+ spec:="${schema}".private_capture_pulse_spec(scope,marker,purpose_name);
+ SELECT * INTO p FROM "${schema}".private_capture_pulse WHERE marker_id=marker AND purpose=purpose_name FOR UPDATE;
+ bytes:=octet_length(convert_to(spec->>'raw_source','UTF8'));
+ IF frame IS NULL OR jsonb_typeof(frame)<>'object' OR octet_length(frame::text)>8192 THEN RAISE EXCEPTION 'Invalid capture pulse frame';END IF;
+ IF (SELECT count(*) FROM jsonb_object_keys(frame))<>17 OR NOT frame ?& ARRAY['schema_version','event_id','record_id','tenant_id','purpose','source_generation','source_kind','resource_type','resource_id','occurred_at','key_id','source_sha256','source_size','frame_index','frame_count','nonce','ciphertext']
+ OR EXISTS(SELECT 1 FROM jsonb_each(frame) x WHERE x.key NOT IN ('schema_version','source_generation','source_size','frame_index','frame_count') AND jsonb_typeof(x.value)<>'string')
+ OR frame->>'schema_version' IS DISTINCT FROM '1' OR jsonb_typeof(frame->'schema_version')<>'number'
+ OR frame->>'event_id' IS NULL OR frame->>'event_id'='00000000-0000-0000-0000-000000000000' OR frame->>'event_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+ OR frame->>'record_id' IS DISTINCT FROM marker::text OR frame->>'resource_id' IS DISTINCT FROM marker::text
+ OR frame->>'tenant_id' IS DISTINCT FROM scope::text OR frame->>'purpose' IS DISTINCT FROM purpose_name
+ OR frame->>'source_generation' IS DISTINCT FROM spec->>'source_generation' OR jsonb_typeof(frame->'source_generation')<>'number'
+ OR frame->>'source_kind' IS DISTINCT FROM 'capture_marker' OR frame->>'resource_type' IS DISTINCT FROM 'private_capture_marker'
+ OR frame->>'occurred_at' IS DISTINCT FROM spec->>'occurred_at'
+ OR frame->>'source_sha256' IS DISTINCT FROM encode(sha256(convert_to(spec->>'raw_source','UTF8')),'hex')
+ OR frame->>'source_size' IS DISTINCT FROM bytes::text OR jsonb_typeof(frame->'source_size')<>'number'
+ OR frame->>'frame_index' IS DISTINCT FROM '0' OR jsonb_typeof(frame->'frame_index')<>'number'
+ OR frame->>'frame_count' IS DISTINCT FROM '1' OR jsonb_typeof(frame->'frame_count')<>'number'
+ OR COALESCE(frame->>'key_id','') !~ '^[A-Za-z0-9_.:-]{1,128}$'
+ OR COALESCE(frame->>'nonce','') !~ '^[A-Za-z0-9+/]{16}$'
+ OR COALESCE(frame->>'ciphertext','') !~ '^[A-Za-z0-9+/]+={0,2}$'
+ THEN RAISE EXCEPTION 'Capture pulse immutable binding mismatch';END IF;
+ IF octet_length(decode(frame->>'nonce','base64'))<>12 OR octet_length(decode(frame->>'ciphertext','base64'))<>bytes+16 OR replace(encode(decode(frame->>'ciphertext','base64'),'base64'),chr(10),'')<>frame->>'ciphertext' THEN RAISE EXCEPTION 'Invalid capture pulse frame bytes';END IF;
+ hash:=encode(sha256(convert_to(frame::text,'UTF8')),'hex');
+ IF p.published_position IS NOT NULL THEN
+  IF p.event_id IS DISTINCT FROM (frame->>'event_id')::uuid OR p.frame_sha256 IS DISTINCT FROM hash THEN RAISE EXCEPTION 'Conflicting capture pulse retry';END IF;
+  RETURN p.published_position;
+ END IF;
+ INSERT INTO "${schema}".company_event_outbox(id,source_tenant_id,organization_id,event_type,aggregate_type,aggregate_id,aggregate_version,event_envelope,event_stream) VALUES((frame->>'event_id')::uuid,scope,NULL,'private.'||purpose_name||'.v1','private_capture_marker',marker,1,frame,purpose_name) RETURNING source_position INTO pos;
+ IF pos<=(SELECT through_position FROM "${schema}".private_capture_source_marker WHERE id=marker) THEN RAISE EXCEPTION 'Capture pulse must follow locked cutoff';END IF;
+ UPDATE "${schema}".private_capture_pulse SET event_id=(frame->>'event_id')::uuid,published_position=pos,frame_sha256=hash WHERE marker_id=marker AND purpose=purpose_name;
+ RETURN pos;
+END $fn$;
+REVOKE ALL ON "${schema}".private_capture_pulse FROM PUBLIC;
+REVOKE ALL ON FUNCTION "${schema}".private_capture_pulse_spec(uuid,uuid,text),"${schema}".private_capture_pulse_publish(uuid,uuid,text,jsonb) FROM PUBLIC;
+CREATE TABLE "${schema}".private_capture_evidence (
+ id uuid PRIMARY KEY,source_marker_id uuid NOT NULL,source_lsn text NOT NULL,tenant_id uuid NOT NULL,purpose text NOT NULL CHECK(purpose IN ('audit','delivery')),
+ source_frame_count bigint NOT NULL DEFAULT 0 CHECK(source_frame_count>=0),producer_generation bigint NOT NULL CHECK(producer_generation>0),through_position bigint NOT NULL CHECK(through_position>=0),
+ expected_partitions integer NOT NULL CHECK(expected_partitions>0),covered_partitions integer NOT NULL CHECK(covered_partitions>=0),
+ archive_sha256 char(64) NOT NULL CHECK(archive_sha256 ~ '^[a-f0-9]{64}$'),restore_sha256 char(64) NOT NULL,
+ restore_verified_at timestamptz NOT NULL,quarantined_rows bigint NOT NULL DEFAULT 0 CHECK(quarantined_rows>=0),
+ accepted_at timestamptz NOT NULL,expires_at timestamptz NOT NULL,revoked_at timestamptz,
+ accepted_by text NOT NULL CHECK(length(accepted_by)>0),acceptance_sha256 char(64) NOT NULL CHECK(acceptance_sha256 ~ '^[a-f0-9]{64}$'),
+ FOREIGN KEY(source_marker_id,tenant_id,producer_generation,through_position,source_lsn) REFERENCES "${schema}".private_capture_source_marker(id,tenant_id,producer_generation,through_position,source_lsn),
+ CHECK(expected_partitions=1 AND covered_partitions<=1),CHECK(archive_sha256=restore_sha256),CHECK(expires_at>accepted_at AND expires_at<=accepted_at+interval '1 hour'),CHECK(restore_verified_at<=accepted_at)
+);
+CREATE TABLE "${schema}".private_legacy_export (
+ id uuid PRIMARY KEY,tenant_id uuid NOT NULL,source_database text NOT NULL DEFAULT current_database(),source_schema text NOT NULL DEFAULT '${schema}',
+ source_table text NOT NULL CHECK(source_table IN ('audit_log','outbox_event','webhook_delivery_log','employee_finance_outbox')),
+ producer_generation bigint NOT NULL CHECK(producer_generation>0),source_version text NOT NULL,
+ row_count bigint NOT NULL CHECK(row_count>=0),source_sha256 char(64) NOT NULL CHECK(source_sha256 ~ '^[a-f0-9]{64}$'),
+ archive_row_count bigint,archive_sha256 char(64),restore_sha256 char(64),restore_verified_at timestamptz,
+ pending_ownership_complete boolean NOT NULL DEFAULT false,business_state_complete boolean NOT NULL DEFAULT false,
+ reader_switch_complete boolean NOT NULL DEFAULT false,dependency_inventory_sha256 char(64),
+ verified_empty boolean NOT NULL DEFAULT false,accepted_at timestamptz,expires_at timestamptz,revoked_at timestamptz,
+ accepted_by text,acceptance_sha256 char(64),created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(tenant_id,producer_generation,source_table),CHECK(source_database=current_database() AND source_schema='${schema}')
+);
+-- A bounded rolling digest includes every full raw JSONB row, its UUID and source identity.
+-- This is independent of 0121's deliberately lossy organization projection export.
+CREATE FUNCTION "${schema}".private_source_digest(tab text) RETURNS TABLE(row_count bigint,source_sha256 text) LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE r record;h bytea;n bigint:=0;
+BEGIN
+ IF tab NOT IN ('audit_log','outbox_event','webhook_delivery_log','employee_finance_outbox') THEN RAISE EXCEPTION 'Unknown private export table';END IF;
+ h:=sha256(convert_to(current_database()||chr(31)||'${schema}'||chr(31)||tab,'UTF8'));
+ FOR r IN EXECUTE format('SELECT id,to_jsonb(t)::text AS raw FROM %I.%I t ORDER BY id','${schema}',tab) LOOP
+  h:=sha256(h||convert_to(r.id::text,'UTF8')||sha256(convert_to(r.raw,'UTF8')));n:=n+1;
+ END LOOP;RETURN QUERY SELECT n,encode(h,'hex');
+END $fn$;
+CREATE FUNCTION "${schema}".private_fence_legacy(company uuid,expected_generation bigint) RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE a record;
+BEGIN
+ LOCK TABLE "${schema}".audit_log,"${schema}".outbox_event,"${schema}".webhook_delivery_log,"${schema}".employee_finance_outbox IN ACCESS EXCLUSIVE MODE;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=company FOR UPDATE;
+ IF NOT FOUND OR a.producer_generation<>expected_generation OR a.state<>'PREPARED' THEN RAISE EXCEPTION 'Source generation mismatch';END IF;
+ LOCK TABLE "${schema}".audit_log,"${schema}".outbox_event,"${schema}".webhook_delivery_log,"${schema}".employee_finance_outbox IN ACCESS EXCLUSIVE MODE;
+ UPDATE "${schema}".private_source_cutover SET writers_fenced=true,state='FENCED',updated_at=clock_timestamp() WHERE tenant_id=company;
+END $fn$;
+CREATE FUNCTION "${schema}".private_legacy_write_fence() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE scope uuid;a record;
+BEGIN
+ scope:=COALESCE((to_jsonb(NEW)->>'tenant_id')::uuid,(to_jsonb(OLD)->>'tenant_id')::uuid);
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ IF FOUND AND a.writers_fenced THEN RAISE EXCEPTION 'Legacy producer generation is fenced' USING ERRCODE='55000';END IF;
+ RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $fn$;
+CREATE TRIGGER private_audit_writer_fence BEFORE INSERT ON "${schema}".audit_log FOR EACH ROW EXECUTE FUNCTION "${schema}".private_legacy_write_fence();
+CREATE TRIGGER private_outbox_writer_fence BEFORE INSERT OR UPDATE OR DELETE ON "${schema}".outbox_event FOR EACH ROW EXECUTE FUNCTION "${schema}".private_legacy_write_fence();
+CREATE TRIGGER private_webhook_writer_fence BEFORE INSERT OR UPDATE OR DELETE ON "${schema}".webhook_delivery_log FOR EACH ROW EXECUTE FUNCTION "${schema}".private_legacy_write_fence();
+CREATE TRIGGER private_finance_writer_fence BEFORE INSERT OR UPDATE OR DELETE ON "${schema}".employee_finance_outbox FOR EACH ROW EXECUTE FUNCTION "${schema}".private_legacy_write_fence();
+CREATE FUNCTION "${schema}".private_outbox_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE e record;a record;proof uuid;r record;
+BEGIN
+ IF TG_OP='INSERT' THEN
+  IF NEW.event_stream='company' THEN RETURN NEW;END IF;
+  SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=NEW.source_tenant_id FOR SHARE;
+  IF NOT FOUND OR NEW.event_envelope->>'source_generation' IS DISTINCT FROM a.producer_generation::text THEN RAISE EXCEPTION 'Private producer source generation mismatch';END IF;
+  IF jsonb_typeof(NEW.event_envelope)<>'object' OR NEW.event_envelope->>'purpose' IS DISTINCT FROM NEW.event_stream
+   OR NEW.event_envelope->>'event_id' IS DISTINCT FROM NEW.id::text OR NEW.event_envelope->>'tenant_id' IS DISTINCT FROM NEW.source_tenant_id::text
+   OR NEW.event_envelope->>'schema_version' IS DISTINCT FROM '1' OR NOT NEW.event_envelope ?& ARRAY['record_id','key_id','nonce','ciphertext','source_sha256','source_size','frame_index','frame_count']
+   THEN RAISE EXCEPTION 'Private outbox requires an encrypted scoped envelope';END IF;
+  RETURN NEW;
+ END IF;
+ IF OLD.event_stream='company' THEN
+  IF TG_OP='UPDATE' AND NEW.event_stream IS DISTINCT FROM OLD.event_stream THEN RAISE EXCEPTION 'Outbox stream is immutable';END IF;
+  RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;END IF;
+ IF TG_OP='UPDATE' THEN RAISE EXCEPTION 'Private envelopes are immutable';END IF;
+ proof:=NULLIF(current_setting('kabipay.private_cleanup_evidence',true),'')::uuid;
+ SELECT * INTO e FROM "${schema}".private_capture_evidence WHERE id=proof AND tenant_id=OLD.source_tenant_id AND purpose=OLD.event_stream FOR SHARE;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=OLD.source_tenant_id FOR SHARE;
+ IF proof IS NULL OR e.id IS NULL OR a.tenant_id IS NULL OR e.producer_generation<>a.producer_generation
+ OR OLD.event_envelope->>'source_generation' IS DISTINCT FROM e.producer_generation::text
+ OR e.accepted_at<=clock_timestamp()-interval '10 minutes' OR e.expires_at<=clock_timestamp() OR e.revoked_at IS NOT NULL OR e.accepted_at>clock_timestamp() OR e.restore_verified_at>e.accepted_at
+ OR e.expected_partitions<>e.covered_partitions OR e.quarantined_rows<>0 OR e.through_position<OLD.source_position THEN
+  RAISE EXCEPTION 'private cleanup evidence required';END IF;
+ IF OLD.event_stream='delivery' THEN
+  FOR r IN SELECT * FROM "${schema}".private_delivery_receipt WHERE tenant_id=OLD.source_tenant_id AND intent_id=(OLD.event_envelope->>'record_id')::uuid ORDER BY intent_id,destination_id FOR SHARE LOOP
+   IF r.status NOT IN ('DELIVERED','DISABLED','PERMANENT','NO_DESTINATION') THEN RAISE EXCEPTION 'Pending delivery payload retains source ownership';END IF;
+  END LOOP;
+ END IF;
+ RETURN OLD;
+END $fn$;
+CREATE TRIGGER private_outbox_guard BEFORE INSERT OR UPDATE OR DELETE ON "${schema}".company_event_outbox FOR EACH ROW EXECUTE FUNCTION "${schema}".private_outbox_guard();
+CREATE FUNCTION "${schema}".private_receipt_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE authority_generation bigint;
+BEGIN
+ IF TG_OP='DELETE' THEN RAISE EXCEPTION 'Private receipts are permanent business state';END IF;
+ IF (to_jsonb(NEW)-ARRAY['status','lease_generation','lease_until','claim_owner','accepted_at','acknowledgement_id','broker_owned_at','broker_owner_id','broker_receipt_sha256','outcome_code','outcome_sha256','updated_at']) IS DISTINCT FROM
+ (to_jsonb(OLD)-ARRAY['status','lease_generation','lease_until','claim_owner','accepted_at','acknowledgement_id','broker_owned_at','broker_owner_id','broker_receipt_sha256','outcome_code','outcome_sha256','updated_at']) THEN RAISE EXCEPTION 'Private receipt identity is immutable';END IF;
+ IF OLD.broker_owned_at IS NOT NULL AND (NEW.broker_owned_at,NEW.broker_owner_id,NEW.broker_receipt_sha256) IS DISTINCT FROM (OLD.broker_owned_at,OLD.broker_owner_id,OLD.broker_receipt_sha256) THEN RAISE EXCEPTION 'Broker ownership proof is immutable';END IF;
+ IF NEW.lease_generation<OLD.lease_generation THEN RAISE EXCEPTION 'Stale private receipt lease';END IF;
+ IF OLD.status='DELIVERED' AND to_jsonb(NEW) IS DISTINCT FROM to_jsonb(OLD) THEN
+  -- Receiver acknowledgement and broker ownership are independent monotonic
+  -- facts. A collector may first own an already acknowledged destination.
+  IF OLD.broker_owned_at IS NOT NULL OR NEW.broker_owned_at IS NULL
+   OR NEW.broker_owner_id IS NULL OR NEW.broker_receipt_sha256 IS NULL OR NEW.broker_receipt_sha256 !~ '^[a-f0-9]{64}$'
+   OR (to_jsonb(NEW)-ARRAY['broker_owned_at','broker_owner_id','broker_receipt_sha256','updated_at']) IS DISTINCT FROM
+      (to_jsonb(OLD)-ARRAY['broker_owned_at','broker_owner_id','broker_receipt_sha256','updated_at'])
+   THEN RAISE EXCEPTION 'Delivered receiver acknowledgement and terminal fields are immutable';END IF;
+  SELECT producer_generation INTO authority_generation FROM "${schema}".private_source_cutover WHERE tenant_id=OLD.tenant_id FOR SHARE;
+  IF NOT FOUND OR authority_generation<>OLD.source_generation THEN RAISE EXCEPTION 'Terminal broker ownership source generation mismatch';END IF;
+ END IF;
+ RETURN NEW;
+END $fn$;
+CREATE TRIGGER private_receipt_guard BEFORE UPDATE OR DELETE ON "${schema}".private_delivery_receipt FOR EACH ROW EXECUTE FUNCTION "${schema}".private_receipt_guard();
+CREATE FUNCTION "${schema}".private_domain_receipt_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN RAISE EXCEPTION 'Domain receipt identity and occurrence are immutable';END $fn$;
+CREATE TRIGGER private_domain_receipt_guard BEFORE UPDATE OR DELETE ON "${schema}".private_domain_receipt FOR EACH ROW EXECUTE FUNCTION "${schema}".private_domain_receipt_guard();
+
+CREATE FUNCTION "${schema}".private_survey_legacy_mirror() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+ IF NEW.entity_type='SURVEY' AND NEW.entity_id IS NOT NULL AND NEW.action IN ('SURVEY_OPENED','SURVEY_MANUALLY_OPENED','SURVEY_AUTOMATICALLY_CLOSED','SURVEY_TRANSITION_FAILED')
+ AND EXISTS(SELECT 1 FROM "${schema}".survey WHERE id=NEW.entity_id AND tenant_id=NEW.tenant_id) THEN
+ INSERT INTO "${schema}".private_survey_execution_state(tenant_id,survey_id,opened_at,last_transition_action,last_transition_at,last_transition_id)
+ VALUES(NEW.tenant_id,NEW.entity_id,CASE WHEN NEW.action IN ('SURVEY_OPENED','SURVEY_MANUALLY_OPENED') THEN NEW.created_at END,NEW.action,NEW.created_at,NEW.id)
+ ON CONFLICT(tenant_id,survey_id) DO UPDATE SET
+ opened_at=LEAST(private_survey_execution_state.opened_at,EXCLUDED.opened_at),
+ last_transition_action=CASE WHEN (EXCLUDED.last_transition_at,EXCLUDED.last_transition_id)>(private_survey_execution_state.last_transition_at,private_survey_execution_state.last_transition_id) OR private_survey_execution_state.last_transition_at IS NULL THEN EXCLUDED.last_transition_action ELSE private_survey_execution_state.last_transition_action END,
+ last_transition_at=GREATEST(private_survey_execution_state.last_transition_at,EXCLUDED.last_transition_at),
+ last_transition_id=CASE WHEN (EXCLUDED.last_transition_at,EXCLUDED.last_transition_id)>(private_survey_execution_state.last_transition_at,private_survey_execution_state.last_transition_id) OR private_survey_execution_state.last_transition_at IS NULL THEN EXCLUDED.last_transition_id ELSE private_survey_execution_state.last_transition_id END;
+ END IF;RETURN NEW;
+END $fn$;
+CREATE TRIGGER private_survey_legacy_mirror AFTER INSERT ON "${schema}".audit_log FOR EACH ROW EXECUTE FUNCTION "${schema}".private_survey_legacy_mirror();
+CREATE FUNCTION "${schema}".private_reject_truncate() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN RAISE EXCEPTION 'Private/legacy history requires accepted bounded deletion or explicit retirement';END $fn$;
+CREATE TRIGGER private_outbox_no_truncate BEFORE TRUNCATE ON "${schema}".company_event_outbox EXECUTE FUNCTION "${schema}".private_reject_truncate();
+CREATE TRIGGER private_audit_no_truncate BEFORE TRUNCATE ON "${schema}".audit_log EXECUTE FUNCTION "${schema}".private_reject_truncate();
+CREATE TRIGGER private_legacy_outbox_no_truncate BEFORE TRUNCATE ON "${schema}".outbox_event EXECUTE FUNCTION "${schema}".private_reject_truncate();
+CREATE TRIGGER private_webhook_no_truncate BEFORE TRUNCATE ON "${schema}".webhook_delivery_log EXECUTE FUNCTION "${schema}".private_reject_truncate();
+CREATE TRIGGER private_finance_no_truncate BEFORE TRUNCATE ON "${schema}".employee_finance_outbox EXECUTE FUNCTION "${schema}".private_reject_truncate();
+CREATE TABLE "${schema}".private_outbox_cleanup_receipt(
+ id uuid PRIMARY KEY,evidence_id uuid NOT NULL REFERENCES "${schema}".private_capture_evidence(id),tenant_id uuid NOT NULL,purpose text NOT NULL CHECK(purpose IN ('audit','delivery')),
+ producer_generation bigint NOT NULL,candidate_ids uuid[] NOT NULL,deleted_rows integer NOT NULL CHECK(deleted_rows BETWEEN 1 AND 200),created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE FUNCTION "${schema}".private_cleanup_outbox(company uuid,purpose_name text,proof uuid,batch_size integer DEFAULT 100) RETURNS integer LANGUAGE plpgsql AS $fn$
+DECLARE ids uuid[];record_ids uuid[];n integer;previous text;
+BEGIN
+ IF purpose_name NOT IN ('audit','delivery') OR batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid private cleanup binding or batch';END IF;
+ PERFORM 1 FROM "${schema}".private_source_cutover WHERE tenant_id=company FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Unknown private source';END IF;
+ IF purpose_name='delivery' THEN
+  SELECT array_agg((x.event_envelope->>'record_id')::uuid) INTO record_ids FROM (
+   SELECT o.event_envelope FROM "${schema}".company_event_outbox o JOIN "${schema}".private_capture_evidence e
+    ON e.id=proof AND e.tenant_id=o.source_tenant_id AND e.purpose=o.event_stream
+   WHERE o.source_tenant_id=company AND o.event_stream=purpose_name AND o.source_position<=e.through_position AND o.event_envelope->>'source_generation'=e.producer_generation::text
+    AND NOT EXISTS(SELECT 1 FROM "${schema}".private_delivery_receipt r WHERE r.tenant_id=company AND r.intent_id=(o.event_envelope->>'record_id')::uuid AND r.status NOT IN ('DELIVERED','DISABLED','PERMANENT','NO_DESTINATION'))
+   ORDER BY o.source_position LIMIT batch_size
+  ) x;
+  PERFORM r.intent_id FROM "${schema}".private_delivery_receipt r WHERE r.tenant_id=company AND r.intent_id=ANY(record_ids) ORDER BY r.intent_id,r.destination_id FOR SHARE;
+ END IF;
+ SELECT array_agg(x.id) INTO ids FROM (SELECT o.id FROM "${schema}".company_event_outbox o JOIN "${schema}".private_capture_evidence e
+ ON e.id=proof AND e.tenant_id=o.source_tenant_id AND e.purpose=o.event_stream
+ WHERE o.source_tenant_id=company AND o.event_stream=purpose_name AND o.source_position<=e.through_position AND o.event_envelope->>'source_generation'=e.producer_generation::text
+ AND (purpose_name<>'delivery' OR (o.event_envelope->>'record_id')::uuid=ANY(record_ids))
+ AND (purpose_name<>'delivery' OR NOT EXISTS(SELECT 1 FROM "${schema}".private_delivery_receipt r WHERE r.tenant_id=company AND r.intent_id=(o.event_envelope->>'record_id')::uuid AND r.status NOT IN ('DELIVERED','DISABLED','PERMANENT','NO_DESTINATION')))
+ ORDER BY o.source_position LIMIT batch_size FOR UPDATE OF o SKIP LOCKED) x;
+ IF ids IS NULL THEN RETURN 0;END IF;
+ previous:=current_setting('kabipay.private_cleanup_evidence',true);PERFORM set_config('kabipay.private_cleanup_evidence',proof::text,true);
+ DELETE FROM "${schema}".company_event_outbox WHERE id=ANY(ids) AND source_tenant_id=company AND event_stream=purpose_name;
+ GET DIAGNOSTICS n=ROW_COUNT;PERFORM set_config('kabipay.private_cleanup_evidence',COALESCE(previous,''),true);
+ INSERT INTO "${schema}".private_outbox_cleanup_receipt(id,evidence_id,tenant_id,purpose,producer_generation,candidate_ids,deleted_rows)
+ SELECT gen_random_uuid(),proof,company,purpose_name,producer_generation,ids,n FROM "${schema}".private_source_cutover WHERE tenant_id=company;
+ RETURN n;
+END $fn$;
+REVOKE ALL ON FUNCTION "${schema}".private_cleanup_outbox(uuid,text,uuid,integer) FROM PUBLIC;
+
+-- Operational capture state is compacted only behind fresh accepted external
+-- archive+restore evidence. One rolling watermark replaces unbounded local logs.
+CREATE TABLE "${schema}".private_capture_compaction (
+ tenant_id uuid NOT NULL,purpose text NOT NULL CHECK(purpose IN ('audit','delivery')),producer_generation bigint NOT NULL,through_position bigint NOT NULL,
+ evidence_id uuid NOT NULL REFERENCES "${schema}".private_capture_evidence(id),removed_rows bigint NOT NULL DEFAULT 0,
+ audit_sha256 char(64) NOT NULL,updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),PRIMARY KEY(tenant_id,purpose)
+);
+CREATE FUNCTION "${schema}".private_capture_prune(scope uuid,purpose_name text,proof uuid,batch_size integer DEFAULT 100) RETURNS integer LANGUAGE plpgsql AS $fn$
+DECLARE a record;e record;r record;h bytea;n integer:=0;total bigint;
+BEGIN
+ IF NOT(purpose_name IN ('audit','delivery')) OR batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid capture prune binding';END IF;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO e FROM "${schema}".private_capture_evidence WHERE id=proof AND tenant_id=scope AND purpose=purpose_name FOR SHARE;
+ IF a.tenant_id IS NULL OR e.id IS NULL OR a.producer_generation<>e.producer_generation OR e.revoked_at IS NOT NULL
+ OR e.accepted_at>clock_timestamp() OR e.accepted_at<=clock_timestamp()-interval '10 minutes' OR e.expires_at<=clock_timestamp()
+ OR e.archive_sha256 IS DISTINCT FROM e.restore_sha256 OR e.restore_verified_at>e.accepted_at OR e.expected_partitions<>e.covered_partitions OR e.quarantined_rows<>0 THEN RAISE EXCEPTION 'Fresh private archive proof required for compaction';END IF;
+ INSERT INTO "${schema}".private_capture_compaction(tenant_id,purpose,producer_generation,through_position,evidence_id,audit_sha256)
+ VALUES(scope,purpose_name,a.producer_generation,e.through_position,proof,encode(sha256(convert_to(current_database()||chr(31)||'${schema}'||chr(31)||scope::text||chr(31)||purpose_name,'UTF8')),'hex')) ON CONFLICT DO NOTHING;
+ SELECT decode(audit_sha256,'hex'),removed_rows INTO h,total FROM "${schema}".private_capture_compaction WHERE tenant_id=scope AND purpose=purpose_name FOR UPDATE;
+ -- Release the former watermark's evidence FK before selecting old evidence.
+ UPDATE "${schema}".private_capture_compaction SET evidence_id=proof,producer_generation=a.producer_generation,through_position=e.through_position WHERE tenant_id=scope AND purpose=purpose_name;
+ FOR r IN SELECT c.* FROM "${schema}".private_outbox_cleanup_receipt c JOIN "${schema}".private_capture_evidence old ON old.id=c.evidence_id
+ WHERE c.tenant_id=scope AND c.purpose=purpose_name AND old.id<>proof AND old.expires_at<clock_timestamp() AND old.revoked_at IS NULL AND old.through_position<=e.through_position
+ ORDER BY c.created_at,c.id LIMIT batch_size FOR UPDATE OF c SKIP LOCKED LOOP
+  h:=sha256(h||convert_to('cleanup'||to_jsonb(r)::text,'UTF8'));DELETE FROM "${schema}".private_outbox_cleanup_receipt WHERE id=r.id;n:=n+1;
+ END LOOP;
+ FOR r IN SELECT old.* FROM "${schema}".private_capture_evidence old WHERE old.tenant_id=scope AND old.purpose=purpose_name AND old.id<>proof
+ AND old.expires_at<clock_timestamp() AND old.revoked_at IS NULL AND old.through_position<=e.through_position
+ AND NOT EXISTS(SELECT 1 FROM "${schema}".private_outbox_cleanup_receipt c WHERE c.evidence_id=old.id)
+ AND NOT EXISTS(SELECT 1 FROM "${schema}".private_capture_compaction c WHERE c.evidence_id=old.id)
+ ORDER BY old.accepted_at,old.id LIMIT (batch_size-n) FOR UPDATE OF old SKIP LOCKED LOOP
+  h:=sha256(h||convert_to('evidence'||to_jsonb(r)::text,'UTF8'));DELETE FROM "${schema}".private_capture_evidence WHERE id=r.id;n:=n+1;
+ END LOOP;
+ FOR r IN SELECT p.* FROM "${schema}".private_capture_pulse p JOIN "${schema}".private_capture_source_marker m ON m.id=p.marker_id
+ WHERE m.tenant_id=scope AND p.purpose=purpose_name AND m.id<>e.source_marker_id AND m.created_at<clock_timestamp()-interval '1 hour'
+ AND (p.published_position IS NULL OR p.published_position<=e.through_position)
+ AND NOT EXISTS(SELECT 1 FROM "${schema}".company_event_outbox o WHERE o.id=p.event_id)
+ AND NOT EXISTS(SELECT 1 FROM "${schema}".private_capture_evidence old WHERE old.source_marker_id=m.id AND old.purpose=purpose_name)
+ ORDER BY m.created_at,m.id LIMIT (batch_size-n) FOR UPDATE OF p SKIP LOCKED LOOP
+  h:=sha256(h||convert_to('pulse'||to_jsonb(r)::text,'UTF8'));DELETE FROM "${schema}".private_capture_pulse WHERE marker_id=r.marker_id AND purpose=r.purpose;n:=n+1;
+ END LOOP;
+ FOR r IN SELECT m.* FROM "${schema}".private_capture_source_marker m WHERE m.tenant_id=scope AND m.id<>e.source_marker_id
+ AND m.created_at<clock_timestamp()-interval '1 hour' AND m.through_position<=e.through_position
+ AND NOT EXISTS(SELECT 1 FROM "${schema}".private_capture_evidence old WHERE old.source_marker_id=m.id)
+ AND NOT EXISTS(SELECT 1 FROM "${schema}".private_capture_pulse p WHERE p.marker_id=m.id)
+ ORDER BY m.created_at,m.id LIMIT (batch_size-n) FOR UPDATE OF m SKIP LOCKED LOOP
+  h:=sha256(h||convert_to('marker'||to_jsonb(r)::text,'UTF8'));DELETE FROM "${schema}".private_capture_source_marker WHERE id=r.id;n:=n+1;
+ END LOOP;
+ UPDATE "${schema}".private_capture_compaction SET audit_sha256=encode(h,'hex'),removed_rows=total+n,updated_at=clock_timestamp() WHERE tenant_id=scope AND purpose=purpose_name;
+ RETURN n;
+END $fn$;
+REVOKE ALL ON "${schema}".private_capture_compaction FROM PUBLIC;
+REVOKE ALL ON FUNCTION "${schema}".private_capture_prune(uuid,text,uuid,integer) FROM PUBLIC;
+CREATE FUNCTION "${schema}".private_dependency_digest(tab text) RETURNS text LANGUAGE plpgsql AS $fn$
+DECLARE rel regclass;body text;
+BEGIN
+ IF NOT tab=ANY(ARRAY['audit_log','outbox_event','webhook_delivery_log','employee_finance_outbox']) THEN RAISE EXCEPTION 'Unknown retirement dependency target';END IF;
+ rel:=format('%I.%I','${schema}',tab)::regclass;
+ SELECT string_agg(x.line,E'\n' ORDER BY x.line) INTO body FROM (
+ SELECT 'relation:'||c.relowner::regrole::text||':'||COALESCE(c.relacl::text,'')||':'||c.relrowsecurity::text AS line FROM pg_class c WHERE c.oid=rel
+ UNION ALL SELECT 'column:'||a.attnum||':'||a.attname||':'||format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull||':'||COALESCE(pg_get_expr(d.adbin,d.adrelid),'') FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid=rel AND a.attnum>0 AND NOT a.attisdropped
+ UNION ALL SELECT 'dependency:'||pg_describe_object(d.classid,d.objid,d.objsubid)||':'||d.deptype::text FROM pg_depend d WHERE d.refclassid='pg_class'::regclass AND d.refobjid=rel
+ UNION ALL SELECT 'constraint:'||pg_get_constraintdef(c.oid,true) FROM pg_constraint c WHERE c.conrelid=rel OR c.confrelid=rel
+ UNION ALL SELECT 'trigger:'||pg_get_triggerdef(t.oid,true)||':'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t WHERE t.tgrelid=rel AND NOT t.tgisinternal
+ UNION ALL SELECT 'policy:'||p.polname||':'||p.polcmd::text||':'||p.polroles::text||':'||COALESCE(pg_get_expr(p.polqual,p.polrelid),'')||':'||COALESCE(pg_get_expr(p.polwithcheck,p.polrelid),'') FROM pg_policy p WHERE p.polrelid=rel
+ UNION ALL SELECT 'publication:'||p.pubname||':'||COALESCE(r.prattrs::text,'')||':'||COALESCE(pg_get_expr(r.prqual,r.prrelid),'') FROM pg_publication_rel r JOIN pg_publication p ON p.oid=r.prpubid WHERE r.prrelid=rel
+ UNION ALL SELECT 'index:'||pg_get_indexdef(i.indexrelid) FROM pg_index i WHERE i.indrelid=rel
+ ) x;
+ RETURN encode(sha256(convert_to(COALESCE(body,''),'UTF8')),'hex');
+END $fn$;
+CREATE FUNCTION "${schema}".private_legacy_export_start(scope uuid,tab text,job uuid,expected_generation bigint) RETURNS uuid LANGUAGE plpgsql AS $fn$
+DECLARE a record;d record;prior record;
+BEGIN
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR UPDATE;
+ IF NOT FOUND OR a.producer_generation<>expected_generation OR a.state<>'FENCED' OR NOT a.writers_fenced THEN RAISE EXCEPTION 'Legacy export requires fenced current generation';END IF;
+ IF NOT tab=ANY(ARRAY['audit_log','outbox_event','webhook_delivery_log','employee_finance_outbox']) THEN RAISE EXCEPTION 'Unknown full-fidelity export table';END IF;
+ EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE','${schema}',tab);
+ SELECT * INTO d FROM "${schema}".private_source_digest(tab);
+ SELECT * INTO prior FROM "${schema}".private_legacy_export WHERE tenant_id=scope AND producer_generation=expected_generation AND source_table=tab FOR UPDATE;
+ IF FOUND THEN
+  IF prior.id<>job OR prior.source_sha256<>d.source_sha256 OR prior.row_count<>d.row_count THEN RAISE EXCEPTION 'Restart export identity/hash conflict';END IF;RETURN prior.id;
+ END IF;
+ INSERT INTO "${schema}".private_legacy_export(id,tenant_id,source_table,producer_generation,source_version,row_count,source_sha256,dependency_inventory_sha256)
+ VALUES(job,scope,tab,expected_generation,a.source_version,d.row_count,d.source_sha256,"${schema}".private_dependency_digest(tab));RETURN job;
+END $fn$;
+REVOKE ALL ON FUNCTION "${schema}".private_dependency_digest(text),"${schema}".private_legacy_export_start(uuid,text,uuid,bigint) FROM PUBLIC;
+
+CREATE FUNCTION "${schema}".private_legacy_export_batch(scope uuid,job uuid,after_id uuid DEFAULT NULL,batch_size integer DEFAULT 100,byte_limit integer DEFAULT 1048576) RETURNS jsonb
+ LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE a record;e record;r record;result jsonb:='[]'::jsonb;used integer:=0;size integer;
+BEGIN
+ IF batch_size NOT BETWEEN 1 AND 200 OR byte_limit NOT BETWEEN 1024 AND 16777216 THEN RAISE EXCEPTION 'Invalid bounded raw export batch';END IF;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO e FROM "${schema}".private_legacy_export WHERE id=job AND tenant_id=scope FOR SHARE;
+ IF a.tenant_id IS NULL OR e.id IS NULL OR NOT a.writers_fenced OR a.state<>'FENCED' OR a.producer_generation<>e.producer_generation OR a.source_version<>e.source_version
+ OR e.revoked_at IS NOT NULL OR e.source_database<>current_database() OR e.source_schema<>'${schema}' THEN RAISE EXCEPTION 'Raw export source authority changed';END IF;
+ IF NOT e.source_table=ANY(ARRAY['audit_log','outbox_event','webhook_delivery_log','employee_finance_outbox']) THEN RAISE EXCEPTION 'Unknown full-fidelity source table';END IF;
+ FOR r IN EXECUTE format('SELECT id,(to_jsonb(t)->>''tenant_id'')::uuid AS tenant_id,to_jsonb(t)::text AS raw FROM %I.%I t WHERE ($1 IS NULL OR id>$1) ORDER BY id LIMIT $2','${schema}',e.source_table) USING after_id,batch_size LOOP
+  size:=octet_length(convert_to(r.raw,'UTF8'));
+  IF size>16777216 THEN RAISE EXCEPTION 'Legacy row exceeds framing limit; preserve source and raise reviewed framing limit before retirement';END IF;
+  IF used>0 AND used+size>byte_limit THEN EXIT;END IF;
+  result:=result||jsonb_build_array(jsonb_build_object('source_database',current_database(),'source_schema','${schema}','source_table',e.source_table,'original_id',r.id,'tenant_id',r.tenant_id,
+   'source_generation',e.producer_generation,'occurred_at',to_char((CASE WHEN e.source_table='employee_finance_outbox' THEN COALESCE(r.raw::jsonb->>'delivered_at',r.raw::jsonb->>'available_at') ELSE r.raw::jsonb->>'created_at' END)::timestamptz AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'raw_source',r.raw,'source_sha256',encode(sha256(convert_to(r.raw,'UTF8')),'hex'),'source_size',size,'historical',true,'executable',false));used:=used+size;
+ END LOOP;
+ RETURN result;
+END $fn$;
+REVOKE ALL ON FUNCTION "${schema}".private_legacy_export_batch(uuid,uuid,uuid,integer,integer) FROM PUBLIC;
+
+CREATE TABLE "${schema}".private_pending_migration (
+ tenant_id uuid NOT NULL,legacy_table text NOT NULL CHECK(legacy_table IN ('outbox_event','webhook_delivery_log','employee_finance_outbox')),legacy_id uuid NOT NULL,
+ manifest_id uuid NOT NULL REFERENCES "${schema}".private_legacy_export(id),source_generation bigint NOT NULL CHECK(source_generation>0),
+ source_row_sha256 char(64) NOT NULL CHECK(source_row_sha256 ~ '^[a-f0-9]{64}$'),
+ classification text NOT NULL CHECK(classification IN ('HISTORY_ONLY','TRANSFERRED','ACKNOWLEDGED','RECONCILED_NONEXECUTABLE','UNRESOLVED')),
+ expected_destination_ids uuid[] NOT NULL DEFAULT '{}',resolution_sha256 char(64),accepted_by text,accepted_at timestamptz,
+ PRIMARY KEY(tenant_id,legacy_table,legacy_id),CHECK(cardinality(expected_destination_ids)<=1001 AND array_position(expected_destination_ids,NULL) IS NULL),
+ CHECK(classification<>'TRANSFERRED' OR cardinality(expected_destination_ids)>0),
+ CHECK(classification='UNRESOLVED' OR (resolution_sha256 ~ '^[a-f0-9]{64}$' AND length(accepted_by)>0 AND accepted_at IS NOT NULL))
+);
+CREATE TABLE "${schema}".private_pending_destination_owner (
+ tenant_id uuid NOT NULL,legacy_table text NOT NULL,legacy_id uuid NOT NULL,destination_id uuid NOT NULL,intent_id uuid NOT NULL,intent_hash char(64) NOT NULL,
+ PRIMARY KEY(tenant_id,legacy_table,legacy_id,destination_id),
+ FOREIGN KEY(tenant_id,legacy_table,legacy_id) REFERENCES "${schema}".private_pending_migration(tenant_id,legacy_table,legacy_id),
+ FOREIGN KEY(tenant_id,intent_id,destination_id) REFERENCES "${schema}".private_delivery_receipt(tenant_id,intent_id,destination_id),
+ CHECK(intent_hash ~ '^[a-f0-9]{64}$')
+);
+REVOKE ALL ON "${schema}".private_pending_migration,"${schema}".private_pending_destination_owner FROM PUBLIC;
+CREATE FUNCTION "${schema}".private_assert_pending_migration(scope uuid,generation bigint) RETURNS void
+ LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE tab text;r record;m record;pending boolean;needs_mapping boolean;
+BEGIN
+ FOREACH tab IN ARRAY ARRAY['outbox_event','webhook_delivery_log','employee_finance_outbox'] LOOP
+ FOR r IN EXECUTE format('SELECT id,to_jsonb(t) AS row,to_jsonb(t)::text AS raw FROM %I.%I t ORDER BY id','${schema}',tab) LOOP
+  pending:=CASE tab WHEN 'outbox_event' THEN r.row->>'status' IS DISTINCT FROM 'PROCESSED' WHEN 'employee_finance_outbox' THEN r.row->>'delivered_at' IS NULL ELSE true END;
+  needs_mapping:=pending OR tab='webhook_delivery_log';
+  SELECT * INTO m FROM "${schema}".private_pending_migration WHERE tenant_id=scope AND legacy_table=tab AND legacy_id=r.id FOR SHARE;
+  IF NOT FOUND THEN IF needs_mapping THEN RAISE EXCEPTION 'Pending/ambiguous legacy identity lacks destination reconciliation';ELSE CONTINUE;END IF;END IF;
+  IF m.source_generation<>generation OR m.source_row_sha256<>encode(sha256(convert_to(r.raw,'UTF8')),'hex') OR m.classification='UNRESOLVED'
+   OR m.accepted_at IS NULL OR m.accepted_at>clock_timestamp() OR m.resolution_sha256 IS NULL OR m.resolution_sha256 !~ '^[a-f0-9]{64}$' OR m.accepted_by IS NULL OR length(m.accepted_by)=0
+   OR NOT EXISTS(SELECT 1 FROM "${schema}".private_legacy_export e WHERE e.id=m.manifest_id AND e.tenant_id=scope AND e.source_table=tab AND e.producer_generation=generation AND e.revoked_at IS NULL)
+   THEN RAISE EXCEPTION 'Legacy pending source/ownership evidence mismatch';END IF;
+  IF (NOT pending OR tab='webhook_delivery_log') AND m.classification='TRANSFERRED' THEN RAISE EXCEPTION 'Historical evidence cannot become executable work';END IF;
+  IF needs_mapping AND m.classification='HISTORY_ONLY' THEN RAISE EXCEPTION 'Pending/ambiguous identity cannot be inferred historical';END IF;
+  IF m.classification='TRANSFERRED' THEN
+   IF EXISTS(SELECT 1 FROM unnest(m.expected_destination_ids) destination WHERE NOT EXISTS(
+    SELECT 1 FROM "${schema}".private_pending_destination_owner o JOIN "${schema}".private_delivery_receipt x ON x.tenant_id=o.tenant_id AND x.intent_id=o.intent_id AND x.destination_id=o.destination_id
+    WHERE o.tenant_id=scope AND o.legacy_table=tab AND o.legacy_id=r.id AND o.destination_id=destination AND x.intent_hash=o.intent_hash AND x.source_generation=generation AND (x.accepted_at IS NOT NULL OR x.broker_owned_at IS NOT NULL)))
+    OR EXISTS(SELECT 1 FROM "${schema}".private_pending_destination_owner o WHERE o.tenant_id=scope AND o.legacy_table=tab AND o.legacy_id=r.id AND NOT o.destination_id=ANY(m.expected_destination_ids)) THEN RAISE EXCEPTION 'Expected destination durable ownership incomplete';END IF;
+  END IF;
+ END LOOP;END LOOP;
+END $fn$;
+REVOKE ALL ON FUNCTION "${schema}".private_assert_pending_migration(uuid,bigint) FROM PUBLIC;
+
+CREATE FUNCTION "${schema}".private_legacy_export_publish(scope uuid,job uuid,frames jsonb) RETURNS integer
+ LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE a record;e record;f jsonb;record uuid;raw text;hash text;size integer;purpose_name text;n integer;indices integer[];
+BEGIN
+ IF jsonb_typeof(frames)<>'array' OR jsonb_array_length(frames) NOT BETWEEN 1 AND 64 OR octet_length(frames::text)>25000000 THEN RAISE EXCEPTION 'Invalid bounded encrypted raw frames';END IF;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO e FROM "${schema}".private_legacy_export WHERE id=job AND tenant_id=scope FOR UPDATE;
+ IF a.tenant_id IS NULL OR e.id IS NULL OR NOT a.writers_fenced OR a.state<>'FENCED' OR a.producer_generation<>e.producer_generation OR e.accepted_at IS NOT NULL OR e.revoked_at IS NOT NULL THEN RAISE EXCEPTION 'Raw publication source authority changed';END IF;
+ record:=(frames->0->>'record_id')::uuid;
+ EXECUTE format('SELECT to_jsonb(t)::text FROM %I.%I t WHERE id=$1','${schema}',e.source_table) INTO raw USING record;
+ IF raw IS NULL THEN RAISE EXCEPTION 'Unknown original raw record';END IF;
+ hash:=encode(sha256(convert_to(raw,'UTF8')),'hex');size:=octet_length(convert_to(raw,'UTF8'));n:=(size+262143)/262144;
+ purpose_name:=CASE WHEN e.source_table='audit_log' THEN 'audit' WHEN e.source_table='operator_audit_log' THEN 'operator_audit' ELSE 'delivery' END;
+ SELECT array_agg((x->>'frame_index')::integer ORDER BY (x->>'frame_index')::integer) INTO indices FROM jsonb_array_elements(frames) x;
+ IF jsonb_array_length(frames)<>n OR indices IS DISTINCT FROM ARRAY(SELECT generate_series(0,n-1)) THEN RAISE EXCEPTION 'Raw frame coverage incomplete';END IF;
+ FOR f IN SELECT value FROM jsonb_array_elements(frames) LOOP
+  IF (SELECT count(*) FROM jsonb_object_keys(f))<>17 OR NOT f ?& ARRAY['schema_version','event_id','record_id','tenant_id','purpose','source_generation','source_kind','resource_type','resource_id','occurred_at','key_id','source_sha256','source_size','frame_index','frame_count','nonce','ciphertext']
+  OR f->>'schema_version' IS DISTINCT FROM '1' OR f->>'record_id' IS DISTINCT FROM record::text OR f->>'resource_id' IS DISTINCT FROM record::text
+  OR f->>'tenant_id' IS DISTINCT FROM scope::text OR f->>'source_generation' IS DISTINCT FROM a.producer_generation::text
+  OR f->>'source_kind' IS DISTINCT FROM 'legacy_'||e.source_table OR f->>'resource_type' IS DISTINCT FROM e.source_table OR f->>'purpose' IS DISTINCT FROM purpose_name
+  OR f->>'source_sha256' IS DISTINCT FROM hash OR f->>'source_size' IS DISTINCT FROM size::text OR f->>'frame_count' IS DISTINCT FROM n::text
+  OR f->>'occurred_at' IS DISTINCT FROM to_char((CASE WHEN e.source_table='employee_finance_outbox' THEN COALESCE(raw::jsonb->>'delivered_at',raw::jsonb->>'available_at') ELSE raw::jsonb->>'created_at' END)::timestamptz AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+  OR length(f->>'nonce')<>16 OR length(f->>'ciphertext') NOT BETWEEN 24 AND 349548 THEN RAISE EXCEPTION 'Raw frame immutable source binding mismatch';END IF;
+  INSERT INTO "${schema}".company_event_outbox(id,source_tenant_id,organization_id,event_type,aggregate_type,aggregate_id,aggregate_version,event_envelope,event_stream)
+ VALUES((f->>'event_id')::uuid,scope,NULL,'private.'||purpose_name||'.v1',e.source_table,record,1,f,purpose_name) ON CONFLICT(id) DO NOTHING;
+ IF NOT FOUND AND NOT EXISTS(SELECT 1 FROM "${schema}".company_event_outbox WHERE id=(f->>'event_id')::uuid AND event_stream=purpose_name AND event_envelope=f AND source_tenant_id=scope) THEN RAISE EXCEPTION 'Conflicting published raw frame';END IF;
+ END LOOP;RETURN n;
+END $fn$;
+CREATE FUNCTION "${schema}".private_legacy_export_published_frames(scope uuid,job uuid,record uuid) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE e record;frames jsonb;
+BEGIN
+ SELECT * INTO e FROM "${schema}".private_legacy_export WHERE id=job AND tenant_id=scope FOR SHARE;
+ IF NOT FOUND OR e.revoked_at IS NOT NULL THEN RAISE EXCEPTION 'Unknown source export';END IF;
+ SELECT COALESCE(jsonb_agg(event_envelope ORDER BY (event_envelope->>'frame_index')::integer),'[]'::jsonb) INTO frames FROM "${schema}".company_event_outbox WHERE source_tenant_id=scope AND event_stream IN ('audit','delivery') AND event_envelope->>'record_id'=record::text AND event_envelope->>'source_kind'='legacy_'||e.source_table AND event_envelope->>'source_generation'=e.producer_generation::text;
+ RETURN frames;
+END $fn$;
+CREATE FUNCTION "${schema}".private_legacy_export_accept(scope uuid,job uuid,proof jsonb) RETURNS void
+ LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE a record;e record;d record;empty_path boolean;
+BEGIN
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR UPDATE;
+ SELECT * INTO e FROM "${schema}".private_legacy_export WHERE id=job AND tenant_id=scope FOR UPDATE;
+ IF a.tenant_id IS NULL OR e.id IS NULL OR NOT a.writers_fenced OR a.state<>'FENCED' OR a.producer_generation<>e.producer_generation OR e.revoked_at IS NOT NULL THEN RAISE EXCEPTION 'Archive acceptance authority changed';END IF;
+ EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE','${schema}',e.source_table);SELECT * INTO d FROM "${schema}".private_source_digest(e.source_table);
+ empty_path:=COALESCE((proof->>'verified_empty')::boolean,false) AND d.row_count=0;
+ IF jsonb_typeof(proof)<>'object' OR proof->>'manifest_id' IS DISTINCT FROM job::text OR proof->>'tenant_id' IS DISTINCT FROM scope::text
+ OR proof->>'source_database' IS DISTINCT FROM current_database() OR proof->>'source_schema' IS DISTINCT FROM '${schema}' OR proof->>'source_table' IS DISTINCT FROM e.source_table
+ OR proof->>'source_generation' IS DISTINCT FROM a.producer_generation::text OR proof->>'row_count' IS DISTINCT FROM d.row_count::text OR proof->>'source_sha256' IS DISTINCT FROM d.source_sha256
+ OR e.source_sha256<>d.source_sha256 OR e.row_count<>d.row_count OR proof->>'dependency_inventory_sha256' IS DISTINCT FROM "${schema}".private_dependency_digest(e.source_table)
+ OR proof->>'dependency_inventory_sha256' IS DISTINCT FROM e.dependency_inventory_sha256 OR COALESCE(proof->>'accepted_by','')='' OR proof->>'acceptance_sha256' IS NULL OR proof->>'acceptance_sha256' !~ '^[a-f0-9]{64}$'
+ OR proof->>'expires_at' IS NULL OR (proof->>'expires_at')::timestamptz<=clock_timestamp() OR (proof->>'expires_at')::timestamptz>clock_timestamp()+interval '24 hours'
+ OR NOT empty_path AND (proof->>'archive_sha256' IS DISTINCT FROM d.source_sha256 OR proof->>'restore_sha256' IS DISTINCT FROM d.source_sha256 OR proof->>'restore_verified_at' IS NULL OR (proof->>'restore_verified_at')::timestamptz>clock_timestamp()) THEN RAISE EXCEPTION 'Archive restore/source acceptance proof mismatch';END IF;
+ UPDATE "${schema}".private_legacy_export SET archive_row_count=d.row_count,archive_sha256=proof->>'archive_sha256',restore_sha256=proof->>'restore_sha256',restore_verified_at=(proof->>'restore_verified_at')::timestamptz,
+ verified_empty=empty_path,accepted_by=proof->>'accepted_by',acceptance_sha256=proof->>'acceptance_sha256',accepted_at=clock_timestamp(),expires_at=(proof->>'expires_at')::timestamptz,
+ reader_switch_complete=a.reader_switch_complete,business_state_complete=a.business_state_complete,pending_ownership_complete=a.pending_ownership_complete WHERE id=job;
+END $fn$;
+REVOKE ALL ON FUNCTION "${schema}".private_legacy_export_publish(uuid,uuid,jsonb),"${schema}".private_legacy_export_published_frames(uuid,uuid,uuid),"${schema}".private_legacy_export_accept(uuid,uuid,jsonb) FROM PUBLIC;
+
+CREATE FUNCTION "${schema}".private_capture_status(scope uuid,marker uuid,purpose_name text) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE a record;m record;r record;n bigint:=0;h bytea;slot text:='organization_company_'||replace(scope::text,'-','');flushed pg_lsn;
+BEGIN
+ IF NOT(purpose_name IN ('audit','delivery')) THEN RAISE EXCEPTION 'Invalid private capture purpose';END IF;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO m FROM "${schema}".private_capture_source_marker WHERE id=marker AND tenant_id=scope FOR SHARE;
+ IF a.tenant_id IS NULL OR m.id IS NULL OR a.producer_generation<>m.producer_generation THEN RAISE EXCEPTION 'Private capture source generation changed';END IF;
+ h:=sha256(convert_to(current_database()||chr(31)||'${schema}'||chr(31)||purpose_name,'UTF8'));
+ FOR r IN SELECT source_position,id,event_envelope AS envelope FROM "${schema}".company_event_outbox WHERE event_stream=purpose_name AND source_tenant_id=scope AND event_envelope->>'source_generation'=m.producer_generation::text AND source_position<=m.through_position ORDER BY source_position LOOP
+  h:=sha256(h||convert_to(r.source_position::text,'UTF8')||convert_to(r.id::text,'UTF8')||sha256(convert_to(r.envelope::text,'UTF8')));n:=n+1;
+ END LOOP;
+ SELECT confirmed_flush_lsn INTO flushed FROM pg_replication_slots WHERE slot_name=slot AND database=current_database() AND slot_type='logical';
+ RETURN jsonb_build_object('id',marker,'source_marker_id',marker,'tenant_id',scope,'purpose',purpose_name,'producer_generation',m.producer_generation,'source_generation',m.producer_generation,
+ 'source_database',current_database(),'source_schema','${schema}','through_position',m.through_position::text,'source_lsn',m.source_lsn,'slot_name',slot,'confirmed_flush_lsn',flushed::text,'source_frame_count',n,'source_sha256',encode(h,'hex'));
+END $fn$;
+CREATE FUNCTION "${schema}".private_capture_batch(scope uuid,marker uuid,purpose_name text,after_position bigint DEFAULT 0,batch_size integer DEFAULT 100) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE m record;a record;r record;rows jsonb:='[]'::jsonb;n integer:=0;bytes integer:=0;
+BEGIN
+ IF NOT(purpose_name IN ('audit','delivery')) OR after_position<0 OR batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid private capture batch';END IF;
+ SELECT * INTO a FROM "${schema}".private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO m FROM "${schema}".private_capture_source_marker WHERE id=marker AND tenant_id=scope FOR SHARE;
+ IF a.tenant_id IS NULL OR m.id IS NULL OR a.producer_generation<>m.producer_generation THEN RAISE EXCEPTION 'Private capture source generation changed';END IF;
+ FOR r IN SELECT * FROM (SELECT source_position,id,event_envelope AS envelope FROM "${schema}".company_event_outbox WHERE event_stream=purpose_name AND source_tenant_id=scope AND event_envelope->>'source_generation'=m.producer_generation::text AND source_position<=m.through_position ORDER BY source_position) frames WHERE source_position>after_position LIMIT batch_size LOOP
+  IF n>0 AND bytes+octet_length(r.envelope::text)>1048576 THEN EXIT;END IF;
+  rows:=rows||jsonb_build_array(jsonb_build_object('position',r.source_position::text,'event_id',r.id,'envelope',r.envelope,'raw_envelope',r.envelope::text));n:=n+1;bytes:=bytes+octet_length(r.envelope::text);
+ END LOOP;RETURN rows;
+END $fn$;
+CREATE FUNCTION "${schema}".private_capture_accept(scope uuid,purpose_name text,marker uuid,proof jsonb) RETURNS uuid LANGUAGE plpgsql AS $fn$
+DECLARE status jsonb;id uuid:=(proof->>'evidence_id')::uuid;
+BEGIN
+ LOCK TABLE "${schema}".company_event_outbox IN SHARE ROW EXCLUSIVE MODE;
+ status:="${schema}".private_capture_status(scope,marker,purpose_name);
+ IF jsonb_typeof(proof)<>'object' OR id IS NULL OR proof->>'source_marker_id' IS DISTINCT FROM marker::text OR proof->>'tenant_id' IS DISTINCT FROM scope::text OR proof->>'purpose' IS DISTINCT FROM purpose_name
+ OR proof->>'producer_generation' IS DISTINCT FROM status->>'producer_generation' OR proof->>'through_position' IS DISTINCT FROM status->>'through_position'
+ OR proof->>'source_lsn' IS DISTINCT FROM status->>'source_lsn' OR proof->>'source_frame_count' IS DISTINCT FROM status->>'source_frame_count'
+ OR proof->>'archive_sha256' IS DISTINCT FROM status->>'source_sha256' OR proof->>'restore_sha256' IS DISTINCT FROM status->>'source_sha256'
+ OR proof->>'expected_partitions' IS DISTINCT FROM '1' OR proof->>'covered_partitions' IS DISTINCT FROM '1' OR proof->>'quarantined_rows' IS DISTINCT FROM '0'
+ OR status->>'confirmed_flush_lsn' IS NULL OR (status->>'confirmed_flush_lsn')::pg_lsn<(status->>'source_lsn')::pg_lsn
+ OR proof->>'connector_lsn' IS NULL OR proof->>'connector_commit_lsn' IS NULL OR (proof->>'connector_lsn')::pg_lsn<(status->>'source_lsn')::pg_lsn OR (proof->>'connector_commit_lsn')::pg_lsn<(status->>'source_lsn')::pg_lsn
+ OR proof->>'restore_verified_at' IS NULL OR (proof->>'restore_verified_at')::timestamptz>clock_timestamp() OR COALESCE(proof->>'accepted_by','')=''
+ OR proof->>'acceptance_sha256' IS NULL OR proof->>'acceptance_sha256' !~ '^[a-f0-9]{64}$'
+ OR proof->>'expires_at' IS NULL OR (proof->>'expires_at')::timestamptz<=clock_timestamp() OR (proof->>'expires_at')::timestamptz>clock_timestamp()+interval '1 hour' THEN RAISE EXCEPTION 'Private capture marker/partition/restore acceptance mismatch';END IF;
+ INSERT INTO "${schema}".private_capture_evidence(id,source_marker_id,source_lsn,tenant_id,purpose,source_frame_count,producer_generation,through_position,expected_partitions,covered_partitions,archive_sha256,restore_sha256,restore_verified_at,quarantined_rows,accepted_at,expires_at,accepted_by,acceptance_sha256)
+ VALUES(id,marker,status->>'source_lsn',scope,purpose_name,(status->>'source_frame_count')::bigint,(status->>'producer_generation')::bigint,(status->>'through_position')::bigint,1,1,status->>'source_sha256',status->>'source_sha256',(proof->>'restore_verified_at')::timestamptz,0,clock_timestamp(),(proof->>'expires_at')::timestamptz,proof->>'accepted_by',proof->>'acceptance_sha256');RETURN id;
+END $fn$;
+REVOKE ALL ON FUNCTION "${schema}".private_capture_status(uuid,uuid,text),"${schema}".private_capture_batch(uuid,uuid,text,bigint,integer),"${schema}".private_capture_accept(uuid,text,uuid,jsonb) FROM PUBLIC;
+
+CREATE FUNCTION "${schema}".private_assert_retirement() RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE a record;e record;d record;tab text;seen integer:=0;
+BEGIN
+ -- Exact table locks make the digest and dependency checks a commit-safe cutoff.
+ LOCK TABLE "${schema}".audit_log,"${schema}".outbox_event,"${schema}".webhook_delivery_log,"${schema}".employee_finance_outbox IN ACCESS EXCLUSIVE MODE;
+ FOR a IN SELECT * FROM "${schema}".private_source_cutover ORDER BY tenant_id FOR UPDATE LOOP
+  seen:=seen+1;
+  IF NOT a.writers_fenced OR a.state<>'FENCED' OR NOT a.reader_switch_complete OR NOT a.business_state_complete OR NOT a.pending_ownership_complete THEN RAISE EXCEPTION 'Source cutover incomplete';END IF;
+  FOREACH tab IN ARRAY ARRAY['audit_log','outbox_event','webhook_delivery_log','employee_finance_outbox'] LOOP
+   SELECT * INTO e FROM "${schema}".private_legacy_export WHERE tenant_id=a.tenant_id AND producer_generation=a.producer_generation AND source_table=tab FOR UPDATE;
+   IF NOT FOUND THEN RAISE EXCEPTION 'Retirement manifest missing for %',tab;END IF;
+   SELECT * INTO d FROM "${schema}".private_source_digest(tab);
+   IF e.source_database<>current_database() OR e.source_schema<>'${schema}' OR e.source_version<>a.source_version OR e.row_count<>d.row_count OR e.source_sha256<>d.source_sha256
+    OR e.accepted_at IS NULL OR e.accepted_at>clock_timestamp() OR e.expires_at IS NULL OR e.expires_at<=clock_timestamp() OR e.revoked_at IS NOT NULL
+    OR e.accepted_by IS NULL OR length(e.accepted_by)=0 OR e.acceptance_sha256 IS NULL OR e.acceptance_sha256 !~ '^[a-f0-9]{64}$'
+    OR e.dependency_inventory_sha256 IS NULL OR e.dependency_inventory_sha256 !~ '^[a-f0-9]{64}$' OR e.dependency_inventory_sha256 IS DISTINCT FROM "${schema}".private_dependency_digest(tab)
+    OR NOT e.reader_switch_complete OR NOT e.business_state_complete OR NOT e.pending_ownership_complete THEN RAISE EXCEPTION 'Retirement source/evidence mismatch for %',tab;END IF;
+   IF NOT (e.verified_empty AND d.row_count=0) AND (e.archive_row_count IS DISTINCT FROM e.row_count OR e.archive_sha256 IS DISTINCT FROM e.source_sha256
+    OR e.restore_sha256 IS DISTINCT FROM e.source_sha256 OR e.restore_verified_at IS NULL OR e.restore_verified_at>e.accepted_at) THEN RAISE EXCEPTION 'Lossless archive and restore evidence required';END IF;
+  END LOOP;
+  PERFORM "${schema}".private_assert_pending_migration(a.tenant_id,a.producer_generation);
+  IF EXISTS(SELECT 1 FROM "${schema}".private_delivery_receipt WHERE tenant_id=a.tenant_id AND accepted_at IS NULL AND broker_owned_at IS NULL AND status NOT IN ('DELIVERED','DISABLED','PERMANENT','NO_DESTINATION')) THEN RAISE EXCEPTION 'Pending destination ownership unresolved';END IF;
+  IF NOT EXISTS(SELECT 1 FROM "${schema}".private_capture_evidence WHERE tenant_id=a.tenant_id AND purpose='audit' AND through_position>=(SELECT COALESCE(max(o.source_position),0) FROM "${schema}".company_event_outbox o WHERE source_tenant_id=a.tenant_id AND event_stream='audit' AND NOT EXISTS(SELECT 1 FROM "${schema}".private_capture_pulse p WHERE p.event_id=o.id AND p.published_position=o.source_position AND p.purpose=o.event_stream AND p.frame_sha256=encode(sha256(convert_to(o.event_envelope::text,'UTF8')),'hex'))) AND producer_generation=a.producer_generation AND accepted_at<=clock_timestamp() AND accepted_at>clock_timestamp()-interval '10 minutes' AND expires_at>clock_timestamp() AND revoked_at IS NULL AND expected_partitions=covered_partitions AND quarantined_rows=0)
+    OR NOT EXISTS(SELECT 1 FROM "${schema}".private_capture_evidence WHERE tenant_id=a.tenant_id AND purpose='delivery' AND through_position>=(SELECT COALESCE(max(o.source_position),0) FROM "${schema}".company_event_outbox o WHERE source_tenant_id=a.tenant_id AND event_stream='delivery' AND NOT EXISTS(SELECT 1 FROM "${schema}".private_capture_pulse p WHERE p.event_id=o.id AND p.published_position=o.source_position AND p.purpose=o.event_stream AND p.frame_sha256=encode(sha256(convert_to(o.event_envelope::text,'UTF8')),'hex'))) AND producer_generation=a.producer_generation AND accepted_at<=clock_timestamp() AND accepted_at>clock_timestamp()-interval '10 minutes' AND expires_at>clock_timestamp() AND revoked_at IS NULL AND expected_partitions=covered_partitions AND quarantined_rows=0) THEN RAISE EXCEPTION 'Private capture coverage incomplete';END IF;
+ END LOOP;
+ IF seen<>1 THEN RAISE EXCEPTION 'Retirement requires exactly one bound source authority';END IF;
+ IF EXISTS(SELECT 1 FROM "${schema}".separation s LEFT JOIN "${schema}".private_domain_receipt r ON r.tenant_id=s.tenant_id AND r.id=s.offboarding_event_id
+ WHERE s.offboarding_event_id IS NOT NULL AND (r.id IS NULL OR s.offboarded_at IS NULL)) THEN RAISE EXCEPTION 'Offboarding receipt parity incomplete';END IF;
+END $fn$;
+REVOKE ALL ON "${schema}".private_source_cutover,"${schema}".private_capture_evidence,"${schema}".private_legacy_export FROM PUBLIC;
+REVOKE ALL ON FUNCTION "${schema}".private_assert_retirement(),"${schema}".private_fence_legacy(uuid,bigint),"${schema}".private_source_digest(text) FROM PUBLIC;
+ ]]></sql>
+ </changeSet>
+</databaseChangeLog>

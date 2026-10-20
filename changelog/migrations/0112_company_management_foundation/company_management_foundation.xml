@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0112-001-company-management-identity-and-assignment" author="kabipay-dev" runInTransaction="true">
+  <comment>Add local references and relationship state. Existing reporting_manager_id and authority readers remain unchanged until controlled cutover. btree_gist is required for concurrency-safe primary-period exclusion.</comment>
+  <sql splitStatements="false"><![CDATA[
+CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;
+ALTER TABLE "${schema}".employee ADD CONSTRAINT uq_employee_tenant_identity UNIQUE (tenant_id, id);
+
+CREATE TABLE "${schema}".actor_ref (
+ tenant_id UUID NOT NULL,
+ principal_id UUID NOT NULL,
+ display_name VARCHAR(255) NOT NULL CHECK (BTRIM(display_name) <> ''),
+ identity_version BIGINT NOT NULL CHECK (identity_version > 0),
+ last_verified_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY (tenant_id, principal_id)
+);
+-- Principals/employments in other databases are logical references, never SQL FKs.
+CREATE TABLE "${schema}".management_assignment (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ tenant_id UUID NOT NULL,
+ organization_id UUID NOT NULL,
+ subject_employee_id UUID NOT NULL,
+ subject_principal_id UUID NOT NULL,
+ manager_principal_id UUID NOT NULL,
+ subject_employment_ref_id UUID NOT NULL,
+ manager_employment_ref_id UUID NOT NULL,
+ manager_tenant_id UUID NOT NULL,
+ relationship_type VARCHAR(20) NOT NULL CHECK (relationship_type IN ('PRIMARY','FUNCTIONAL','REVIEWER','DELEGATE')),
+ status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','ACTIVE','SUSPENDED','ENDED')),
+ effective_from TIMESTAMPTZ NOT NULL,
+ effective_to TIMESTAMPTZ,
+ version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ CONSTRAINT uq_management_assignment_tenant_id UNIQUE (tenant_id, id),
+ CONSTRAINT fk_management_subject_employee FOREIGN KEY (tenant_id, subject_employee_id)
+  REFERENCES "${schema}".employee(tenant_id, id),
+ CONSTRAINT fk_management_subject_actor FOREIGN KEY (tenant_id, subject_principal_id)
+  REFERENCES "${schema}".actor_ref(tenant_id, principal_id),
+ CONSTRAINT fk_management_manager_actor FOREIGN KEY (tenant_id, manager_principal_id)
+  REFERENCES "${schema}".actor_ref(tenant_id, principal_id),
+ CONSTRAINT chk_management_different_person CHECK (subject_principal_id <> manager_principal_id),
+ CONSTRAINT chk_management_different_employment CHECK (subject_employment_ref_id <> manager_employment_ref_id),
+ CONSTRAINT chk_management_effective_period CHECK (effective_to IS NULL OR effective_to > effective_from),
+ CONSTRAINT ex_management_primary_period EXCLUDE USING gist (
+  tenant_id public.gist_uuid_ops WITH =,
+  subject_employee_id public.gist_uuid_ops WITH =,
+  tstzrange(effective_from,effective_to,'[)') WITH &&
+ ) WHERE (relationship_type = 'PRIMARY' AND status = 'ACTIVE')
+);
+CREATE INDEX idx_management_subject ON "${schema}".management_assignment(tenant_id, subject_employee_id, status);
+CREATE INDEX idx_management_manager ON "${schema}".management_assignment(tenant_id, manager_principal_id, status);
+
+CREATE TABLE "${schema}".assignment_capability (
+ tenant_id UUID NOT NULL,
+ assignment_id UUID NOT NULL,
+ capability_code VARCHAR(100) NOT NULL CHECK (capability_code ~ '^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$'),
+ visibility_policy_ref UUID,
+ PRIMARY KEY (tenant_id, assignment_id, capability_code),
+ CONSTRAINT fk_assignment_capability_tenant FOREIGN KEY (tenant_id, assignment_id)
+  REFERENCES "${schema}".management_assignment(tenant_id, id)
+);
+-- No backfill or authority switch: the future relationship writer must verify identity,
+-- organization membership, canonical capabilities and a versioned global graph before
+-- activating a relationship. Local constraints alone cannot detect cross-database cycles.
+  ]]></sql>
+  <rollback>
+   <sql splitStatements="false"><![CDATA[
+DROP TABLE "${schema}".assignment_capability;
+DROP TABLE "${schema}".management_assignment;
+DROP TABLE "${schema}".actor_ref;
+ALTER TABLE "${schema}".employee DROP CONSTRAINT uq_employee_tenant_identity;
+-- btree_gist is database-scoped and may be used by other schemas: retain the extension.
+   ]]></sql>
+  </rollback>
+ </changeSet>
+</databaseChangeLog>

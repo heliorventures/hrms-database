@@ -1,0 +1,440 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0124-001-private-event-control" author="kabipay-dev" runInTransaction="true">
+ <sql splitStatements="false"><![CDATA[
+ALTER TABLE kabipay_ops.organization_outbox ADD COLUMN source_position bigserial NOT NULL;
+ALTER TABLE kabipay_ops.organization_outbox ADD COLUMN event_stream text NOT NULL DEFAULT 'control' CHECK(event_stream IN ('control','operator_audit'));
+ALTER TABLE kabipay_ops.organization_outbox ALTER COLUMN source_tenant_id DROP NOT NULL,ALTER COLUMN actor_principal_id DROP NOT NULL;
+ALTER TABLE kabipay_ops.organization_outbox ADD COLUMN routed_envelope jsonb;
+UPDATE kabipay_ops.organization_outbox SET routed_envelope=jsonb_build_object('route_schema_version',1,'source_database',current_database(),'source_schema','kabipay_ops','event',(to_jsonb(organization_outbox)-ARRAY['routed_envelope','event_stream','source_position'])||jsonb_build_object('created_at',to_char(organization_outbox.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS')||CASE WHEN to_char(organization_outbox.created_at AT TIME ZONE 'UTC','US')='000000' THEN '' ELSE '.'||rtrim(to_char(organization_outbox.created_at AT TIME ZONE 'UTC','US'),'0') END||'Z'));
+ALTER TABLE kabipay_ops.organization_outbox ALTER COLUMN routed_envelope SET NOT NULL;
+ALTER TABLE kabipay_ops.organization_outbox ADD CONSTRAINT control_private_stream_scope CHECK(event_stream<>'control' OR (source_tenant_id IS NOT NULL AND actor_principal_id IS NOT NULL));
+CREATE FUNCTION kabipay_ops.private_control_envelope() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE a record;
+BEGIN
+ IF NEW.event_stream='control' THEN NEW.routed_envelope:=jsonb_build_object('route_schema_version',1,'source_database',current_database(),'source_schema','kabipay_ops','event',(to_jsonb(NEW)-ARRAY['routed_envelope','event_stream','source_position'])||jsonb_build_object('created_at',to_char(NEW.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS')||CASE WHEN to_char(NEW.created_at AT TIME ZONE 'UTC','US')='000000' THEN '' ELSE '.'||rtrim(to_char(NEW.created_at AT TIME ZONE 'UTC','US'),'0') END||'Z'));
+ ELSE
+  SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=(NEW.payload->>'tenant_id')::uuid FOR SHARE;
+  IF NOT FOUND OR NEW.payload->>'source_generation' IS DISTINCT FROM a.producer_generation::text THEN RAISE EXCEPTION 'Metadata private source generation mismatch';END IF;
+  IF NEW.payload->>'purpose' IS DISTINCT FROM 'operator_audit' OR NEW.payload->>'event_id' IS DISTINCT FROM NEW.id::text
+   OR NEW.payload->>'schema_version' IS DISTINCT FROM '1' OR NOT NEW.payload ?& ARRAY['record_id','tenant_id','key_id','nonce','ciphertext','source_sha256','source_size','frame_index','frame_count'] THEN RAISE EXCEPTION 'Operator stream requires encrypted scoped envelope';END IF;
+  NEW.routed_envelope:=NEW.payload;
+ END IF;RETURN NEW;
+END $fn$;
+CREATE TRIGGER private_control_envelope BEFORE INSERT ON kabipay_ops.organization_outbox FOR EACH ROW EXECUTE FUNCTION kabipay_ops.private_control_envelope();
+CREATE FUNCTION kabipay_ops.private_control_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE e record;a record;proof uuid;scope uuid;
+BEGIN
+ IF OLD.event_stream='operator_audit' THEN
+  IF TG_OP='UPDATE' THEN RAISE EXCEPTION 'Operator private envelope is immutable';END IF;
+  scope:=(OLD.payload->>'tenant_id')::uuid;proof:=NULLIF(current_setting('kabipay.private_cleanup_evidence',true),'')::uuid;
+  SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;
+  SELECT * INTO e FROM kabipay_ops.private_capture_evidence WHERE id=proof AND tenant_id=scope AND purpose='operator_audit' FOR SHARE;
+  IF proof IS NULL OR a.tenant_id IS NULL OR e.id IS NULL OR e.producer_generation<>a.producer_generation OR e.through_position<OLD.source_position
+  OR OLD.payload->>'source_generation' IS DISTINCT FROM e.producer_generation::text
+  OR e.accepted_at>clock_timestamp() OR e.accepted_at<=clock_timestamp()-interval '10 minutes' OR e.expires_at<=clock_timestamp() OR e.revoked_at IS NOT NULL
+  OR e.expected_partitions<>e.covered_partitions OR e.quarantined_rows<>0 THEN RAISE EXCEPTION 'Operator private cleanup evidence required';END IF;RETURN OLD;
+ END IF;
+ IF TG_OP='UPDATE' AND NEW.event_stream IS DISTINCT FROM OLD.event_stream THEN RAISE EXCEPTION 'Metadata stream is immutable';END IF;
+ RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $fn$;
+CREATE TRIGGER private_control_guard BEFORE UPDATE OR DELETE ON kabipay_ops.organization_outbox FOR EACH ROW EXECUTE FUNCTION kabipay_ops.private_control_guard();
+CREATE TABLE kabipay_ops.private_source_cutover (
+ tenant_id uuid PRIMARY KEY,source_database text NOT NULL DEFAULT current_database(),source_schema text NOT NULL DEFAULT 'kabipay_ops',
+ producer_generation bigint NOT NULL DEFAULT 1 CHECK(producer_generation BETWEEN 1 AND 9007199254740991),
+ state text NOT NULL DEFAULT 'PREPARED' CHECK(state IN ('PREPARED','FENCED','RETIRED')),
+ writers_fenced boolean NOT NULL DEFAULT false,reader_switch_complete boolean NOT NULL DEFAULT false,
+ business_state_complete boolean NOT NULL DEFAULT false,pending_ownership_complete boolean NOT NULL DEFAULT false,
+ source_version text NOT NULL DEFAULT 'private-events-v1',updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ CHECK(source_database=current_database() AND source_schema='kabipay_ops')
+);
+
+CREATE TABLE kabipay_ops.private_capture_source_marker (
+ id uuid PRIMARY KEY,tenant_id uuid NOT NULL,producer_generation bigint NOT NULL,through_position bigint NOT NULL CHECK(through_position>=0),
+ source_lsn text NOT NULL CHECK(source_lsn ~ '^[0-9A-F]+/[0-9A-F]+$'),created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(id,tenant_id,producer_generation,through_position,source_lsn)
+);
+CREATE FUNCTION kabipay_ops.private_capture_tick(scope uuid,expected_generation bigint) RETURNS uuid LANGUAGE plpgsql AS $fn$
+DECLARE a record;marker uuid:=gen_random_uuid();bound bigint;
+BEGIN
+ LOCK TABLE kabipay_ops.organization_outbox IN SHARE ROW EXCLUSIVE MODE;
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ IF NOT FOUND OR a.producer_generation<>expected_generation THEN RAISE EXCEPTION 'Capture source generation mismatch';END IF;
+ SELECT COALESCE(max(source_position),0) INTO bound FROM kabipay_ops.organization_outbox;
+ INSERT INTO kabipay_ops.private_capture_source_marker(id,tenant_id,producer_generation,through_position,source_lsn)
+ VALUES(marker,scope,expected_generation,bound,pg_current_wal_insert_lsn()::text);RETURN marker;
+END $fn$;
+REVOKE ALL ON kabipay_ops.private_capture_source_marker FROM PUBLIC;
+REVOKE ALL ON FUNCTION kabipay_ops.private_capture_tick(uuid,bigint) FROM PUBLIC;
+
+-- Post-cutoff encrypted pulse on the existing fixed private topic.
+CREATE TABLE kabipay_ops.private_capture_pulse (
+ marker_id uuid NOT NULL REFERENCES kabipay_ops.private_capture_source_marker(id),purpose text NOT NULL CHECK(purpose='operator_audit'),
+ event_id uuid UNIQUE,published_position bigint,frame_sha256 char(64),PRIMARY KEY(marker_id,purpose),
+ CHECK((event_id IS NULL AND published_position IS NULL AND frame_sha256 IS NULL) OR (event_id IS NOT NULL AND published_position>0 AND frame_sha256 ~ '^[a-f0-9]{64}$'))
+);
+CREATE FUNCTION kabipay_ops.private_capture_pulse_spec(scope uuid,marker uuid,purpose_name text) RETURNS jsonb LANGUAGE plpgsql SET TimeZone='UTC' AS $fn$
+DECLARE a record;m record;p record;raw text;stamp text;frame jsonb;
+BEGIN
+ IF NOT(purpose_name='operator_audit') THEN RAISE EXCEPTION 'Invalid capture pulse purpose';END IF;
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO m FROM kabipay_ops.private_capture_source_marker WHERE id=marker AND tenant_id=scope FOR SHARE;
+ IF a.tenant_id IS NULL OR m.id IS NULL OR a.producer_generation<>m.producer_generation OR a.producer_generation>9007199254740991 THEN RAISE EXCEPTION 'Capture pulse source generation changed';END IF;
+ INSERT INTO kabipay_ops.private_capture_pulse(marker_id,purpose) VALUES(marker,purpose_name) ON CONFLICT DO NOTHING;
+ SELECT * INTO p FROM kabipay_ops.private_capture_pulse WHERE marker_id=marker AND purpose=purpose_name FOR UPDATE;
+ stamp:=to_char(m.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"');
+ raw:=jsonb_build_object('id',marker,'tenant_id',scope,'source_generation',m.producer_generation,'purpose',purpose_name,'through_position',m.through_position::text,'source_lsn',m.source_lsn,'created_at',stamp)::text;
+ IF p.event_id IS NOT NULL THEN SELECT payload INTO frame FROM kabipay_ops.organization_outbox WHERE id=p.event_id;END IF;
+ RETURN jsonb_build_object('raw_source',raw,'occurred_at',stamp,'source_generation',m.producer_generation,'event_id',p.event_id,'published_position',p.published_position::text,'published_envelope',frame);
+END $fn$;
+CREATE FUNCTION kabipay_ops.private_capture_pulse_publish(scope uuid,marker uuid,purpose_name text,frame jsonb) RETURNS bigint LANGUAGE plpgsql SET TimeZone='UTC' AS $fn$
+DECLARE spec jsonb;p record;pos bigint;hash text;bytes integer;
+BEGIN
+ spec:=kabipay_ops.private_capture_pulse_spec(scope,marker,purpose_name);
+ SELECT * INTO p FROM kabipay_ops.private_capture_pulse WHERE marker_id=marker AND purpose=purpose_name FOR UPDATE;
+ bytes:=octet_length(convert_to(spec->>'raw_source','UTF8'));
+ IF frame IS NULL OR jsonb_typeof(frame)<>'object' OR octet_length(frame::text)>8192 THEN RAISE EXCEPTION 'Invalid capture pulse frame';END IF;
+ IF (SELECT count(*) FROM jsonb_object_keys(frame))<>17 OR NOT frame ?& ARRAY['schema_version','event_id','record_id','tenant_id','purpose','source_generation','source_kind','resource_type','resource_id','occurred_at','key_id','source_sha256','source_size','frame_index','frame_count','nonce','ciphertext']
+ OR EXISTS(SELECT 1 FROM jsonb_each(frame) x WHERE x.key NOT IN ('schema_version','source_generation','source_size','frame_index','frame_count') AND jsonb_typeof(x.value)<>'string')
+ OR frame->>'schema_version' IS DISTINCT FROM '1' OR jsonb_typeof(frame->'schema_version')<>'number'
+ OR frame->>'event_id' IS NULL OR frame->>'event_id'='00000000-0000-0000-0000-000000000000' OR frame->>'event_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+ OR frame->>'record_id' IS DISTINCT FROM marker::text OR frame->>'resource_id' IS DISTINCT FROM marker::text
+ OR frame->>'tenant_id' IS DISTINCT FROM scope::text OR frame->>'purpose' IS DISTINCT FROM purpose_name
+ OR frame->>'source_generation' IS DISTINCT FROM spec->>'source_generation' OR jsonb_typeof(frame->'source_generation')<>'number'
+ OR frame->>'source_kind' IS DISTINCT FROM 'capture_marker' OR frame->>'resource_type' IS DISTINCT FROM 'private_capture_marker'
+ OR frame->>'occurred_at' IS DISTINCT FROM spec->>'occurred_at'
+ OR frame->>'source_sha256' IS DISTINCT FROM encode(sha256(convert_to(spec->>'raw_source','UTF8')),'hex')
+ OR frame->>'source_size' IS DISTINCT FROM bytes::text OR jsonb_typeof(frame->'source_size')<>'number'
+ OR frame->>'frame_index' IS DISTINCT FROM '0' OR jsonb_typeof(frame->'frame_index')<>'number'
+ OR frame->>'frame_count' IS DISTINCT FROM '1' OR jsonb_typeof(frame->'frame_count')<>'number'
+ OR COALESCE(frame->>'key_id','') !~ '^[A-Za-z0-9_.:-]{1,128}$'
+ OR COALESCE(frame->>'nonce','') !~ '^[A-Za-z0-9+/]{16}$'
+ OR COALESCE(frame->>'ciphertext','') !~ '^[A-Za-z0-9+/]+={0,2}$'
+ THEN RAISE EXCEPTION 'Capture pulse immutable binding mismatch';END IF;
+ IF octet_length(decode(frame->>'nonce','base64'))<>12 OR octet_length(decode(frame->>'ciphertext','base64'))<>bytes+16 OR replace(encode(decode(frame->>'ciphertext','base64'),'base64'),chr(10),'')<>frame->>'ciphertext' THEN RAISE EXCEPTION 'Invalid capture pulse frame bytes';END IF;
+ hash:=encode(sha256(convert_to(frame::text,'UTF8')),'hex');
+ IF p.published_position IS NOT NULL THEN
+  IF p.event_id IS DISTINCT FROM (frame->>'event_id')::uuid OR p.frame_sha256 IS DISTINCT FROM hash THEN RAISE EXCEPTION 'Conflicting capture pulse retry';END IF;
+  RETURN p.published_position;
+ END IF;
+ INSERT INTO kabipay_ops.organization_outbox(id,organization_id,source_tenant_id,actor_principal_id,aggregate_id,aggregate_version,event_type,schema_version,payload,event_stream) VALUES((frame->>'event_id')::uuid,NULL,NULL,NULL,marker,1,'private.operator_audit.v1',1,frame,purpose_name) RETURNING source_position INTO pos;
+ IF pos<=(SELECT through_position FROM kabipay_ops.private_capture_source_marker WHERE id=marker) THEN RAISE EXCEPTION 'Capture pulse must follow locked cutoff';END IF;
+ UPDATE kabipay_ops.private_capture_pulse SET event_id=(frame->>'event_id')::uuid,published_position=pos,frame_sha256=hash WHERE marker_id=marker AND purpose=purpose_name;
+ RETURN pos;
+END $fn$;
+REVOKE ALL ON kabipay_ops.private_capture_pulse FROM PUBLIC;
+REVOKE ALL ON FUNCTION kabipay_ops.private_capture_pulse_spec(uuid,uuid,text),kabipay_ops.private_capture_pulse_publish(uuid,uuid,text,jsonb) FROM PUBLIC;
+CREATE TABLE kabipay_ops.private_capture_evidence (
+ id uuid PRIMARY KEY,source_marker_id uuid NOT NULL,source_lsn text NOT NULL,tenant_id uuid NOT NULL,purpose text NOT NULL CHECK(purpose IN ('operator_audit')),
+ source_frame_count bigint NOT NULL DEFAULT 0 CHECK(source_frame_count>=0),producer_generation bigint NOT NULL CHECK(producer_generation>0),through_position bigint NOT NULL CHECK(through_position>=0),
+ expected_partitions integer NOT NULL CHECK(expected_partitions>0),covered_partitions integer NOT NULL CHECK(covered_partitions>=0),
+ archive_sha256 char(64) NOT NULL CHECK(archive_sha256 ~ '^[a-f0-9]{64}$'),restore_sha256 char(64) NOT NULL,
+ restore_verified_at timestamptz NOT NULL,quarantined_rows bigint NOT NULL DEFAULT 0 CHECK(quarantined_rows>=0),
+ accepted_at timestamptz NOT NULL,expires_at timestamptz NOT NULL,revoked_at timestamptz,
+ accepted_by text NOT NULL CHECK(length(accepted_by)>0),acceptance_sha256 char(64) NOT NULL CHECK(acceptance_sha256 ~ '^[a-f0-9]{64}$'),
+ FOREIGN KEY(source_marker_id,tenant_id,producer_generation,through_position,source_lsn) REFERENCES kabipay_ops.private_capture_source_marker(id,tenant_id,producer_generation,through_position,source_lsn),
+ CHECK(expected_partitions=1 AND covered_partitions<=1),CHECK(archive_sha256=restore_sha256),CHECK(expires_at>accepted_at AND expires_at<=accepted_at+interval '1 hour'),CHECK(restore_verified_at<=accepted_at)
+);
+CREATE TABLE kabipay_ops.private_legacy_export (
+ id uuid PRIMARY KEY,tenant_id uuid NOT NULL,source_database text NOT NULL DEFAULT current_database(),source_schema text NOT NULL DEFAULT 'kabipay_ops',
+ source_table text NOT NULL CHECK(source_table IN ('operator_audit_log')),
+ producer_generation bigint NOT NULL CHECK(producer_generation>0),source_version text NOT NULL,
+ row_count bigint NOT NULL CHECK(row_count>=0),source_sha256 char(64) NOT NULL CHECK(source_sha256 ~ '^[a-f0-9]{64}$'),
+ archive_row_count bigint,archive_sha256 char(64),restore_sha256 char(64),restore_verified_at timestamptz,
+ pending_ownership_complete boolean NOT NULL DEFAULT false,business_state_complete boolean NOT NULL DEFAULT false,
+ reader_switch_complete boolean NOT NULL DEFAULT false,dependency_inventory_sha256 char(64),
+ verified_empty boolean NOT NULL DEFAULT false,accepted_at timestamptz,expires_at timestamptz,revoked_at timestamptz,
+ accepted_by text,acceptance_sha256 char(64),created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(tenant_id,producer_generation,source_table),CHECK(source_database=current_database() AND source_schema='kabipay_ops')
+);
+-- A bounded rolling digest includes every full raw JSONB row, its UUID and source identity.
+-- This is independent of 0121's deliberately lossy organization projection export.
+CREATE FUNCTION kabipay_ops.private_source_digest(tab text) RETURNS TABLE(row_count bigint,source_sha256 text) LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE r record;h bytea;n bigint:=0;
+BEGIN
+ IF tab NOT IN ('operator_audit_log') THEN RAISE EXCEPTION 'Unknown private export table';END IF;
+ h:=sha256(convert_to(current_database()||chr(31)||'kabipay_ops'||chr(31)||tab,'UTF8'));
+ FOR r IN EXECUTE format('SELECT id,to_jsonb(t)::text AS raw FROM %I.%I t ORDER BY id','kabipay_ops',tab) LOOP
+  h:=sha256(h||convert_to(r.id::text,'UTF8')||sha256(convert_to(r.raw,'UTF8')));n:=n+1;
+ END LOOP;RETURN QUERY SELECT n,encode(h,'hex');
+END $fn$;
+
+CREATE FUNCTION kabipay_ops.private_operator_write_fence() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE a record;
+BEGIN
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover FOR SHARE;
+ IF FOUND AND a.writers_fenced THEN RAISE EXCEPTION 'Legacy operator producer generation is fenced' USING ERRCODE='55000';END IF;
+ RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $fn$;
+CREATE TRIGGER private_operator_write_fence BEFORE INSERT OR UPDATE OR DELETE ON kabipay_ops.operator_audit_log FOR EACH ROW EXECUTE FUNCTION kabipay_ops.private_operator_write_fence();
+CREATE FUNCTION kabipay_ops.private_fence_legacy(scope uuid,expected_generation bigint) RETURNS void LANGUAGE plpgsql AS $fn$
+BEGIN
+ LOCK TABLE kabipay_ops.operator_audit_log IN ACCESS EXCLUSIVE MODE;
+ PERFORM 1 FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope AND producer_generation=expected_generation AND state='PREPARED' FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'Metadata source generation mismatch';END IF;
+ LOCK TABLE kabipay_ops.operator_audit_log IN ACCESS EXCLUSIVE MODE;
+ UPDATE kabipay_ops.private_source_cutover SET writers_fenced=true,state='FENCED',updated_at=clock_timestamp() WHERE tenant_id=scope;
+END $fn$;
+CREATE FUNCTION kabipay_ops.private_reject_truncate() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN RAISE EXCEPTION 'Private/legacy history requires accepted retirement';END $fn$;
+CREATE TRIGGER private_operator_no_truncate BEFORE TRUNCATE ON kabipay_ops.operator_audit_log EXECUTE FUNCTION kabipay_ops.private_reject_truncate();
+CREATE TRIGGER private_control_no_truncate BEFORE TRUNCATE ON kabipay_ops.organization_outbox EXECUTE FUNCTION kabipay_ops.private_reject_truncate();
+
+-- Operational capture state is compacted only behind fresh accepted external
+-- archive+restore evidence. One rolling watermark replaces unbounded local logs.
+CREATE TABLE kabipay_ops.private_capture_compaction (
+ tenant_id uuid NOT NULL,purpose text NOT NULL CHECK(purpose='operator_audit'),producer_generation bigint NOT NULL,through_position bigint NOT NULL,
+ evidence_id uuid NOT NULL REFERENCES kabipay_ops.private_capture_evidence(id),removed_rows bigint NOT NULL DEFAULT 0,
+ audit_sha256 char(64) NOT NULL,updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),PRIMARY KEY(tenant_id,purpose)
+);
+CREATE FUNCTION kabipay_ops.private_capture_prune(scope uuid,purpose_name text,proof uuid,batch_size integer DEFAULT 100) RETURNS integer LANGUAGE plpgsql AS $fn$
+DECLARE a record;e record;r record;h bytea;n integer:=0;total bigint;
+BEGIN
+ IF NOT(purpose_name='operator_audit') OR batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid capture prune binding';END IF;
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO e FROM kabipay_ops.private_capture_evidence WHERE id=proof AND tenant_id=scope AND purpose=purpose_name FOR SHARE;
+ IF a.tenant_id IS NULL OR e.id IS NULL OR a.producer_generation<>e.producer_generation OR e.revoked_at IS NOT NULL
+ OR e.accepted_at>clock_timestamp() OR e.accepted_at<=clock_timestamp()-interval '10 minutes' OR e.expires_at<=clock_timestamp()
+ OR e.archive_sha256 IS DISTINCT FROM e.restore_sha256 OR e.restore_verified_at>e.accepted_at OR e.expected_partitions<>e.covered_partitions OR e.quarantined_rows<>0 THEN RAISE EXCEPTION 'Fresh private archive proof required for compaction';END IF;
+ INSERT INTO kabipay_ops.private_capture_compaction(tenant_id,purpose,producer_generation,through_position,evidence_id,audit_sha256)
+ VALUES(scope,purpose_name,a.producer_generation,e.through_position,proof,encode(sha256(convert_to(current_database()||chr(31)||'kabipay_ops'||chr(31)||scope::text||chr(31)||purpose_name,'UTF8')),'hex')) ON CONFLICT DO NOTHING;
+ SELECT decode(audit_sha256,'hex'),removed_rows INTO h,total FROM kabipay_ops.private_capture_compaction WHERE tenant_id=scope AND purpose=purpose_name FOR UPDATE;
+ -- Release the former watermark's evidence FK before selecting old evidence.
+ UPDATE kabipay_ops.private_capture_compaction SET evidence_id=proof,producer_generation=a.producer_generation,through_position=e.through_position WHERE tenant_id=scope AND purpose=purpose_name;
+ FOR r IN SELECT c.* FROM kabipay_ops.private_outbox_cleanup_receipt c JOIN kabipay_ops.private_capture_evidence old ON old.id=c.evidence_id
+ WHERE c.tenant_id=scope AND c.purpose=purpose_name AND old.id<>proof AND old.expires_at<clock_timestamp() AND old.revoked_at IS NULL AND old.through_position<=e.through_position
+ ORDER BY c.created_at,c.id LIMIT batch_size FOR UPDATE OF c SKIP LOCKED LOOP
+  h:=sha256(h||convert_to('cleanup'||to_jsonb(r)::text,'UTF8'));DELETE FROM kabipay_ops.private_outbox_cleanup_receipt WHERE id=r.id;n:=n+1;
+ END LOOP;
+ FOR r IN SELECT old.* FROM kabipay_ops.private_capture_evidence old WHERE old.tenant_id=scope AND old.purpose=purpose_name AND old.id<>proof
+ AND old.expires_at<clock_timestamp() AND old.revoked_at IS NULL AND old.through_position<=e.through_position
+ AND NOT EXISTS(SELECT 1 FROM kabipay_ops.private_outbox_cleanup_receipt c WHERE c.evidence_id=old.id)
+ AND NOT EXISTS(SELECT 1 FROM kabipay_ops.private_capture_compaction c WHERE c.evidence_id=old.id)
+ ORDER BY old.accepted_at,old.id LIMIT (batch_size-n) FOR UPDATE OF old SKIP LOCKED LOOP
+  h:=sha256(h||convert_to('evidence'||to_jsonb(r)::text,'UTF8'));DELETE FROM kabipay_ops.private_capture_evidence WHERE id=r.id;n:=n+1;
+ END LOOP;
+ FOR r IN SELECT p.* FROM kabipay_ops.private_capture_pulse p JOIN kabipay_ops.private_capture_source_marker m ON m.id=p.marker_id
+ WHERE m.tenant_id=scope AND p.purpose=purpose_name AND m.id<>e.source_marker_id AND m.created_at<clock_timestamp()-interval '1 hour'
+ AND (p.published_position IS NULL OR p.published_position<=e.through_position)
+ AND NOT EXISTS(SELECT 1 FROM kabipay_ops.organization_outbox o WHERE o.id=p.event_id)
+ AND NOT EXISTS(SELECT 1 FROM kabipay_ops.private_capture_evidence old WHERE old.source_marker_id=m.id AND old.purpose=purpose_name)
+ ORDER BY m.created_at,m.id LIMIT (batch_size-n) FOR UPDATE OF p SKIP LOCKED LOOP
+  h:=sha256(h||convert_to('pulse'||to_jsonb(r)::text,'UTF8'));DELETE FROM kabipay_ops.private_capture_pulse WHERE marker_id=r.marker_id AND purpose=r.purpose;n:=n+1;
+ END LOOP;
+ FOR r IN SELECT m.* FROM kabipay_ops.private_capture_source_marker m WHERE m.tenant_id=scope AND m.id<>e.source_marker_id
+ AND m.created_at<clock_timestamp()-interval '1 hour' AND m.through_position<=e.through_position
+ AND NOT EXISTS(SELECT 1 FROM kabipay_ops.private_capture_evidence old WHERE old.source_marker_id=m.id)
+ AND NOT EXISTS(SELECT 1 FROM kabipay_ops.private_capture_pulse p WHERE p.marker_id=m.id)
+ ORDER BY m.created_at,m.id LIMIT (batch_size-n) FOR UPDATE OF m SKIP LOCKED LOOP
+  h:=sha256(h||convert_to('marker'||to_jsonb(r)::text,'UTF8'));DELETE FROM kabipay_ops.private_capture_source_marker WHERE id=r.id;n:=n+1;
+ END LOOP;
+ UPDATE kabipay_ops.private_capture_compaction SET audit_sha256=encode(h,'hex'),removed_rows=total+n,updated_at=clock_timestamp() WHERE tenant_id=scope AND purpose=purpose_name;
+ RETURN n;
+END $fn$;
+REVOKE ALL ON kabipay_ops.private_capture_compaction FROM PUBLIC;
+REVOKE ALL ON FUNCTION kabipay_ops.private_capture_prune(uuid,text,uuid,integer) FROM PUBLIC;
+CREATE FUNCTION kabipay_ops.private_dependency_digest(tab text) RETURNS text LANGUAGE plpgsql AS $fn$
+DECLARE rel regclass;body text;
+BEGIN
+ IF NOT tab=ANY(ARRAY['operator_audit_log']) THEN RAISE EXCEPTION 'Unknown retirement dependency target';END IF;
+ rel:=format('%I.%I','kabipay_ops',tab)::regclass;
+ SELECT string_agg(x.line,E'\n' ORDER BY x.line) INTO body FROM (
+ SELECT 'relation:'||c.relowner::regrole::text||':'||COALESCE(c.relacl::text,'')||':'||c.relrowsecurity::text AS line FROM pg_class c WHERE c.oid=rel
+ UNION ALL SELECT 'column:'||a.attnum||':'||a.attname||':'||format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull||':'||COALESCE(pg_get_expr(d.adbin,d.adrelid),'') FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid=rel AND a.attnum>0 AND NOT a.attisdropped
+ UNION ALL SELECT 'dependency:'||pg_describe_object(d.classid,d.objid,d.objsubid)||':'||d.deptype::text FROM pg_depend d WHERE d.refclassid='pg_class'::regclass AND d.refobjid=rel
+ UNION ALL SELECT 'constraint:'||pg_get_constraintdef(c.oid,true) FROM pg_constraint c WHERE c.conrelid=rel OR c.confrelid=rel
+ UNION ALL SELECT 'trigger:'||pg_get_triggerdef(t.oid,true)||':'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t WHERE t.tgrelid=rel AND NOT t.tgisinternal
+ UNION ALL SELECT 'policy:'||p.polname||':'||p.polcmd::text||':'||p.polroles::text||':'||COALESCE(pg_get_expr(p.polqual,p.polrelid),'')||':'||COALESCE(pg_get_expr(p.polwithcheck,p.polrelid),'') FROM pg_policy p WHERE p.polrelid=rel
+ UNION ALL SELECT 'publication:'||p.pubname||':'||COALESCE(r.prattrs::text,'')||':'||COALESCE(pg_get_expr(r.prqual,r.prrelid),'') FROM pg_publication_rel r JOIN pg_publication p ON p.oid=r.prpubid WHERE r.prrelid=rel
+ UNION ALL SELECT 'index:'||pg_get_indexdef(i.indexrelid) FROM pg_index i WHERE i.indrelid=rel
+ ) x;
+ RETURN encode(sha256(convert_to(COALESCE(body,''),'UTF8')),'hex');
+END $fn$;
+CREATE FUNCTION kabipay_ops.private_legacy_export_start(scope uuid,tab text,job uuid,expected_generation bigint) RETURNS uuid LANGUAGE plpgsql AS $fn$
+DECLARE a record;d record;prior record;
+BEGIN
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR UPDATE;
+ IF NOT FOUND OR a.producer_generation<>expected_generation OR a.state<>'FENCED' OR NOT a.writers_fenced THEN RAISE EXCEPTION 'Legacy export requires fenced current generation';END IF;
+ IF NOT tab=ANY(ARRAY['operator_audit_log']) THEN RAISE EXCEPTION 'Unknown full-fidelity export table';END IF;
+ EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE','kabipay_ops',tab);
+ SELECT * INTO d FROM kabipay_ops.private_source_digest(tab);
+ SELECT * INTO prior FROM kabipay_ops.private_legacy_export WHERE tenant_id=scope AND producer_generation=expected_generation AND source_table=tab FOR UPDATE;
+ IF FOUND THEN
+  IF prior.id<>job OR prior.source_sha256<>d.source_sha256 OR prior.row_count<>d.row_count THEN RAISE EXCEPTION 'Restart export identity/hash conflict';END IF;RETURN prior.id;
+ END IF;
+ INSERT INTO kabipay_ops.private_legacy_export(id,tenant_id,source_table,producer_generation,source_version,row_count,source_sha256,dependency_inventory_sha256)
+ VALUES(job,scope,tab,expected_generation,a.source_version,d.row_count,d.source_sha256,kabipay_ops.private_dependency_digest(tab));RETURN job;
+END $fn$;
+REVOKE ALL ON FUNCTION kabipay_ops.private_dependency_digest(text),kabipay_ops.private_legacy_export_start(uuid,text,uuid,bigint) FROM PUBLIC;
+
+CREATE FUNCTION kabipay_ops.private_legacy_export_batch(scope uuid,job uuid,after_id uuid DEFAULT NULL,batch_size integer DEFAULT 100,byte_limit integer DEFAULT 1048576) RETURNS jsonb
+ LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE a record;e record;r record;result jsonb:='[]'::jsonb;used integer:=0;size integer;
+BEGIN
+ IF batch_size NOT BETWEEN 1 AND 200 OR byte_limit NOT BETWEEN 1024 AND 16777216 THEN RAISE EXCEPTION 'Invalid bounded raw export batch';END IF;
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO e FROM kabipay_ops.private_legacy_export WHERE id=job AND tenant_id=scope FOR SHARE;
+ IF a.tenant_id IS NULL OR e.id IS NULL OR NOT a.writers_fenced OR a.state<>'FENCED' OR a.producer_generation<>e.producer_generation OR a.source_version<>e.source_version
+ OR e.revoked_at IS NOT NULL OR e.source_database<>current_database() OR e.source_schema<>'kabipay_ops' THEN RAISE EXCEPTION 'Raw export source authority changed';END IF;
+ IF NOT e.source_table=ANY(ARRAY['operator_audit_log']) THEN RAISE EXCEPTION 'Unknown full-fidelity source table';END IF;
+ FOR r IN EXECUTE format('SELECT id,(to_jsonb(t)->>''tenant_id'')::uuid AS tenant_id,to_jsonb(t)::text AS raw FROM %I.%I t WHERE ($1 IS NULL OR id>$1) ORDER BY id LIMIT $2','kabipay_ops',e.source_table) USING after_id,batch_size LOOP
+  size:=octet_length(convert_to(r.raw,'UTF8'));
+  IF size>16777216 THEN RAISE EXCEPTION 'Legacy row exceeds framing limit; preserve source and raise reviewed framing limit before retirement';END IF;
+  IF used>0 AND used+size>byte_limit THEN EXIT;END IF;
+  result:=result||jsonb_build_array(jsonb_build_object('source_database',current_database(),'source_schema','kabipay_ops','source_table',e.source_table,'original_id',r.id,'tenant_id',r.tenant_id,
+   'source_generation',e.producer_generation,'occurred_at',to_char((CASE WHEN e.source_table='employee_finance_outbox' THEN COALESCE(r.raw::jsonb->>'delivered_at',r.raw::jsonb->>'available_at') ELSE r.raw::jsonb->>'created_at' END)::timestamptz AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),'raw_source',r.raw,'source_sha256',encode(sha256(convert_to(r.raw,'UTF8')),'hex'),'source_size',size,'historical',true,'executable',false));used:=used+size;
+ END LOOP;
+ RETURN result;
+END $fn$;
+REVOKE ALL ON FUNCTION kabipay_ops.private_legacy_export_batch(uuid,uuid,uuid,integer,integer) FROM PUBLIC;
+
+CREATE FUNCTION kabipay_ops.private_legacy_export_publish(scope uuid,job uuid,frames jsonb) RETURNS integer
+ LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE a record;e record;f jsonb;record uuid;raw text;hash text;size integer;purpose_name text;n integer;indices integer[];
+BEGIN
+ IF jsonb_typeof(frames)<>'array' OR jsonb_array_length(frames) NOT BETWEEN 1 AND 64 OR octet_length(frames::text)>25000000 THEN RAISE EXCEPTION 'Invalid bounded encrypted raw frames';END IF;
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO e FROM kabipay_ops.private_legacy_export WHERE id=job AND tenant_id=scope FOR UPDATE;
+ IF a.tenant_id IS NULL OR e.id IS NULL OR NOT a.writers_fenced OR a.state<>'FENCED' OR a.producer_generation<>e.producer_generation OR e.accepted_at IS NOT NULL OR e.revoked_at IS NOT NULL THEN RAISE EXCEPTION 'Raw publication source authority changed';END IF;
+ record:=(frames->0->>'record_id')::uuid;
+ EXECUTE format('SELECT to_jsonb(t)::text FROM %I.%I t WHERE id=$1','kabipay_ops',e.source_table) INTO raw USING record;
+ IF raw IS NULL THEN RAISE EXCEPTION 'Unknown original raw record';END IF;
+ hash:=encode(sha256(convert_to(raw,'UTF8')),'hex');size:=octet_length(convert_to(raw,'UTF8'));n:=(size+262143)/262144;
+ purpose_name:=CASE WHEN e.source_table='audit_log' THEN 'audit' WHEN e.source_table='operator_audit_log' THEN 'operator_audit' ELSE 'delivery' END;
+ SELECT array_agg((x->>'frame_index')::integer ORDER BY (x->>'frame_index')::integer) INTO indices FROM jsonb_array_elements(frames) x;
+ IF jsonb_array_length(frames)<>n OR indices IS DISTINCT FROM ARRAY(SELECT generate_series(0,n-1)) THEN RAISE EXCEPTION 'Raw frame coverage incomplete';END IF;
+ FOR f IN SELECT value FROM jsonb_array_elements(frames) LOOP
+  IF (SELECT count(*) FROM jsonb_object_keys(f))<>17 OR NOT f ?& ARRAY['schema_version','event_id','record_id','tenant_id','purpose','source_generation','source_kind','resource_type','resource_id','occurred_at','key_id','source_sha256','source_size','frame_index','frame_count','nonce','ciphertext']
+  OR f->>'schema_version' IS DISTINCT FROM '1' OR f->>'record_id' IS DISTINCT FROM record::text OR f->>'resource_id' IS DISTINCT FROM record::text
+  OR f->>'tenant_id' IS DISTINCT FROM scope::text OR f->>'source_generation' IS DISTINCT FROM a.producer_generation::text
+  OR f->>'source_kind' IS DISTINCT FROM 'legacy_'||e.source_table OR f->>'resource_type' IS DISTINCT FROM e.source_table OR f->>'purpose' IS DISTINCT FROM purpose_name
+  OR f->>'source_sha256' IS DISTINCT FROM hash OR f->>'source_size' IS DISTINCT FROM size::text OR f->>'frame_count' IS DISTINCT FROM n::text
+  OR f->>'occurred_at' IS DISTINCT FROM to_char((CASE WHEN e.source_table='employee_finance_outbox' THEN COALESCE(raw::jsonb->>'delivered_at',raw::jsonb->>'available_at') ELSE raw::jsonb->>'created_at' END)::timestamptz AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+  OR length(f->>'nonce')<>16 OR length(f->>'ciphertext') NOT BETWEEN 24 AND 349548 THEN RAISE EXCEPTION 'Raw frame immutable source binding mismatch';END IF;
+  INSERT INTO kabipay_ops.organization_outbox(id,organization_id,source_tenant_id,actor_principal_id,aggregate_id,aggregate_version,event_type,schema_version,payload,event_stream)
+ VALUES((f->>'event_id')::uuid,NULL,NULL,NULL,record,1,'private.operator_audit.v1',1,f,'operator_audit') ON CONFLICT(id) DO NOTHING;
+ IF NOT FOUND AND NOT EXISTS(SELECT 1 FROM kabipay_ops.organization_outbox WHERE id=(f->>'event_id')::uuid AND event_stream='operator_audit' AND payload=f) THEN RAISE EXCEPTION 'Conflicting published raw frame';END IF;
+ END LOOP;RETURN n;
+END $fn$;
+CREATE FUNCTION kabipay_ops.private_legacy_export_published_frames(scope uuid,job uuid,record uuid) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE e record;frames jsonb;
+BEGIN
+ SELECT * INTO e FROM kabipay_ops.private_legacy_export WHERE id=job AND tenant_id=scope FOR SHARE;
+ IF NOT FOUND OR e.revoked_at IS NOT NULL THEN RAISE EXCEPTION 'Unknown source export';END IF;
+ SELECT COALESCE(jsonb_agg(payload ORDER BY (payload->>'frame_index')::integer),'[]'::jsonb) INTO frames FROM kabipay_ops.organization_outbox WHERE event_stream='operator_audit' AND payload->>'record_id'=record::text AND payload->>'tenant_id'=scope::text AND payload->>'source_kind'='legacy_'||e.source_table AND payload->>'source_generation'=e.producer_generation::text;
+ RETURN frames;
+END $fn$;
+CREATE FUNCTION kabipay_ops.private_legacy_export_accept(scope uuid,job uuid,proof jsonb) RETURNS void
+ LANGUAGE plpgsql SET TimeZone='UTC' SET extra_float_digits=3 SET bytea_output='hex' SET DateStyle='ISO,YMD' AS $fn$
+DECLARE a record;e record;d record;empty_path boolean;
+BEGIN
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR UPDATE;
+ SELECT * INTO e FROM kabipay_ops.private_legacy_export WHERE id=job AND tenant_id=scope FOR UPDATE;
+ IF a.tenant_id IS NULL OR e.id IS NULL OR NOT a.writers_fenced OR a.state<>'FENCED' OR a.producer_generation<>e.producer_generation OR e.revoked_at IS NOT NULL THEN RAISE EXCEPTION 'Archive acceptance authority changed';END IF;
+ EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE','kabipay_ops',e.source_table);SELECT * INTO d FROM kabipay_ops.private_source_digest(e.source_table);
+ empty_path:=COALESCE((proof->>'verified_empty')::boolean,false) AND d.row_count=0;
+ IF jsonb_typeof(proof)<>'object' OR proof->>'manifest_id' IS DISTINCT FROM job::text OR proof->>'tenant_id' IS DISTINCT FROM scope::text
+ OR proof->>'source_database' IS DISTINCT FROM current_database() OR proof->>'source_schema' IS DISTINCT FROM 'kabipay_ops' OR proof->>'source_table' IS DISTINCT FROM e.source_table
+ OR proof->>'source_generation' IS DISTINCT FROM a.producer_generation::text OR proof->>'row_count' IS DISTINCT FROM d.row_count::text OR proof->>'source_sha256' IS DISTINCT FROM d.source_sha256
+ OR e.source_sha256<>d.source_sha256 OR e.row_count<>d.row_count OR proof->>'dependency_inventory_sha256' IS DISTINCT FROM kabipay_ops.private_dependency_digest(e.source_table)
+ OR proof->>'dependency_inventory_sha256' IS DISTINCT FROM e.dependency_inventory_sha256 OR COALESCE(proof->>'accepted_by','')='' OR proof->>'acceptance_sha256' IS NULL OR proof->>'acceptance_sha256' !~ '^[a-f0-9]{64}$'
+ OR proof->>'expires_at' IS NULL OR (proof->>'expires_at')::timestamptz<=clock_timestamp() OR (proof->>'expires_at')::timestamptz>clock_timestamp()+interval '24 hours'
+ OR NOT empty_path AND (proof->>'archive_sha256' IS DISTINCT FROM d.source_sha256 OR proof->>'restore_sha256' IS DISTINCT FROM d.source_sha256 OR proof->>'restore_verified_at' IS NULL OR (proof->>'restore_verified_at')::timestamptz>clock_timestamp()) THEN RAISE EXCEPTION 'Archive restore/source acceptance proof mismatch';END IF;
+ UPDATE kabipay_ops.private_legacy_export SET archive_row_count=d.row_count,archive_sha256=proof->>'archive_sha256',restore_sha256=proof->>'restore_sha256',restore_verified_at=(proof->>'restore_verified_at')::timestamptz,
+ verified_empty=empty_path,accepted_by=proof->>'accepted_by',acceptance_sha256=proof->>'acceptance_sha256',accepted_at=clock_timestamp(),expires_at=(proof->>'expires_at')::timestamptz,
+ reader_switch_complete=a.reader_switch_complete,business_state_complete=a.business_state_complete,pending_ownership_complete=a.pending_ownership_complete WHERE id=job;
+END $fn$;
+REVOKE ALL ON FUNCTION kabipay_ops.private_legacy_export_publish(uuid,uuid,jsonb),kabipay_ops.private_legacy_export_published_frames(uuid,uuid,uuid),kabipay_ops.private_legacy_export_accept(uuid,uuid,jsonb) FROM PUBLIC;
+
+CREATE FUNCTION kabipay_ops.private_capture_status(scope uuid,marker uuid,purpose_name text) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE a record;m record;r record;n bigint:=0;h bytea;slot text:='organization_control_outbox';flushed pg_lsn;
+BEGIN
+ IF NOT(purpose_name='operator_audit') THEN RAISE EXCEPTION 'Invalid private capture purpose';END IF;
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO m FROM kabipay_ops.private_capture_source_marker WHERE id=marker AND tenant_id=scope FOR SHARE;
+ IF a.tenant_id IS NULL OR m.id IS NULL OR a.producer_generation<>m.producer_generation THEN RAISE EXCEPTION 'Private capture source generation changed';END IF;
+ h:=sha256(convert_to(current_database()||chr(31)||'kabipay_ops'||chr(31)||purpose_name,'UTF8'));
+ FOR r IN SELECT source_position,id,payload AS envelope FROM kabipay_ops.organization_outbox WHERE event_stream=purpose_name AND payload->>'tenant_id'=scope::text AND payload->>'source_generation'=m.producer_generation::text AND source_position<=m.through_position ORDER BY source_position LOOP
+  h:=sha256(h||convert_to(r.source_position::text,'UTF8')||convert_to(r.id::text,'UTF8')||sha256(convert_to(r.envelope::text,'UTF8')));n:=n+1;
+ END LOOP;
+ SELECT confirmed_flush_lsn INTO flushed FROM pg_replication_slots WHERE slot_name=slot AND database=current_database() AND slot_type='logical';
+ RETURN jsonb_build_object('id',marker,'source_marker_id',marker,'tenant_id',scope,'purpose',purpose_name,'producer_generation',m.producer_generation,'source_generation',m.producer_generation,
+ 'source_database',current_database(),'source_schema','kabipay_ops','through_position',m.through_position::text,'source_lsn',m.source_lsn,'slot_name',slot,'confirmed_flush_lsn',flushed::text,'source_frame_count',n,'source_sha256',encode(h,'hex'));
+END $fn$;
+CREATE FUNCTION kabipay_ops.private_capture_batch(scope uuid,marker uuid,purpose_name text,after_position bigint DEFAULT 0,batch_size integer DEFAULT 100) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE m record;a record;r record;rows jsonb:='[]'::jsonb;n integer:=0;bytes integer:=0;
+BEGIN
+ IF NOT(purpose_name='operator_audit') OR after_position<0 OR batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid private capture batch';END IF;
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;
+ SELECT * INTO m FROM kabipay_ops.private_capture_source_marker WHERE id=marker AND tenant_id=scope FOR SHARE;
+ IF a.tenant_id IS NULL OR m.id IS NULL OR a.producer_generation<>m.producer_generation THEN RAISE EXCEPTION 'Private capture source generation changed';END IF;
+ FOR r IN SELECT * FROM (SELECT source_position,id,payload AS envelope FROM kabipay_ops.organization_outbox WHERE event_stream=purpose_name AND payload->>'tenant_id'=scope::text AND payload->>'source_generation'=m.producer_generation::text AND source_position<=m.through_position ORDER BY source_position) frames WHERE source_position>after_position LIMIT batch_size LOOP
+  IF n>0 AND bytes+octet_length(r.envelope::text)>1048576 THEN EXIT;END IF;
+  rows:=rows||jsonb_build_array(jsonb_build_object('position',r.source_position::text,'event_id',r.id,'envelope',r.envelope,'raw_envelope',r.envelope::text));n:=n+1;bytes:=bytes+octet_length(r.envelope::text);
+ END LOOP;RETURN rows;
+END $fn$;
+CREATE FUNCTION kabipay_ops.private_capture_accept(scope uuid,purpose_name text,marker uuid,proof jsonb) RETURNS uuid LANGUAGE plpgsql AS $fn$
+DECLARE status jsonb;id uuid:=(proof->>'evidence_id')::uuid;
+BEGIN
+ LOCK TABLE kabipay_ops.organization_outbox IN SHARE ROW EXCLUSIVE MODE;
+ status:=kabipay_ops.private_capture_status(scope,marker,purpose_name);
+ IF jsonb_typeof(proof)<>'object' OR id IS NULL OR proof->>'source_marker_id' IS DISTINCT FROM marker::text OR proof->>'tenant_id' IS DISTINCT FROM scope::text OR proof->>'purpose' IS DISTINCT FROM purpose_name
+ OR proof->>'producer_generation' IS DISTINCT FROM status->>'producer_generation' OR proof->>'through_position' IS DISTINCT FROM status->>'through_position'
+ OR proof->>'source_lsn' IS DISTINCT FROM status->>'source_lsn' OR proof->>'source_frame_count' IS DISTINCT FROM status->>'source_frame_count'
+ OR proof->>'archive_sha256' IS DISTINCT FROM status->>'source_sha256' OR proof->>'restore_sha256' IS DISTINCT FROM status->>'source_sha256'
+ OR proof->>'expected_partitions' IS DISTINCT FROM '1' OR proof->>'covered_partitions' IS DISTINCT FROM '1' OR proof->>'quarantined_rows' IS DISTINCT FROM '0'
+ OR status->>'confirmed_flush_lsn' IS NULL OR (status->>'confirmed_flush_lsn')::pg_lsn<(status->>'source_lsn')::pg_lsn
+ OR proof->>'connector_lsn' IS NULL OR proof->>'connector_commit_lsn' IS NULL OR (proof->>'connector_lsn')::pg_lsn<(status->>'source_lsn')::pg_lsn OR (proof->>'connector_commit_lsn')::pg_lsn<(status->>'source_lsn')::pg_lsn
+ OR proof->>'restore_verified_at' IS NULL OR (proof->>'restore_verified_at')::timestamptz>clock_timestamp() OR COALESCE(proof->>'accepted_by','')=''
+ OR proof->>'acceptance_sha256' IS NULL OR proof->>'acceptance_sha256' !~ '^[a-f0-9]{64}$'
+ OR proof->>'expires_at' IS NULL OR (proof->>'expires_at')::timestamptz<=clock_timestamp() OR (proof->>'expires_at')::timestamptz>clock_timestamp()+interval '1 hour' THEN RAISE EXCEPTION 'Private capture marker/partition/restore acceptance mismatch';END IF;
+ INSERT INTO kabipay_ops.private_capture_evidence(id,source_marker_id,source_lsn,tenant_id,purpose,source_frame_count,producer_generation,through_position,expected_partitions,covered_partitions,archive_sha256,restore_sha256,restore_verified_at,quarantined_rows,accepted_at,expires_at,accepted_by,acceptance_sha256)
+ VALUES(id,marker,status->>'source_lsn',scope,purpose_name,(status->>'source_frame_count')::bigint,(status->>'producer_generation')::bigint,(status->>'through_position')::bigint,1,1,status->>'source_sha256',status->>'source_sha256',(proof->>'restore_verified_at')::timestamptz,0,clock_timestamp(),(proof->>'expires_at')::timestamptz,proof->>'accepted_by',proof->>'acceptance_sha256');RETURN id;
+END $fn$;
+REVOKE ALL ON FUNCTION kabipay_ops.private_capture_status(uuid,uuid,text),kabipay_ops.private_capture_batch(uuid,uuid,text,bigint,integer),kabipay_ops.private_capture_accept(uuid,text,uuid,jsonb) FROM PUBLIC;
+
+CREATE TABLE kabipay_ops.private_outbox_cleanup_receipt(
+ id uuid PRIMARY KEY,evidence_id uuid NOT NULL REFERENCES kabipay_ops.private_capture_evidence(id),tenant_id uuid NOT NULL,purpose text NOT NULL CHECK(purpose='operator_audit'),
+ producer_generation bigint NOT NULL,candidate_ids uuid[] NOT NULL,deleted_rows integer NOT NULL CHECK(deleted_rows BETWEEN 1 AND 200),created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE FUNCTION kabipay_ops.private_cleanup_outbox(scope uuid,purpose_name text,proof uuid,batch_size integer DEFAULT 100) RETURNS integer LANGUAGE plpgsql AS $fn$
+DECLARE ids uuid[];n integer;previous text;
+BEGIN
+ IF purpose_name<>'operator_audit' OR batch_size NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'Invalid metadata private cleanup binding';END IF;
+ PERFORM 1 FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope FOR SHARE;IF NOT FOUND THEN RAISE EXCEPTION 'Unknown metadata source';END IF;
+ SELECT array_agg(x.id) INTO ids FROM (SELECT o.id FROM kabipay_ops.organization_outbox o JOIN kabipay_ops.private_capture_evidence e
+ ON e.id=proof AND e.tenant_id=scope AND e.purpose=purpose_name WHERE o.event_stream='operator_audit' AND o.payload->>'tenant_id'=scope::text AND o.source_position<=e.through_position AND o.payload->>'source_generation'=e.producer_generation::text
+ ORDER BY o.source_position LIMIT batch_size FOR UPDATE OF o SKIP LOCKED) x;
+ IF ids IS NULL THEN RETURN 0;END IF;
+ previous:=current_setting('kabipay.private_cleanup_evidence',true);PERFORM set_config('kabipay.private_cleanup_evidence',proof::text,true);
+ DELETE FROM kabipay_ops.organization_outbox WHERE id=ANY(ids) AND event_stream='operator_audit' AND payload->>'tenant_id'=scope::text;
+ GET DIAGNOSTICS n=ROW_COUNT;PERFORM set_config('kabipay.private_cleanup_evidence',COALESCE(previous,''),true);
+ INSERT INTO kabipay_ops.private_outbox_cleanup_receipt(id,evidence_id,tenant_id,purpose,producer_generation,candidate_ids,deleted_rows)
+ SELECT gen_random_uuid(),proof,scope,purpose_name,producer_generation,ids,n FROM kabipay_ops.private_source_cutover WHERE tenant_id=scope;RETURN n;
+END $fn$;
+REVOKE ALL ON kabipay_ops.private_outbox_cleanup_receipt FROM PUBLIC;
+REVOKE ALL ON FUNCTION kabipay_ops.private_cleanup_outbox(uuid,text,uuid,integer) FROM PUBLIC;
+
+CREATE FUNCTION kabipay_ops.private_assert_retirement() RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE a record;e record;d record;
+BEGIN
+ LOCK TABLE kabipay_ops.operator_audit_log IN ACCESS EXCLUSIVE MODE;
+ IF (SELECT count(*) FROM kabipay_ops.private_source_cutover)<>1 THEN RAISE EXCEPTION 'Exactly one metadata scope binding required';END IF;
+ SELECT * INTO a FROM kabipay_ops.private_source_cutover FOR UPDATE;
+ SELECT * INTO e FROM kabipay_ops.private_legacy_export WHERE tenant_id=a.tenant_id AND producer_generation=a.producer_generation AND source_table='operator_audit_log' FOR UPDATE;
+ SELECT * INTO d FROM kabipay_ops.private_source_digest('operator_audit_log');
+ IF e.id IS NULL OR NOT a.writers_fenced OR a.state<>'FENCED' OR NOT a.reader_switch_complete OR NOT a.business_state_complete OR NOT a.pending_ownership_complete
+ OR e.source_database<>current_database() OR e.source_schema<>'kabipay_ops' OR e.source_version<>a.source_version OR e.row_count<>d.row_count OR e.source_sha256<>d.source_sha256
+ OR e.accepted_at IS NULL OR e.accepted_at>clock_timestamp() OR e.expires_at IS NULL OR e.expires_at<=clock_timestamp() OR e.revoked_at IS NOT NULL
+ OR e.accepted_by IS NULL OR length(e.accepted_by)=0 OR e.acceptance_sha256 IS NULL OR e.acceptance_sha256 !~ '^[a-f0-9]{64}$'
+ OR e.dependency_inventory_sha256 IS NULL OR e.dependency_inventory_sha256 !~ '^[a-f0-9]{64}$' OR e.dependency_inventory_sha256 IS DISTINCT FROM kabipay_ops.private_dependency_digest('operator_audit_log')
+ OR NOT e.reader_switch_complete OR NOT e.business_state_complete OR NOT e.pending_ownership_complete THEN RAISE EXCEPTION 'Metadata retirement evidence incomplete';END IF;
+ IF NOT(e.verified_empty AND d.row_count=0) AND (e.archive_row_count IS DISTINCT FROM e.row_count OR e.archive_sha256 IS DISTINCT FROM e.source_sha256
+ OR e.restore_sha256 IS DISTINCT FROM e.source_sha256 OR e.restore_verified_at IS NULL OR e.restore_verified_at>e.accepted_at) THEN RAISE EXCEPTION 'Full operator restore required';END IF;
+ IF NOT EXISTS(SELECT 1 FROM kabipay_ops.private_capture_evidence WHERE tenant_id=a.tenant_id AND purpose='operator_audit' AND through_position>=(SELECT COALESCE(max(o.source_position),0) FROM kabipay_ops.organization_outbox o WHERE event_stream='operator_audit' AND NOT EXISTS(SELECT 1 FROM kabipay_ops.private_capture_pulse p WHERE p.event_id=o.id AND p.published_position=o.source_position AND p.purpose=o.event_stream AND p.frame_sha256=encode(sha256(convert_to(o.payload::text,'UTF8')),'hex'))) AND producer_generation=a.producer_generation AND accepted_at<=clock_timestamp() AND accepted_at>clock_timestamp()-interval '10 minutes' AND expires_at>clock_timestamp() AND revoked_at IS NULL AND expected_partitions=covered_partitions AND quarantined_rows=0) THEN RAISE EXCEPTION 'Operator private coverage incomplete';END IF;
+END $fn$;
+REVOKE ALL ON kabipay_ops.private_source_cutover,kabipay_ops.private_capture_evidence,kabipay_ops.private_legacy_export FROM PUBLIC;
+REVOKE ALL ON FUNCTION kabipay_ops.private_assert_retirement(),kabipay_ops.private_fence_legacy(uuid,bigint),kabipay_ops.private_source_digest(text) FROM PUBLIC;
+ ]]></sql>
+ </changeSet>
+</databaseChangeLog>

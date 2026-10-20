@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0115-001-organization-tenant-runtime" author="kabipay-dev" runInTransaction="true">
+  <sql splitStatements="false"><![CDATA[
+CREATE TABLE "${schema}".organization_grant_installation (
+ tenant_id UUID NOT NULL, binding_id UUID NOT NULL, organization_id UUID NOT NULL,
+ membership_id UUID NOT NULL, principal_id UUID NOT NULL,
+ grant_version BIGINT NOT NULL CHECK (grant_version>0), membership_version BIGINT NOT NULL CHECK (membership_version>0),
+ capabilities JSONB NOT NULL, configuration_hash CHAR(64) NOT NULL, installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,binding_id)
+);
+ALTER TABLE "${schema}".management_assignment ADD COLUMN graph_version BIGINT NOT NULL DEFAULT 1 CHECK (graph_version>0);
+ALTER TABLE "${schema}".management_assignment ADD COLUMN membership_id UUID;
+ALTER TABLE "${schema}".management_assignment ADD COLUMN configuration_hash CHAR(64);
+ALTER TABLE "${schema}".management_assignment ADD COLUMN manager_employee_id UUID,
+ ADD CONSTRAINT management_local_manager_fk FOREIGN KEY(tenant_id,manager_employee_id) REFERENCES "${schema}".employee(tenant_id,id),
+ ADD CONSTRAINT management_manager_company CHECK (manager_employee_id IS NULL OR manager_tenant_id=tenant_id);
+CREATE TABLE "${schema}".organization_fact_bootstrap (
+ tenant_id UUID NOT NULL,organization_id UUID NOT NULL,phase INTEGER NOT NULL DEFAULT 0 CHECK(phase BETWEEN 0 AND 5),after_id UUID,status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','COMPLETE')),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,organization_id)
+);
+CREATE TABLE "${schema}".organization_resource_version (
+ tenant_id UUID NOT NULL, resource_type TEXT NOT NULL, resource_id UUID NOT NULL,
+ version BIGINT NOT NULL DEFAULT 1 CHECK(version>0), last_actor JSONB NOT NULL DEFAULT '{"kind":"system"}'::JSONB, fact_occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,resource_type,resource_id)
+);
+CREATE TABLE "${schema}".organization_command_receipt (
+ tenant_id UUID NOT NULL, command_id UUID NOT NULL, principal_id UUID NOT NULL,
+ source_tenant_id UUID NOT NULL, source_user_id UUID NOT NULL, organization_id UUID NOT NULL,
+ membership_id UUID NOT NULL, authority_id UUID NOT NULL, authority_version BIGINT NOT NULL CHECK(authority_version>0),
+ resource_id UUID NOT NULL, operation TEXT NOT NULL, request_hash CHAR(64) NOT NULL,
+ expected_version BIGINT NOT NULL CHECK(expected_version>0), outcome JSONB NOT NULL,
+ committed_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,command_id)
+);
+CREATE TABLE "${schema}".organization_business_actor (
+ tenant_id UUID NOT NULL, resource_type TEXT NOT NULL, resource_id UUID NOT NULL,
+ principal_id UUID NOT NULL, command_id UUID NOT NULL, action TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,command_id,resource_type,resource_id),
+ FOREIGN KEY(tenant_id,principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id)
+);
+CREATE TABLE "${schema}".organization_review_manager (
+ tenant_id UUID NOT NULL, participant_id UUID NOT NULL, principal_id UUID NOT NULL,
+ assignment_id UUID NOT NULL, assignment_version BIGINT NOT NULL CHECK(assignment_version>0),
+ PRIMARY KEY(tenant_id,participant_id,assignment_id),
+ FOREIGN KEY(participant_id) REFERENCES "${schema}".performance_participant(id),
+ FOREIGN KEY(tenant_id,assignment_id) REFERENCES "${schema}".management_assignment(tenant_id,id)
+);
+-- Canonical bounded company facts only. Never copy sensitive domain bodies here.
+CREATE TABLE "${schema}".company_event_outbox (
+ id UUID PRIMARY KEY, source_tenant_id UUID NOT NULL, organization_id UUID NOT NULL,
+ event_type TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id UUID NOT NULL,
+ aggregate_version BIGINT NOT NULL CHECK(aggregate_version>0), event_envelope JSONB NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX company_event_outbox_capture ON "${schema}".company_event_outbox(created_at,id);
+-- Foreign actors have logical actor_ref attribution, never fabricated local accounts.
+ALTER TABLE "${schema}".continuous_feedback ALTER COLUMN created_by_user_id DROP NOT NULL;
+ALTER TABLE "${schema}".loan_posting ALTER COLUMN actor_id DROP NOT NULL;
+ALTER TABLE "${schema}".loan_posting ADD COLUMN actor_principal_id UUID,
+ ADD CONSTRAINT loan_posting_principal_fk FOREIGN KEY(tenant_id,actor_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT loan_posting_actor_present CHECK ((actor_id IS NOT NULL) <> (actor_principal_id IS NOT NULL));
+ALTER TABLE "${schema}".loan_audit_event ALTER COLUMN actor_id DROP NOT NULL;
+ALTER TABLE "${schema}".loan_audit_event ADD COLUMN actor_principal_id UUID,
+ ADD CONSTRAINT loan_audit_principal_fk FOREIGN KEY(tenant_id,actor_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT loan_audit_actor_present CHECK ((actor_id IS NOT NULL) <> (actor_principal_id IS NOT NULL));
+ALTER TABLE "${schema}".payroll_period_input ALTER COLUMN updated_by DROP NOT NULL;
+ALTER TABLE "${schema}".payroll_period_input ADD COLUMN updated_by_principal_id UUID,
+ ADD CONSTRAINT payroll_input_principal_fk FOREIGN KEY(tenant_id,updated_by_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT payroll_input_actor_present CHECK ((updated_by IS NOT NULL) <> (updated_by_principal_id IS NOT NULL));
+ALTER TABLE "${schema}".payroll_period_input_audit ALTER COLUMN changed_by DROP NOT NULL;
+ALTER TABLE "${schema}".payroll_period_input_audit ADD COLUMN changed_by_principal_id UUID,
+ ADD CONSTRAINT payroll_input_audit_principal_fk FOREIGN KEY(tenant_id,changed_by_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT payroll_input_audit_actor_present CHECK ((changed_by IS NOT NULL) <> (changed_by_principal_id IS NOT NULL));
+ALTER TABLE "${schema}".payroll_period_adjustment ALTER COLUMN updated_by DROP NOT NULL;
+ALTER TABLE "${schema}".payroll_period_adjustment ADD COLUMN updated_by_principal_id UUID,
+ ADD CONSTRAINT payroll_adjustment_principal_fk FOREIGN KEY(tenant_id,updated_by_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT payroll_adjustment_actor_present CHECK ((updated_by IS NOT NULL) <> (updated_by_principal_id IS NOT NULL));
+ALTER TABLE "${schema}".payroll_draft_calculation ALTER COLUMN calculated_by DROP NOT NULL;
+ALTER TABLE "${schema}".payroll_draft_calculation ADD COLUMN calculated_by_principal_id UUID,
+ ADD COLUMN finalized_by_principal_id UUID,
+ ADD CONSTRAINT payroll_draft_calculator_principal_fk FOREIGN KEY(tenant_id,calculated_by_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT payroll_draft_finalizer_principal_fk FOREIGN KEY(tenant_id,finalized_by_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT payroll_draft_actor_present CHECK ((calculated_by IS NOT NULL) <> (calculated_by_principal_id IS NOT NULL));
+ALTER TABLE "${schema}".payroll_cycle ADD COLUMN processed_by_principal_id UUID,
+ ADD CONSTRAINT payroll_cycle_principal_fk FOREIGN KEY(tenant_id,processed_by_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id);
+
+CREATE FUNCTION "${schema}".organization_membership_active(company UUID,org UUID) RETURNS BOOLEAN LANGUAGE SQL STABLE AS $fn$
+ SELECT EXISTS(SELECT 1 FROM "${schema}".organization_fact_bootstrap b WHERE b.tenant_id=company AND b.organization_id=org AND b.status IN ('PENDING','COMPLETE'));
+$fn$;
+CREATE FUNCTION "${schema}".organization_reporting_owned(company UUID) RETURNS BOOLEAN LANGUAGE SQL STABLE AS $fn$
+ SELECT EXISTS(SELECT 1 FROM "${schema}".organization_fact_bootstrap b WHERE b.tenant_id=company AND b.status<>'STOPPED');
+$fn$;
+CREATE FUNCTION "${schema}".organization_reporting_retirement_allowed(company UUID) RETURNS BOOLEAN LANGUAGE SQL STABLE AS $fn$ SELECT false; $fn$;
+CREATE FUNCTION "${schema}".organization_emit_fact(r JSONB,kind TEXT,ver BIGINT,org UUID,deleted BOOLEAN) RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE fact JSONB; evtype TEXT; eid UUID; actor JSONB;
+BEGIN
+ IF kind='employee' THEN
+  evtype := 'directory.changed';
+  fact := jsonb_build_object('employee_id',r->>'id','display_name',trim(concat_ws(' ',r->>'first_name',r->>'last_name')),'employment_status',COALESCE(r->>'status','UNKNOWN'));
+ ELSIF kind='timesheet_entry' THEN
+  evtype := 'timesheet.changed';
+  fact := jsonb_build_object('employee_id',r->>'employee_id','work_date',r->>'work_date','logged_seconds',CASE WHEN deleted THEN 0 ELSE (COALESCE((r->>'hours_worked')::NUMERIC,0)*3600)::BIGINT END,'approved_seconds',CASE WHEN NOT deleted AND r->>'status'='APPROVED' THEN (COALESCE((r->>'hours_worked')::NUMERIC,0)*3600)::BIGINT ELSE 0 END);
+ ELSIF kind IN ('leave_request','timesheet','performance_participant') THEN
+  evtype := 'approval.changed';
+  fact := jsonb_build_object('resource_type',kind,'resource_id',r->>'id','employee_id',r->>'employee_id','employee_display_name','','status',r->>'status','summary',CASE kind WHEN 'leave_request' THEN 'Leave request' WHEN 'timesheet' THEN 'Weekly timesheet' ELSE 'Performance review' END);
+ ELSE RETURN;
+ END IF;
+ actor:=COALESCE(r->'__source_actor',NULLIF(current_setting('kabipay.organization_actor',true),'')::JSONB,jsonb_build_object('kind','system'));
+ eid:=gen_random_uuid();
+ INSERT INTO "${schema}".company_event_outbox(id,source_tenant_id,organization_id,event_type,aggregate_type,aggregate_id,aggregate_version,event_envelope)
+ VALUES(eid,(r->>'tenant_id')::UUID,org,evtype,kind,(r->>'id')::UUID,ver,
+ jsonb_build_object('schema_version',1,'event_id',eid,'event_type',evtype,'organization_id',org,'source_tenant_id',r->>'tenant_id','aggregate_type',kind,'aggregate_id',r->>'id','aggregate_version',ver,'occurred_at',COALESCE((r->>'__source_occurred_at')::TIMESTAMPTZ,clock_timestamp()),'deleted',deleted,'actor',actor,'payload',fact));
+END $fn$;
+CREATE FUNCTION "${schema}".organization_capture_fact() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE r JSONB; original JSONB; kind TEXT; ver BIGINT; org UUID; deleted BOOLEAN; local_actor UUID; old_row JSONB; fact_time TIMESTAMPTZ;
+BEGIN
+ r := CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+ original:=r; old_row:=CASE WHEN TG_OP='UPDATE' THEN to_jsonb(OLD) ELSE NULL END;
+ kind := TG_ARGV[0];
+ IF TG_TABLE_NAME='payroll_draft_calculation' THEN r:=r||jsonb_build_object('id',r->>'cycle_id'); END IF;
+ IF TG_TABLE_NAME='continuous_feedback' THEN
+  SELECT to_jsonb(e) INTO r FROM "${schema}".employee e WHERE e.tenant_id=(r->>'tenant_id')::UUID AND e.id=(r->>'reviewee_employee_id')::UUID;
+ ELSIF TG_TABLE_NAME='workflow_instance' THEN
+  IF r->>'entity_type'='LEAVE_REQUEST' THEN
+   SELECT to_jsonb(e) INTO r FROM "${schema}".leave_request e WHERE e.tenant_id=(r->>'tenant_id')::UUID AND e.id=(r->>'entity_id')::UUID;kind:='leave_request';
+  ELSIF r->>'entity_type'='TIMESHEET_WEEK_BATCH' THEN
+   SELECT to_jsonb(e) INTO r FROM "${schema}".timesheet_week_batch e WHERE e.tenant_id=(r->>'tenant_id')::UUID AND e.id=(r->>'entity_id')::UUID;kind:='timesheet';
+  ELSE RETURN NULL;
+  END IF;
+ END IF;
+ IF r IS NULL THEN RETURN NULL; END IF;
+ IF NULLIF(current_setting('kabipay.organization_actor',true),'') IS NULL THEN
+  IF TG_TABLE_NAME='workflow_instance' THEN
+   SELECT a.performed_by INTO local_actor FROM "${schema}".workflow_action a WHERE a.tenant_id=(original->>'tenant_id')::UUID AND a.instance_id=(original->>'id')::UUID ORDER BY a.acted_at DESC,a.id DESC LIMIT 1;
+  ELSIF TG_TABLE_NAME='leave_request' AND TG_OP='UPDATE' AND original->>'status'='APPROVED' AND old_row->>'status' IS DISTINCT FROM original->>'status' THEN
+   local_actor:=(original->>'approved_by')::UUID;
+  ELSIF TG_TABLE_NAME='timesheet_week_batch' THEN
+   SELECT a.performed_by INTO local_actor FROM "${schema}".workflow_action a WHERE a.tenant_id=(original->>'tenant_id')::UUID AND a.instance_id=(original->>'workflow_instance_id')::UUID ORDER BY a.acted_at DESC,a.id DESC LIMIT 1;
+  ELSIF TG_TABLE_NAME='timesheet_entry' AND TG_OP='UPDATE' AND old_row->>'status' IS DISTINCT FROM original->>'status' THEN
+   SELECT a.performed_by INTO local_actor FROM "${schema}".timesheet_week_batch b JOIN "${schema}".workflow_action a ON a.tenant_id=b.tenant_id AND a.instance_id=b.workflow_instance_id WHERE b.tenant_id=(original->>'tenant_id')::UUID AND b.id=COALESCE((original->>'batch_id')::UUID,(old_row->>'batch_id')::UUID) ORDER BY a.acted_at DESC,a.id DESC LIMIT 1;
+  ELSIF TG_OP='INSERT' THEN local_actor:=COALESCE((original->>'created_by_user_id')::UUID,(original->>'created_by')::UUID);
+  ELSIF TG_OP='UPDATE' AND COALESCE((original->>'is_deleted')::BOOLEAN,false) AND NOT COALESCE((old_row->>'is_deleted')::BOOLEAN,false) THEN local_actor:=(original->>'deleted_by')::UUID;
+  ELSIF TG_OP='UPDATE' THEN local_actor:=(original->>'updated_by')::UUID;
+  END IF;
+  r:=r||jsonb_build_object('__source_actor',CASE WHEN local_actor IS NULL THEN jsonb_build_object('kind','system') ELSE jsonb_build_object('kind','local_user','local_user_id',local_actor,'source_tenant_id',r->>'tenant_id') END);
+ END IF;
+ deleted := (TG_OP='DELETE' AND TG_TABLE_NAME NOT IN ('continuous_feedback','workflow_instance')) OR COALESCE((r->>'is_deleted')::BOOLEAN,false) OR (kind='performance_participant' AND COALESCE((r->>'is_excluded')::BOOLEAN,false));
+ INSERT INTO "${schema}".organization_resource_version(tenant_id,resource_type,resource_id,version,last_actor,fact_occurred_at)
+ VALUES((r->>'tenant_id')::UUID,kind,(r->>'id')::UUID,1,COALESCE(r->'__source_actor',NULLIF(current_setting('kabipay.organization_actor',true),'')::JSONB,jsonb_build_object('kind','system')),clock_timestamp())
+ ON CONFLICT(tenant_id,resource_type,resource_id) DO UPDATE SET version=organization_resource_version.version+1,last_actor=excluded.last_actor,fact_occurred_at=excluded.fact_occurred_at
+ RETURNING version,fact_occurred_at INTO ver,fact_time;
+ r:=r||jsonb_build_object('__source_occurred_at',fact_time);
+ FOR org IN SELECT candidates.organization_id FROM (SELECT DISTINCT organization_id FROM "${schema}".organization_grant_installation WHERE tenant_id=(r->>'tenant_id')::UUID
+  UNION SELECT DISTINCT organization_id FROM "${schema}".management_assignment WHERE tenant_id=(r->>'tenant_id')::UUID
+  UNION SELECT organization_id FROM "${schema}".organization_fact_bootstrap WHERE tenant_id=(r->>'tenant_id')::UUID) candidates WHERE "${schema}".organization_membership_active((r->>'tenant_id')::UUID,candidates.organization_id)
+ LOOP
+  PERFORM "${schema}".organization_emit_fact(r,kind,ver,org,deleted);
+ END LOOP;
+ RETURN NULL;
+END $fn$;
+CREATE FUNCTION "${schema}".organization_bind_review_manager() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE actual_manager UUID;
+BEGIN
+ IF NOT NEW.is_excluded AND NEW.manager_submitted_at IS NULL THEN
+  -- New rows are invisible to concurrent installation scans. Wait on its
+  -- assignment fence, then resolve the committed current source snapshot.
+  PERFORM e.id FROM "${schema}".employee e WHERE e.tenant_id=NEW.tenant_id AND e.id IN (
+    SELECT NEW.employee_id UNION SELECT x.reporting_manager_id FROM "${schema}".employee x WHERE x.tenant_id=NEW.tenant_id AND x.id=NEW.employee_id
+    UNION SELECT a.manager_employee_id FROM "${schema}".management_assignment a WHERE a.tenant_id=NEW.tenant_id AND a.subject_employee_id=NEW.employee_id AND a.status='ACTIVE'
+  ) ORDER BY e.id FOR KEY SHARE;
+  PERFORM a.id FROM "${schema}".management_assignment a WHERE a.tenant_id=NEW.tenant_id AND a.subject_employee_id=NEW.employee_id AND a.relationship_type IN ('PRIMARY','REVIEWER') AND a.status='ACTIVE' ORDER BY a.id FOR SHARE;
+  SELECT a.manager_employee_id INTO actual_manager FROM "${schema}".management_assignment a WHERE a.tenant_id=NEW.tenant_id AND a.subject_employee_id=NEW.employee_id AND a.relationship_type='PRIMARY' AND a.status='ACTIVE' AND a.effective_from<=clock_timestamp() AND (a.effective_to IS NULL OR a.effective_to>clock_timestamp());
+  IF NOT FOUND THEN SELECT e.reporting_manager_id INTO actual_manager FROM "${schema}".employee e WHERE e.tenant_id=NEW.tenant_id AND e.id=NEW.employee_id; END IF;
+  UPDATE "${schema}".performance_participant SET manager_employee_id=actual_manager WHERE tenant_id=NEW.tenant_id AND id=NEW.id AND manager_employee_id IS DISTINCT FROM actual_manager;
+  INSERT INTO "${schema}".organization_review_manager(tenant_id,participant_id,principal_id,assignment_id,assignment_version)
+  SELECT NEW.tenant_id,NEW.id,a.manager_principal_id,a.id,a.version
+  FROM "${schema}".management_assignment a
+  WHERE a.tenant_id=NEW.tenant_id AND a.subject_employee_id=NEW.employee_id AND a.relationship_type IN ('PRIMARY','REVIEWER') AND a.status='ACTIVE'
+   AND EXISTS(SELECT 1 FROM "${schema}".assignment_capability c WHERE c.tenant_id=a.tenant_id AND c.assignment_id=a.id AND c.capability_code IN ('performance:evaluate','feedback:write'))
+  ON CONFLICT(tenant_id,participant_id,assignment_id) DO UPDATE SET principal_id=excluded.principal_id,assignment_version=excluded.assignment_version;
+ END IF;
+ RETURN NULL;
+END $fn$;
+CREATE TRIGGER organization_review_manager_snapshot AFTER INSERT ON "${schema}".performance_participant FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_bind_review_manager();
+CREATE TRIGGER organization_feedback_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".continuous_feedback FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('employee');
+CREATE TRIGGER organization_workflow_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".workflow_instance FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('workflow');
+CREATE TRIGGER organization_employee_fact AFTER INSERT OR UPDATE OR DELETE ON "${schema}".employee FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('employee');
+CREATE TRIGGER organization_leave_fact AFTER INSERT OR UPDATE OR DELETE ON "${schema}".leave_request FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('leave_request');
+CREATE TRIGGER organization_timesheet_fact AFTER INSERT OR UPDATE OR DELETE ON "${schema}".timesheet_week_batch FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('timesheet');
+CREATE TRIGGER organization_time_entry_fact AFTER INSERT OR UPDATE OR DELETE ON "${schema}".timesheet_entry FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('timesheet_entry');
+CREATE TRIGGER organization_review_fact AFTER INSERT OR UPDATE OR DELETE ON "${schema}".performance_participant FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('performance_participant');
+CREATE TRIGGER organization_payroll_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".payroll_cycle FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('payroll_run');
+CREATE TRIGGER organization_payroll_draft_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".payroll_draft_calculation FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_fact('payroll_run');
+INSERT INTO "${schema}".organization_resource_version(tenant_id,resource_type,resource_id)
+ SELECT tenant_id,'employee',id FROM "${schema}".employee UNION ALL SELECT tenant_id,'leave_request',id FROM "${schema}".leave_request
+ UNION ALL SELECT tenant_id,'timesheet',id FROM "${schema}".timesheet_week_batch UNION ALL SELECT tenant_id,'performance_participant',id FROM "${schema}".performance_participant
+ UNION ALL SELECT tenant_id,'timesheet_entry',id FROM "${schema}".timesheet_entry UNION ALL SELECT tenant_id,'payroll_run',id FROM "${schema}".payroll_cycle ON CONFLICT DO NOTHING;
+
+-- Registering source bootstrap transfers reporting graph ownership to the organization.
+-- Existing edges remain a baseline; canonical assignments override only while effective.
+CREATE FUNCTION "${schema}".organization_guard_legacy_manager() RETURNS trigger LANGUAGE plpgsql AS $guard$
+BEGIN
+ IF "${schema}".organization_reporting_owned(NEW.tenant_id) AND NOT "${schema}".organization_reporting_retirement_allowed(NEW.tenant_id)
+ AND ((TG_OP='INSERT' AND NEW.reporting_manager_id IS NOT NULL)
+      OR (TG_OP='UPDATE' AND NEW.reporting_manager_id IS DISTINCT FROM OLD.reporting_manager_id))
+ THEN RAISE EXCEPTION 'Organization workspace manages reporting relationships' USING ERRCODE='23514'; END IF;
+ RETURN NEW;
+END $guard$;
+CREATE TRIGGER organization_legacy_manager_guard BEFORE INSERT OR UPDATE OF reporting_manager_id
+ ON "${schema}".employee FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_guard_legacy_manager();
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $guard$ BEGIN
+ IF EXISTS(SELECT 1 FROM "${schema}".organization_command_receipt)
+ OR EXISTS(SELECT 1 FROM "${schema}".company_event_outbox)
+ OR EXISTS(SELECT 1 FROM "${schema}".organization_fact_bootstrap)
+ OR EXISTS(SELECT 1 FROM "${schema}".organization_grant_installation)
+ THEN RAISE EXCEPTION 'Organization source runtime has durable evidence; rollback requires explicit retention and reconciliation'; END IF;
+END $guard$;
+DROP TRIGGER organization_legacy_manager_guard ON "${schema}".employee;
+DROP FUNCTION "${schema}".organization_guard_legacy_manager();
+DROP TRIGGER organization_review_manager_snapshot ON "${schema}".performance_participant;
+DROP FUNCTION "${schema}".organization_bind_review_manager();
+DROP TRIGGER organization_feedback_version ON "${schema}".continuous_feedback;
+DROP TRIGGER organization_workflow_version ON "${schema}".workflow_instance;
+DROP TRIGGER organization_employee_fact ON "${schema}".employee;
+DROP TRIGGER organization_leave_fact ON "${schema}".leave_request;
+DROP TRIGGER organization_timesheet_fact ON "${schema}".timesheet_week_batch;
+DROP TRIGGER organization_time_entry_fact ON "${schema}".timesheet_entry;
+DROP TRIGGER organization_review_fact ON "${schema}".performance_participant;
+DROP TRIGGER organization_payroll_version ON "${schema}".payroll_cycle;
+DROP TRIGGER organization_payroll_draft_version ON "${schema}".payroll_draft_calculation;
+DROP FUNCTION "${schema}".organization_capture_fact();
+DROP FUNCTION "${schema}".organization_emit_fact(JSONB,TEXT,BIGINT,UUID,BOOLEAN);
+DROP TABLE "${schema}".company_event_outbox;
+DROP TABLE "${schema}".organization_review_manager;
+DROP TABLE "${schema}".organization_business_actor;
+DROP TABLE "${schema}".organization_command_receipt;
+DROP TABLE "${schema}".organization_resource_version;
+DROP FUNCTION "${schema}".organization_membership_active(UUID,UUID);
+DROP FUNCTION "${schema}".organization_reporting_owned(UUID);
+DROP FUNCTION "${schema}".organization_reporting_retirement_allowed(UUID);
+DROP TABLE "${schema}".organization_fact_bootstrap;
+DROP TABLE "${schema}".organization_grant_installation;
+ALTER TABLE "${schema}".management_assignment DROP COLUMN graph_version,DROP COLUMN membership_id,DROP COLUMN configuration_hash,DROP COLUMN manager_employee_id;
+ALTER TABLE "${schema}".continuous_feedback ALTER COLUMN created_by_user_id SET NOT NULL;
+ALTER TABLE "${schema}".loan_posting DROP CONSTRAINT loan_posting_actor_present,DROP COLUMN actor_principal_id,ALTER COLUMN actor_id SET NOT NULL;
+ALTER TABLE "${schema}".loan_audit_event DROP CONSTRAINT loan_audit_actor_present,DROP COLUMN actor_principal_id,ALTER COLUMN actor_id SET NOT NULL;
+ALTER TABLE "${schema}".payroll_period_input DROP CONSTRAINT payroll_input_actor_present,DROP COLUMN updated_by_principal_id,ALTER COLUMN updated_by SET NOT NULL;
+ALTER TABLE "${schema}".payroll_period_input_audit DROP CONSTRAINT payroll_input_audit_actor_present,DROP COLUMN changed_by_principal_id,ALTER COLUMN changed_by SET NOT NULL;
+ALTER TABLE "${schema}".payroll_period_adjustment DROP CONSTRAINT payroll_adjustment_actor_present,DROP COLUMN updated_by_principal_id,ALTER COLUMN updated_by SET NOT NULL;
+ALTER TABLE "${schema}".payroll_draft_calculation DROP CONSTRAINT payroll_draft_actor_present,DROP COLUMN calculated_by_principal_id,DROP COLUMN finalized_by_principal_id,ALTER COLUMN calculated_by SET NOT NULL;
+ALTER TABLE "${schema}".payroll_cycle DROP COLUMN processed_by_principal_id;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>
+

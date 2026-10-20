@@ -127,4 +127,11 @@
     <include file="migrations/0108_loan_late_payments/loan_late_payments.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0109_loan_schedule_anchor/loan_schedule_anchor.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0110_loan_role_scopes/loan_role_scopes.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0112_company_management_foundation/company_management_foundation.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0115_organization_tenant_runtime/organization_tenant_runtime.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0117_organization_membership_lifecycle/organization_membership_lifecycle.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0118_organization_hr_administration/organization_hr_administration.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0119_organization_payroll_jobs/organization_payroll_jobs.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0121_organization_source_history/organization_source_history.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0125_private_event_source/private_event_source.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

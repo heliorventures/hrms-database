@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0117-001-organization-membership-lifecycle" author="kabipay-dev" runInTransaction="true">
+  <sql splitStatements="false"><![CDATA[
+CREATE TABLE "${schema}".organization_membership_installation (
+ tenant_id uuid NOT NULL, membership_id uuid NOT NULL, organization_id uuid NOT NULL,
+ status text NOT NULL CHECK(status IN ('ACTIVE','SUSPENDED','DETACHING','DETACHED')),
+ desired_status text NOT NULL CHECK(desired_status IN ('ACTIVE','SUSPENDED','DETACHING')),
+ version bigint NOT NULL CHECK(version>0), configuration_hash char(64) NOT NULL CHECK(configuration_hash ~ '^[a-f0-9]{64}$'),
+ retirement_transaction_id bigint, installed_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,membership_id), UNIQUE(tenant_id,organization_id),
+ CHECK((desired_status='DETACHING' AND status='DETACHED' AND retirement_transaction_id IS NOT NULL)
+    OR (desired_status=status AND status IN ('ACTIVE','SUSPENDED')))
+);
+CREATE TABLE "${schema}".organization_membership_lifecycle_receipt (
+ tenant_id uuid NOT NULL, command_id uuid NOT NULL, membership_id uuid NOT NULL,
+ organization_id uuid NOT NULL, version bigint NOT NULL CHECK(version>0),
+ desired_status text NOT NULL CHECK(desired_status IN ('ACTIVE','SUSPENDED','DETACHING')),
+ status text NOT NULL CHECK(status IN ('ACTIVE','SUSPENDED','DETACHED')),
+ configuration_hash char(64) NOT NULL CHECK(configuration_hash ~ '^[a-f0-9]{64}$'),
+ drained_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,command_id),
+ FOREIGN KEY(tenant_id,membership_id) REFERENCES "${schema}".organization_membership_installation(tenant_id,membership_id)
+);
+ALTER TABLE "${schema}".organization_grant_installation ADD COLUMN status text NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','SUSPENDED','REVOKED'));
+ALTER TABLE "${schema}".organization_fact_bootstrap DROP CONSTRAINT organization_fact_bootstrap_status_check;
+ALTER TABLE "${schema}".organization_fact_bootstrap ADD CONSTRAINT organization_fact_bootstrap_status_check CHECK(status IN ('PENDING','COMPLETE','PAUSED','STOPPED'));
+
+CREATE OR REPLACE FUNCTION "${schema}".organization_membership_active(company uuid,org uuid)
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog AS $active$
+ SELECT EXISTS(SELECT 1 FROM "${schema}".organization_membership_installation m WHERE m.tenant_id=company AND m.organization_id=org AND m.status='ACTIVE')
+$active$;
+CREATE OR REPLACE FUNCTION "${schema}".organization_reporting_owned(company uuid)
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog AS $owned$
+ SELECT EXISTS(SELECT 1 FROM "${schema}".organization_membership_installation m WHERE m.tenant_id=company AND m.status IN ('ACTIVE','SUSPENDED','DETACHING'))
+$owned$;
+CREATE OR REPLACE FUNCTION "${schema}".organization_reporting_retirement_allowed(company uuid)
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog AS $retire$
+ SELECT EXISTS(SELECT 1 FROM "${schema}".organization_membership_installation m
+  WHERE m.tenant_id=company AND m.status='DETACHED' AND m.desired_status='DETACHING'
+  AND m.retirement_transaction_id=txid_current()
+  AND NOT EXISTS(SELECT 1 FROM "${schema}".organization_membership_installation other WHERE other.tenant_id=company AND other.membership_id<>m.membership_id AND other.status IN ('ACTIVE','SUSPENDED','DETACHING'))
+  AND current_setting('kabipay.organization_retirement',true)=m.tenant_id::text||':'||m.organization_id::text||':'||m.membership_id::text)
+$retire$;
+COMMENT ON TABLE "${schema}".organization_membership_lifecycle_receipt IS 'Permanent minimal source drain/installation receipt; original actor authorization remains in organization_command_receipt. Never cleanup as transport history.';
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $guard$ BEGIN
+ IF EXISTS(SELECT 1 FROM "${schema}".organization_membership_installation)
+ OR EXISTS(SELECT 1 FROM "${schema}".organization_membership_lifecycle_receipt)
+ OR EXISTS(SELECT 1 FROM "${schema}".organization_fact_bootstrap WHERE status IN ('PAUSED','STOPPED'))
+ THEN RAISE EXCEPTION 'Membership lifecycle ownership/receipts exist; rollback requires reviewed reconciliation, never deletion'; END IF;
+END $guard$;
+CREATE OR REPLACE FUNCTION "${schema}".organization_membership_active(company uuid,org uuid) RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog AS $active$
+ SELECT EXISTS(SELECT 1 FROM "${schema}".organization_fact_bootstrap b WHERE b.tenant_id=company AND b.organization_id=org AND b.status IN ('PENDING','COMPLETE'))
+$active$;
+CREATE OR REPLACE FUNCTION "${schema}".organization_reporting_owned(company uuid) RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog AS $owned$
+ SELECT EXISTS(SELECT 1 FROM "${schema}".organization_fact_bootstrap b WHERE b.tenant_id=company AND b.status IN ('PENDING','COMPLETE'))
+$owned$;
+CREATE OR REPLACE FUNCTION "${schema}".organization_reporting_retirement_allowed(company uuid) RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog AS $retire$ SELECT false $retire$;
+ALTER TABLE "${schema}".organization_fact_bootstrap DROP CONSTRAINT organization_fact_bootstrap_status_check;
+ALTER TABLE "${schema}".organization_fact_bootstrap ADD CONSTRAINT organization_fact_bootstrap_status_check CHECK(status IN ('PENDING','COMPLETE'));
+ALTER TABLE "${schema}".organization_grant_installation DROP COLUMN status;
+DROP TABLE "${schema}".organization_membership_lifecycle_receipt;
+DROP TABLE "${schema}".organization_membership_installation;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

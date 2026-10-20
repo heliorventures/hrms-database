@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.23.xsd">
+ <changeSet id="0118-001-organization-hr-administration" author="kabipay">
+  <sql splitStatements="false"><![CDATA[
+-- Private administration versions. Never put account credentials or definition bodies on general topics.
+CREATE FUNCTION "${schema}".organization_capture_admin_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE r JSONB; tenant UUID; resource UUID; kind TEXT;
+BEGIN
+ r:=CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+ IF TG_TABLE_NAME='user_role' THEN
+  resource:=(r->>'user_id')::UUID;
+  SELECT tenant_id INTO tenant FROM "${schema}"."user" WHERE id=resource;
+  kind:='user';
+ ELSIF TG_TABLE_NAME='workflow_step' THEN
+  resource:=(r->>'workflow_id')::UUID;tenant:=(r->>'tenant_id')::UUID;kind:='workflow_definition';
+ ELSIF TG_TABLE_NAME='clearance_checklist' THEN
+  resource:=(r->>'id')::UUID;tenant:=(r->>'tenant_id')::UUID;kind:='clearance_checklist';
+ ELSIF TG_TABLE_NAME='separation' THEN
+  resource:=(r->>'id')::UUID;tenant:=(r->>'tenant_id')::UUID;kind:='separation';
+ ELSE
+  resource:=(r->>'id')::UUID;tenant:=(r->>'tenant_id')::UUID;
+  kind:=CASE WHEN TG_TABLE_NAME='user' THEN 'user' ELSE 'workflow_definition' END;
+ END IF;
+ IF tenant IS NULL THEN RETURN NULL; END IF;
+ INSERT INTO "${schema}".organization_resource_version(tenant_id,resource_type,resource_id,version,last_actor,fact_occurred_at)
+ VALUES(tenant,kind,resource,1,COALESCE(NULLIF(current_setting('kabipay.organization_actor',true),'')::JSONB,jsonb_build_object('kind','system')),clock_timestamp())
+ ON CONFLICT(tenant_id,resource_type,resource_id) DO UPDATE SET version=organization_resource_version.version+1,last_actor=excluded.last_actor,fact_occurred_at=excluded.fact_occurred_at;
+ RETURN NULL;
+END $fn$;
+CREATE TRIGGER organization_account_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}"."user" FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_admin_version();
+CREATE TRIGGER organization_account_role_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".user_role FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_admin_version();
+CREATE TRIGGER organization_definition_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".workflow FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_admin_version();
+CREATE TRIGGER organization_definition_step_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".workflow_step FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_admin_version();
+CREATE FUNCTION "${schema}".organization_capture_role_users_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE r JSONB; rid UUID;
+BEGIN
+ r:=CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+ rid:=CASE WHEN TG_TABLE_NAME='role' THEN (r->>'id')::UUID ELSE (r->>'role_id')::UUID END;
+ INSERT INTO "${schema}".organization_resource_version(tenant_id,resource_type,resource_id,version,last_actor,fact_occurred_at)
+ SELECT u.tenant_id,'user',u.id,1,COALESCE(NULLIF(current_setting('kabipay.organization_actor',true),'')::JSONB,jsonb_build_object('kind','system')),clock_timestamp()
+ FROM "${schema}"."user" u JOIN "${schema}".user_role ur ON ur.user_id=u.id WHERE ur.role_id=rid
+ ON CONFLICT(tenant_id,resource_type,resource_id) DO UPDATE SET version=organization_resource_version.version+1,last_actor=excluded.last_actor,fact_occurred_at=excluded.fact_occurred_at;
+ RETURN NULL;
+END $fn$;
+CREATE TRIGGER organization_role_permission_accounts_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".role_permission FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_role_users_version();
+CREATE TRIGGER organization_role_scope_accounts_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".permission_scope FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_role_users_version();
+CREATE TRIGGER organization_role_accounts_version AFTER UPDATE OR DELETE ON "${schema}".role FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_role_users_version();
+ALTER TABLE "${schema}".separation ADD COLUMN approved_by_principal_id UUID,
+ ADD CONSTRAINT separation_approval_principal_fk FOREIGN KEY(tenant_id,approved_by_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT separation_approval_single_actor CHECK (approved_by IS NULL OR approved_by_principal_id IS NULL);
+ALTER TABLE "${schema}".clearance_checklist ADD COLUMN cleared_by_principal_id UUID,
+ ADD CONSTRAINT clearance_principal_fk FOREIGN KEY(tenant_id,cleared_by_principal_id) REFERENCES "${schema}".actor_ref(tenant_id,principal_id),
+ ADD CONSTRAINT clearance_single_actor CHECK (cleared_by IS NULL OR cleared_by_principal_id IS NULL);
+CREATE TRIGGER organization_separation_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".separation FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_admin_version();
+CREATE TRIGGER organization_clearance_version AFTER INSERT OR UPDATE OR DELETE ON "${schema}".clearance_checklist FOR EACH ROW EXECUTE FUNCTION "${schema}".organization_capture_admin_version();
+INSERT INTO "${schema}".organization_resource_version(tenant_id,resource_type,resource_id)
+ SELECT tenant_id,'user',id FROM "${schema}"."user" UNION ALL SELECT tenant_id,'workflow_definition',id FROM "${schema}".workflow
+ UNION ALL SELECT tenant_id,'separation',id FROM "${schema}".separation UNION ALL SELECT tenant_id,'clearance_checklist',id FROM "${schema}".clearance_checklist
+ ON CONFLICT DO NOTHING;
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $guard$ BEGIN
+ IF EXISTS(SELECT 1 FROM "${schema}".separation WHERE approved_by_principal_id IS NOT NULL)
+ OR EXISTS(SELECT 1 FROM "${schema}".clearance_checklist WHERE cleared_by_principal_id IS NOT NULL)
+ THEN RAISE EXCEPTION 'Cannot roll back logical actor attribution after organization administration writes'; END IF;
+END $guard$;
+DROP TRIGGER organization_account_version ON "${schema}"."user";
+DROP TRIGGER organization_account_role_version ON "${schema}".user_role;
+DROP TRIGGER organization_definition_version ON "${schema}".workflow;
+DROP TRIGGER organization_definition_step_version ON "${schema}".workflow_step;
+DROP TRIGGER organization_role_permission_accounts_version ON "${schema}".role_permission;
+DROP TRIGGER organization_role_scope_accounts_version ON "${schema}".permission_scope;
+DROP TRIGGER organization_role_accounts_version ON "${schema}".role;
+DROP FUNCTION "${schema}".organization_capture_role_users_version();
+DROP TRIGGER organization_separation_version ON "${schema}".separation;
+DROP TRIGGER organization_clearance_version ON "${schema}".clearance_checklist;
+DROP FUNCTION "${schema}".organization_capture_admin_version();
+ALTER TABLE "${schema}".separation DROP CONSTRAINT separation_approval_principal_fk,DROP CONSTRAINT separation_approval_single_actor,DROP COLUMN approved_by_principal_id;
+ALTER TABLE "${schema}".clearance_checklist DROP CONSTRAINT clearance_principal_fk,DROP CONSTRAINT clearance_single_actor,DROP COLUMN cleared_by_principal_id;
+-- Preserve resource versions and immutable receipts for audit and replay.
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

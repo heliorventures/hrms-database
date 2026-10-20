@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0113-001-organization-control-outbox" author="kabipay-dev" runInTransaction="true">
+  <comment>Temporary atomic handoff of organization configuration facts to future CDC. Not an archive or retry-history table. No cleanup is enabled before capture acceptance.</comment>
+  <sql splitStatements="false"><![CDATA[
+CREATE TABLE kabipay_ops.organization_outbox (
+ id UUID PRIMARY KEY,
+ organization_id UUID REFERENCES kabipay_ops.organization(id),
+ source_tenant_id UUID NOT NULL REFERENCES kabipay_ops.tenant(id),
+ actor_principal_id UUID NOT NULL REFERENCES kabipay_ops.principal(id),
+ aggregate_id UUID NOT NULL,
+ aggregate_version BIGINT NOT NULL CHECK (aggregate_version > 0),
+ event_type VARCHAR(100) NOT NULL CHECK (event_type ~ '^[a-z][a-z0-9_.-]*$'),
+ schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+ payload JSONB NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_organization_outbox_capture ON kabipay_ops.organization_outbox(created_at,id);
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DROP TABLE kabipay_ops.organization_outbox;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

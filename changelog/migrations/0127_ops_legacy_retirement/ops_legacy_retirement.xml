@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0127-001-ops-legacy-retirement" author="kabipay-dev" runInTransaction="true">
+ <sql splitStatements="false"><![CDATA[
+SELECT kabipay_ops.private_assert_retirement();
+DROP TRIGGER private_operator_no_truncate ON kabipay_ops.operator_audit_log;
+DROP TRIGGER private_operator_write_fence ON kabipay_ops.operator_audit_log;
+DROP FUNCTION kabipay_ops.private_operator_write_fence();
+-- Accepted archive identities remain readable; raw-source migration functions
+-- have no valid post-retirement target and must not remain callable.
+DROP FUNCTION kabipay_ops.private_assert_retirement();
+DROP FUNCTION kabipay_ops.private_legacy_export_accept(uuid,uuid,jsonb);
+DROP FUNCTION kabipay_ops.private_legacy_export_publish(uuid,uuid,jsonb);
+DROP FUNCTION kabipay_ops.private_legacy_export_published_frames(uuid,uuid,uuid);
+DROP FUNCTION kabipay_ops.private_legacy_export_batch(uuid,uuid,uuid,integer,integer);
+DROP FUNCTION kabipay_ops.private_legacy_export_start(uuid,text,uuid,bigint);
+DROP FUNCTION kabipay_ops.private_dependency_digest(text);
+DROP FUNCTION kabipay_ops.private_source_digest(text);
+DROP FUNCTION kabipay_ops.private_fence_legacy(uuid,bigint);
+DROP TABLE kabipay_ops.operator_audit_log;
+UPDATE kabipay_ops.private_source_cutover SET state='RETIRED',updated_at=clock_timestamp();
+ ]]></sql>
+ </changeSet>
+</databaseChangeLog>

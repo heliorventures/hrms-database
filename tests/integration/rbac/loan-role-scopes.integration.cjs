@@ -86,6 +86,19 @@ async function main() {
       assert.equal(rows.length,20);
       const first=await snapshot();await migrate();assert.deepEqual(await snapshot(),first,'repeat must preserve scope IDs, timestamps and restrictions');
     });
+    await check('runtime-valid whitespace and case in existing scope types remain byte-equivalent',async()=>{
+      // Rust char::is_whitespace includes U+0085, unlike JavaScript trim().
+      const whitespace='\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000';
+      await grant('HR',['read']);await grant('ADMIN',['read']);
+      await scope('HR','read','SELF');await scope('ADMIN','read','TEAM');
+      for (const character of whitespace) {
+        for (const [role,type] of [['HR','sElF'],['ADMIN','tEaM']]) {
+          await db.query(`UPDATE loan_scope_fixture.permission_scope SET scope_type=$1
+            WHERE role_id=(SELECT id FROM loan_scope_fixture.role WHERE name=$2 AND tenant_id=$3)`,[character+type+character,role,tenant]);
+        }
+        const before=await snapshot();await migrate();assert.deepEqual(await snapshot(),before);
+      }
+    });
     await check('no loan grants means no scopes or automatic permissions',async()=>{
       const before=await snapshot();await migrate();assert.deepEqual(await snapshot(),before);
     });
@@ -109,6 +122,7 @@ async function main() {
       ['cross-tenant scope',`UPDATE loan_scope_fixture.permission_scope SET tenant_id='${other}' WHERE action='read'`],
       ['ambiguous normalized scope',`INSERT INTO loan_scope_fixture.permission_scope(tenant_id,role_id,resource,action,scope_type) SELECT tenant_id,role_id,'LOAN','READ','SELF' FROM loan_scope_fixture.permission_scope WHERE action='read'`],
       ['invalid stored scope',`UPDATE loan_scope_fixture.permission_scope SET scope_type='INVALID' WHERE action='read'`],
+      ['runtime-invalid Unicode scope name',`UPDATE loan_scope_fixture.permission_scope SET scope_type='ſELF' WHERE action='read'`],
       ['unmatchable stored scope key',`UPDATE loan_scope_fixture.permission_scope SET resource=' loan ' WHERE action='read'`],
     ]) await check(`${name} fails without partial changes`,async()=>{
       await grant('HR',['read','approve']);await scope('HR','read','TEAM');await db.query(setup);

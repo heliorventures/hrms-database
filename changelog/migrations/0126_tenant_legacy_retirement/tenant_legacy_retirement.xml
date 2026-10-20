@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0126-001-tenant-legacy-retirement" author="kabipay-dev" runInTransaction="true">
+ <sql splitStatements="false"><![CDATA[
+SELECT "${schema}".private_assert_retirement();
+DROP TRIGGER private_survey_legacy_mirror ON "${schema}".audit_log;
+DROP FUNCTION "${schema}".private_survey_legacy_mirror();
+DROP TRIGGER private_audit_no_truncate ON "${schema}".audit_log;
+DROP TRIGGER private_legacy_outbox_no_truncate ON "${schema}".outbox_event;
+DROP TRIGGER private_webhook_no_truncate ON "${schema}".webhook_delivery_log;
+DROP TRIGGER private_finance_no_truncate ON "${schema}".employee_finance_outbox;
+DROP TRIGGER trg_audit_log_append_only ON "${schema}".audit_log;
+DROP TRIGGER private_audit_writer_fence ON "${schema}".audit_log;
+DROP TRIGGER private_legacy_offboarding_receipt ON "${schema}".outbox_event;
+DROP FUNCTION "${schema}".private_legacy_offboarding_receipt();
+DROP TRIGGER private_outbox_writer_fence ON "${schema}".outbox_event;
+DROP TRIGGER private_webhook_writer_fence ON "${schema}".webhook_delivery_log;
+DROP TRIGGER trg_webhook_delivery_log_updated_at ON "${schema}".webhook_delivery_log;
+DROP TRIGGER private_finance_writer_fence ON "${schema}".employee_finance_outbox;
+DROP TRIGGER guard_private_finance_event ON "${schema}".employee_finance_outbox;
+DROP FUNCTION "${schema}".prevent_audit_log_mutation();
+DROP FUNCTION "${schema}".guard_private_finance_event();
+DROP FUNCTION "${schema}".private_legacy_write_fence();
+DROP FUNCTION "${schema}".organization_legacy_export_start(uuid,uuid,uuid);
+DROP FUNCTION "${schema}".organization_legacy_audit_event(jsonb,uuid);
+-- Migration-only entrypoints are retired with their raw source tables. Keep
+-- accepted manifests, compact business state and ongoing capture/GC helpers.
+DROP FUNCTION "${schema}".private_assert_retirement();
+DROP FUNCTION "${schema}".private_assert_pending_migration(uuid,bigint);
+DROP FUNCTION "${schema}".private_legacy_export_accept(uuid,uuid,jsonb);
+DROP FUNCTION "${schema}".private_legacy_export_publish(uuid,uuid,jsonb);
+DROP FUNCTION "${schema}".private_legacy_export_published_frames(uuid,uuid,uuid);
+DROP FUNCTION "${schema}".private_legacy_export_batch(uuid,uuid,uuid,integer,integer);
+DROP FUNCTION "${schema}".private_legacy_export_start(uuid,text,uuid,bigint);
+DROP FUNCTION "${schema}".private_dependency_digest(text);
+DROP FUNCTION "${schema}".private_source_digest(text);
+DROP FUNCTION "${schema}".private_fence_legacy(uuid,bigint);
+DROP TABLE "${schema}".audit_log;
+DROP TABLE "${schema}".outbox_event;
+DROP TABLE "${schema}".webhook_delivery_log;
+DROP TABLE "${schema}".employee_finance_outbox;
+UPDATE "${schema}".private_source_cutover SET state='RETIRED',updated_at=clock_timestamp();
+ ]]></sql>
+ </changeSet>
+</databaseChangeLog>
