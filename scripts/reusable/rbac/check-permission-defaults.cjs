@@ -9,7 +9,7 @@ function readDefaults() {
     const xml = fs.readFileSync(path.join(root, 'changelog', file), 'utf8');
     const block = xml.match(/-- permission-defaults:start([\s\S]*?)-- permission-defaults:end/);
     if (!block) continue;
-    for (const [, resource, action, admin, hr] of block[1].matchAll(/\('([a-z_]+)'\s*,\s*'([a-z_]+)'\s*,\s*'(ALL|SELF|TEAM|NONE)'\s*,\s*'(ALL|SELF|TEAM|NONE)'\)/g)) {
+    for (const [, resource, action, admin, hr] of block[1].matchAll(/\('([a-z_]+)'\s*,\s*'([a-z_-]+)'\s*,\s*'(ALL|SELF|TEAM|NONE)'\s*,\s*'(ALL|SELF|TEAM|NONE)'\)/g)) {
       decisions.set(`${resource}:${action}`, { resource, action, admin, hr });
     }
   }
@@ -18,7 +18,7 @@ function readDefaults() {
 
 function checkCoverage(source) {
   const decisions = readDefaults();
-  return [...new Set([...source.matchAll(/['"]([a-z_]+:[a-z_]+)['"]/g)].map(m => m[1]))]
+  return [...new Set([...source.matchAll(/['"]([a-z_]+:[a-z_-]+)['"]/g)].map(m => m[1]))]
     .filter(code => !decisions.has(code)).sort();
 }
 

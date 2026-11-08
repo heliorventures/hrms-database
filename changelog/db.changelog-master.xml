@@ -32,4 +32,5 @@
     <!-- One-time backfill across existing tenants; no tenant-schema changes. -->
     <include file="migrations/0083_missing_module_subscriptions/missing_module_subscriptions.xml" relativeToChangelogFile="true"/>
 
+    <include file="migrations/0104_loan_module_catalog/loan_module_catalog.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

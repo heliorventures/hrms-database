@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0104-001-loans-module" author="kabipay-dev">
+  <comment>Register the independent Loans product hosted by Payroll. No subscription, price, policy or role grants.</comment>
+  <sql><![CDATA[
+INSERT INTO kabipay_ops.module(id,code,name,category,description,is_active,is_core,display_order)
+VALUES(gen_random_uuid(),'LOANS','Employee Loans','Finance','Employee loan requests, recorded payments and recoveries',true,false,45)
+ON CONFLICT(code) DO NOTHING;
+  ]]></sql>
+  <rollback><sql>DO $$ BEGIN RAISE EXCEPTION 'Loans module catalog rollback requires reviewed forward correction'; END $$;</sql></rollback>
+ </changeSet>
+</databaseChangeLog>
