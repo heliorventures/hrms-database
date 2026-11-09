@@ -10,7 +10,8 @@ param(
  [string]$SourceSchema,
  [string]$RegistryService,
  [string]$RegistryDatabase,
- [string]$RuntimeHost
+ [string]$RuntimeHost,
+ [string[]]$CompanyDatabases
 )
 $ErrorActionPreference='Stop'
 if($ScopeId-cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'){throw 'Explicit canonical source ScopeId required'}
@@ -21,6 +22,19 @@ if($Operation-eq'company'){
  if($RegistryService-cnotmatch '^[a-z][a-z0-9_.-]{0,62}$' -or $RegistryDatabase-cnotmatch '^[A-Za-z_][A-Za-z0-9_-]{0,62}$' -or $RuntimeHost-cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,252}$'){throw 'Company requires fixed RegistryService, RegistryDatabase and reviewed RuntimeHost registration'}
 }elseif($SourceSchema -or $RegistryService -or $RegistryDatabase -or $RuntimeHost){throw 'Operator source uses fixed kabipay_ops and cannot accept company binding arguments'}
 else{$SourceSchema='kabipay_ops'}
+# Explicit operator-reviewed inventory; omission preserves isolated-role behavior.
+$runtimeDatabases='W10='
+if($PSBoundParameters.ContainsKey('CompanyDatabases')){
+ if($Operation-ne'company' -or !$CompanyDatabases -or $CompanyDatabases.Count-gt 100){throw 'CompanyDatabases requires 1..100 reviewed company databases'}
+ $names=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ foreach($name in $CompanyDatabases){
+  if($name-cnotmatch '^[A-Za-z_][A-Za-z0-9_-]{0,62}$' -or $name.ToLowerInvariant()-in @('public','postgres','template0','template1','kabipay_ops','information_schema') -or $name.ToLowerInvariant().StartsWith('pg_') -or $name-ceq$RegistryDatabase -or !$names.Add($name)){throw 'Invalid, duplicate, system or registry company database list entry'}
+ }
+ if(!$names.Contains($Database)){throw 'Company database list must include the current source database'}
+ # Windows PowerShell strips embedded JSON quotes in native argv. Encode only
+ # this non-secret identifier list; SQL decodes and validates it independently.
+ $runtimeDatabases=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject @($CompanyDatabases) -Compress)))
+}
 function InvokeFixedPsql([string]$connection,[string]$file,[string[]]$variables){
  $parameters=@($connection,'-X','--set=ON_ERROR_STOP=1','--single-transaction')+$variables+@('--file='+(Join-Path $PSScriptRoot $file))
  & psql @parameters
@@ -28,6 +42,6 @@ function InvokeFixedPsql([string]$connection,[string]$file,[string[]]$variables)
 }
 # libpq service/passfiles are operator-owned. No password, arbitrary DSN or SQL input.
 if($Operation-eq'company'){
- InvokeFixedPsql "service=$RegistryService dbname=$RegistryDatabase sslmode=verify-full" 'registration.template.sql' @("--set=registry_database=$RegistryDatabase","--set=database=$Database","--set=scope_id=$ScopeId","--set=source_schema=$SourceSchema","--set=runtime_host=$RuntimeHost")
+ InvokeFixedPsql "service=$RegistryService dbname=$RegistryDatabase sslmode=verify-full" 'registration.template.sql' @("--set=registry_database=$RegistryDatabase","--set=database=$Database","--set=scope_id=$ScopeId","--set=source_schema=$SourceSchema","--set=runtime_host=$RuntimeHost","--set=runtime_databases_b64=$runtimeDatabases")
 }
-InvokeFixedPsql "service=$Service dbname=$Database sslmode=verify-full" "$Operation.template.sql" @("--set=database=$Database","--set=scope_id=$ScopeId","--set=source_schema=$SourceSchema","--set=runtime_role=$RuntimeRole","--set=bootstrap_mode=$BootstrapMode","--set=producer_generation=$ProducerGeneration")
+InvokeFixedPsql "service=$Service dbname=$Database sslmode=verify-full" "$Operation.template.sql" @("--set=database=$Database","--set=scope_id=$ScopeId","--set=source_schema=$SourceSchema","--set=runtime_role=$RuntimeRole","--set=bootstrap_mode=$BootstrapMode","--set=producer_generation=$ProducerGeneration","--set=runtime_databases_b64=$runtimeDatabases")

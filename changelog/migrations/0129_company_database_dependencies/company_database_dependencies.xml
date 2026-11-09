@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0129-001-local-company-catalog-reference-and-helper" author="kabipay-dev" runInTransaction="true">
+  <comment>Run with writers frozen while ops and tenant schemas are colocated. Preserve connector IDs/data and timestamp trigger definitions before schema export.</comment>
+  <sql splitStatements="false"><![CDATA[
+SET LOCAL lock_timeout='5s';
+SET LOCAL statement_timeout='2min';
+-- Deterministic trigger deparsing and built-in resolution, independent of caller settings.
+SET LOCAL search_path=pg_catalog;
+LOCK TABLE "${schema}".tenant_integration IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE kabipay_ops.integration_connector IN SHARE MODE;
+DO $prerequisites$
+DECLARE helper oid;identity_guard oid;fk record;
+BEGIN
+ identity_guard:=to_regprocedure('kabipay_ops.preserve_integration_connector_identity()');
+ IF identity_guard IS NULL OR (SELECT count(*) FROM pg_trigger WHERE tgrelid='kabipay_ops.integration_connector'::regclass
+  AND tgfoid=identity_guard AND tgenabled='A' AND tgname IN ('trg_integration_connector_keep_id','trg_integration_connector_keep_rows','trg_integration_connector_keep_truncate'))<>3
+ THEN RAISE EXCEPTION 'Apply ops 0128 catalog identity protection before tenant 0129';END IF;
+ SELECT p.oid INTO helper FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
+ WHERE n.nspname='kabipay_ops' AND p.proname='set_updated_at' AND p.pronargs=0
+  AND p.prorettype='trigger'::regtype AND NOT p.prosecdef AND p.proconfig IS NULL AND l.lanname='plpgsql'
+  AND regexp_replace(lower(p.prosrc),'[[:space:]]','','g') IN ('beginnew.updated_at=now();returnnew;end;','beginnew.updated_at:=now();returnnew;end;');
+ IF helper IS NULL OR to_regprocedure(format('%I.set_updated_at()','${schema}')) IS NOT NULL THEN
+  RAISE EXCEPTION 'Unexpected timestamp helper definition or existing local helper; review before migrating';
+ END IF;
+ IF EXISTS(SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE n.nspname='${schema}' AND t.tgfoid=helper AND NOT t.tgisinternal
+   AND (t.tgtype<>19 OR t.tgnargs<>0 OR t.tgconstraint<>0 OR t.tgparentid<>0)) THEN
+  RAISE EXCEPTION 'Unsupported timestamp helper trigger form; review before migrating';
+ END IF;
+ SELECT * INTO fk FROM pg_constraint WHERE conrelid='"${schema}".tenant_integration'::regclass AND conname='fk_tenant_integration_connector';
+ IF NOT FOUND THEN RAISE EXCEPTION 'Expected integration catalog FK missing';END IF;
+ IF fk.contype<>'f' OR NOT fk.convalidated OR fk.confrelid<>'kabipay_ops.integration_connector'::regclass
+  OR fk.conkey<>ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=fk.conrelid AND attname='integration_connector_id')]::smallint[]
+  OR fk.confkey<>ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=fk.confrelid AND attname='id')]::smallint[]
+  OR fk.confdeltype<>'r' OR fk.confupdtype<>'a' OR fk.condeferrable THEN
+  RAISE EXCEPTION 'Unexpected integration catalog FK definition';
+ END IF;
+END $prerequisites$;
+
+-- Stable ID references only; mutable catalog fields stay authoritative in ops.
+CREATE TABLE "${schema}".integration_connector_ref(id uuid PRIMARY KEY);
+INSERT INTO "${schema}".integration_connector_ref(id)
+ SELECT DISTINCT integration_connector_id FROM "${schema}".tenant_integration;
+ALTER TABLE "${schema}".tenant_integration DROP CONSTRAINT fk_tenant_integration_connector;
+ALTER TABLE "${schema}".tenant_integration ADD CONSTRAINT fk_tenant_integration_connector
+ FOREIGN KEY(integration_connector_id) REFERENCES "${schema}".integration_connector_ref(id) ON DELETE RESTRICT;
+
+CREATE FUNCTION "${schema}".set_updated_at()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog AS $updated$
+BEGIN NEW.updated_at=pg_catalog.now();RETURN NEW;END $updated$;
+
+DO $retarget$
+DECLARE entry record;definition text;replacement text;
+ invocation CONSTANT text:='EXECUTE FUNCTION kabipay_ops.set_updated_at()';
+BEGIN
+ FOR entry IN SELECT t.oid,t.tgname,t.tgenabled,c.relname,obj_description(t.oid,'pg_trigger') AS comment
+  FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE n.nspname='${schema}' AND NOT t.tgisinternal AND t.tgfoid='kabipay_ops.set_updated_at()'::regprocedure
+  ORDER BY c.oid,t.tgname
+ LOOP
+  definition:=pg_get_triggerdef(entry.oid,false);
+  IF right(definition,length(invocation))<>invocation THEN RAISE EXCEPTION 'Cannot safely retarget timestamp trigger %',entry.tgname;END IF;
+  -- Change only the final invocation; identical text in WHEN literals must survive.
+  replacement:=left(definition,length(definition)-length(invocation))||format('EXECUTE FUNCTION %I.set_updated_at()','${schema}');
+  EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE','${schema}',entry.relname);
+  EXECUTE format('DROP TRIGGER %I ON %I.%I',entry.tgname,'${schema}',entry.relname);
+  EXECUTE replacement;
+  EXECUTE format('ALTER TABLE %I.%I %s TRIGGER %I','${schema}',entry.relname,
+   CASE entry.tgenabled WHEN 'D' THEN 'DISABLE' WHEN 'R' THEN 'ENABLE REPLICA' WHEN 'A' THEN 'ENABLE ALWAYS' ELSE 'ENABLE' END,entry.tgname);
+  IF entry.comment IS NOT NULL THEN EXECUTE format('COMMENT ON TRIGGER %I ON %I.%I IS %L',entry.tgname,'${schema}',entry.relname,entry.comment);END IF;
+ END LOOP;
+END $retarget$;
+  ]]></sql>
+  <rollback><sql splitStatements="false"><![CDATA[
+DO $$ BEGIN RAISE EXCEPTION '0129 requires a reviewed forward correction; the company may already be in a separate database';END $$;
+  ]]></sql></rollback>
+ </changeSet>
+</databaseChangeLog>

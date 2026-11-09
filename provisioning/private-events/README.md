@@ -21,7 +21,25 @@ Company initialization checks every local `tenant_id` UUID column and the public
 
 ## Runtime permissions
 
-The runtime role must preexist as LOGIN, NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE and NOREPLICATION. It cannot own databases/schemas/relations, have memberships or be granted to other roles, create user-schema objects, connect to another database, or read/mutate another source schema. Existing business grants in its own schema are retained. Broad inherited or PUBLIC grants cause a failure; the script does not revoke or silently correct them. In particular, stock PUBLIC CONNECT to other databases must be reviewed by the DBA before provisioning.
+The runtime role must preexist as LOGIN, NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE and NOREPLICATION. It cannot own databases/schemas/relations, have memberships or be granted to other roles, create user-schema objects, or read/mutate another source schema in the current database. By default it cannot connect to another database. Existing business grants in its own schema are retained. Broad inherited or PUBLIC grants cause a failure; the script does not revoke or silently correct them. In particular, stock PUBLIC CONNECT to unapproved databases must be reviewed by the DBA before provisioning.
+
+### Shared company business-service logins
+
+For the approved shared application layout, provide the same reviewed database list to each company's invocation for a service login:
+
+```powershell
+$companyDatabases = @('company_one', 'company_two')
+./provision.ps1 -Operation company -Service company_dba -Database company_one `
+  -ScopeId '<company-one UUID>' -SourceSchema tenant_one -RuntimeRole employee_runtime `
+  -RegistryService metadata_dba -RegistryDatabase Metadata -RuntimeHost postgres-company `
+  -BootstrapMode existing -CompanyDatabases $companyDatabases
+```
+
+Use the actual inventory classification, generation and exact registered identities. The list is case-sensitive, includes the current database, contains at most 100 unique names, and excludes system/metadata databases. Each entry must match one active POSTGRES mapping on the reviewed host, owned by one non-deleted ACTIVE/SUSPENDED company with no second active mapping. Every listed database must exist on the source server and accept connections. Effective CONNECT to any unlisted database, including via PUBLIC, blocks bootstrap.
+
+The list permits existing approved connections; this invocation grants CONNECT and source permissions only in its current database. Repeat provisioning for every company and each business-service role. No per-company password is added to service files. Adding a company requires updating the reviewed provisioning inventory and granting the existing roles access there. Freeze registry mappings/status changes for the full provisioning sequence: metadata validation and each source transaction are separate, and the runtime independently checks its mappings again. A successful invocation does not certify privileges in databases not yet provisioned.
+
+Omit `CompanyDatabases` for isolated company roles. Operator audit rejects it and retains the single-database rule. CDC/private-worker provisioners and their purpose-specific isolation are unchanged. Do not use this option to broaden worker or reader credentials. The wrapper transfers the non-secret list as base64-encoded JSON to preserve quoting through Windows PowerShell native arguments; SQL decodes and validates it before use.
 
 New grants are SELECT on source authority, accepted legacy manifest state and compact source business state; bounded INSERT columns on the existing publication outbox and compact receipts/state; bounded UPDATE columns on delivery outcome/lease/ownership and survey lifecycle state. The publication sequence receives USAGE, never UPDATE/setval. No runtime grant writes legacy tables, capture markers/evidence, migration ownership plans, acceptance, source identity, generation, source version or cutover flags. Operator-only private capture/export/cleanup/retirement functions must not be executable by the runtime, including through PUBLIC.
 
@@ -32,3 +50,5 @@ The bootstrap grants do not replace existing business grants for users, employee
 ## Checks
 
 `tests/provision.test.ps1` mocks native psql to verify argument binding, fixed service/database/TLS connections, canonical scope IDs, case preservation, role/schema negatives, generation bounds, registration-before-source ordering and stop-on-error. This is not database evidence. The native database fixture and its exact result are recorded in the provider report after execution. Live bootstrap/deployment is separate.
+
+`tests/shared-runtime.test.cjs` creates an owned, loopback-only native PostgreSQL cluster from `PRIVATE_TEST_PG_BIN`, without reading `.env`. It checks two real company databases, a shared role, registry negatives, PUBLIC CONNECT leakage, role membership and protected authority columns. Run with `node --experimental-test-isolation=none --test provisioning/private-events/tests/shared-runtime.test.cjs`. Native fixture results do not establish production TLS or PostgreSQL 16 acceptance when run with another server version.

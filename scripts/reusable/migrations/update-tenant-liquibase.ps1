@@ -9,9 +9,14 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Schema')]
     [ValidatePattern('^tenant_[a-z0-9_]{1,50}$')]
     [string]$Schema,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Company')][string]$TenantId,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Company')][string]$ExpectedDatabase,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Company')][string]$ExpectedMetadataDatabase,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Company')][string]$RuntimeHost,
+    [ValidateSet('update','validate','status')][string]$Command='update',
     [string]$PostgresHost = '',
     [int]$PostgresPort = 5432,
     [string]$DbName = '',
@@ -29,6 +34,12 @@ $DatabaseDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../..')).
 $RunLb = Join-Path $DatabaseDir 'run-liquibase.cjs'
 $DbEnv = Join-Path $DatabaseDir '.env'
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "Node.js is required" }
+if ($PSCmdlet.ParameterSetName -eq 'Company') {
+    if($DbName -or $DbUser -or $DbPassword -or $PostgresHost -or $PostgresSsl -or $UseProcessEnvironment -or $PSBoundParameters.ContainsKey('PostgresPort')) { throw 'Company mode uses repository operator credentials and the guarded registry target; connection overrides are not accepted.' }
+    & node (Join-Path $DatabaseDir 'provisioning/company-databases/deploy-company.cjs') --tenant-id $TenantId --expected-database $ExpectedDatabase --expected-metadata-database $ExpectedMetadataDatabase --runtime-host $RuntimeHost --command $Command
+    if($LASTEXITCODE -ne 0){throw 'Company migration failed'}
+    return
+}
 if (-not (Test-Path $RunLb)) { throw "Missing run-liquibase.cjs - in kabipay-database run npm install" }
 
 function Import-DotEnvFile {
@@ -100,7 +111,7 @@ try {
     $TenantPropsRel = [System.IO.Path]::GetFileName($TenantPropsPath)
     Push-Location $DatabaseDir
     try {
-        & node $RunLb --defaults-file=$TenantPropsRel update
+        & node $RunLb --defaults-file=$TenantPropsRel $Command
         if ($LASTEXITCODE -ne 0) { throw "Liquibase update failed (exit $LASTEXITCODE)" }
     } finally { Pop-Location }
 } finally {

@@ -17,12 +17,15 @@ const javaHome = (ensure.stdout || "").trim();
 const env = { ...process.env };
 if (javaHome) env.JAVA_HOME = javaHome;
 
-const bat = path.join(__dirname, "node_modules", "liquibase", "dist", "liquibase", "liquibase.bat");
-if (!fs.existsSync(bat)) {
+const home = path.join(__dirname, "node_modules", "liquibase", "dist", "liquibase");
+const jar = path.join(home, 'internal', 'lib', 'liquibase-core.jar');
+if (!fs.existsSync(jar)) {
   console.error("Missing npm package 'liquibase'. Run: npm install");
   process.exit(1);
 }
 
 const args = process.argv.slice(2);
-const r = spawnSync(bat, args, { env, stdio: "inherit", shell: true, windowsHide: true });
+env.LIQUIBASE_HOME=home;
+const java=javaHome?path.join(javaHome,'bin',process.platform==='win32'?'java.exe':'java'):'java';
+const r = spawnSync(java, ['-jar',jar,...args], { env, stdio: "inherit", shell: false, windowsHide: true });
 process.exit(r.status ?? 1);

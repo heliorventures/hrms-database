@@ -12,6 +12,11 @@ try {
  Assert ($global:PrivateProvisionCalls[0]-contains 'service=metadata_dba dbname=Metadata sslmode=verify-full') 'Fixed registry TLS connection missing'
  $args=$global:PrivateProvisionCalls[1]
  foreach($item in @('service=source_dba dbname=Company_One sslmode=verify-full','--single-transaction','--set=ON_ERROR_STOP=1','--set=source_schema=Tenant_One','--set=producer_generation=1','--set=runtime_role=company_runtime')){Assert ($args-contains$item) "Missing native argument $item"}
+ $shared=$company.Clone();$shared.CompanyDatabases=@('Company_One','Company_Two')
+ & $wrapper @shared
+ $expectedList=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('["Company_One","Company_Two"]'))
+ foreach($call in @($global:PrivateProvisionCalls[-2],$global:PrivateProvisionCalls[-1])){Assert ($call-contains "--set=runtime_databases_b64=$expectedList") 'Reviewed database list must reach registry and source without native JSON quote loss'}
+ foreach($names in @(@('Company_Two'),@('Company_One','Company_One'),@('Company_One','postgres'),@('Company_One','Metadata'),@('Company_One','x;SELECT 1'),@('Company_One','template1'))){$bad=$company.Clone();$bad.CompanyDatabases=$names;Reject {&$wrapper @bad}}
  foreach($field in @('ScopeId','SourceSchema','RuntimeRole','RegistryService','RegistryDatabase','RuntimeHost')){$bad=$company.Clone();$bad[$field]='x;SELECT 1';Reject {&$wrapper @bad}}
  foreach($schema in @('public','PUBLIC','kabipay_ops','information_schema','pg_catalog','PG_temp','a-b','')){$bad=$company.Clone();$bad.SourceSchema=$schema;Reject {&$wrapper @bad}}
  foreach($role in @('postgres','pg_read_all_data','PUBLIC','kabipay_ops','')){$bad=$company.Clone();$bad.RuntimeRole=$role;Reject {&$wrapper @bad}}
@@ -21,6 +26,7 @@ try {
  & $wrapper -Operation operator -Database Metadata -Service metadata_dba -ScopeId '22222222-2222-4222-8222-222222222222' -RuntimeRole metadata_runtime -BootstrapMode existing -ProducerGeneration 7
  Assert ($global:PrivateProvisionCalls[-1]-contains '--set=source_schema=kabipay_ops') 'Operator schema must be fixed'
  Reject {&$wrapper -Operation operator -Database Metadata -Service metadata_dba -ScopeId '22222222-2222-4222-8222-222222222222' -RuntimeRole metadata_runtime -BootstrapMode empty -SourceSchema tenant_wrong}
+ Reject {&$wrapper -Operation operator -Database Metadata -Service metadata_dba -ScopeId '22222222-2222-4222-8222-222222222222' -RuntimeRole metadata_runtime -BootstrapMode empty -CompanyDatabases @('Metadata')}
  $before=$global:PrivateProvisionCalls.Count;$global:PrivateProvisionExit=1;$failed=$false;try{&$wrapper @company}catch{$failed=$true};Assert $failed 'psql failure ignored';Assert ($global:PrivateProvisionCalls.Count-eq$before+1) 'Registry failure still reached source database'
  Write-Output 'PASS: private source bootstrap argument/negative contracts; psql mocked, no database contacted'
 } finally {Remove-Item Function:\psql -ErrorAction SilentlyContinue;$global:LASTEXITCODE=0}

@@ -8,7 +8,7 @@ DECLARE
  role_id oid;authority regclass;entry record;column_entry record;existing record;relation_oid oid;source_outbox text;
  allowed_select boolean;insert_columns text[];update_columns text[];legacy_tables text[];required_tables text[];
  protected_tables text[]:=ARRAY['private_source_cutover','private_delivery_receipt','private_domain_receipt','private_survey_execution_state','private_capture_source_marker','private_capture_evidence','private_legacy_export','private_pending_migration','private_pending_destination_owner','private_outbox_cleanup_receipt','private_capture_pulse','private_capture_compaction'];
- legacy_nonempty boolean:=false;found_rows boolean;sequence_name text;column_sql text;
+ legacy_nonempty boolean:=false;found_rows boolean;sequence_name text;column_sql text;runtime_databases text[];
 BEGIN
  PERFORM set_config('lock_timeout','5s',true);PERFORM set_config('statement_timeout','30s',true);
  IF current_database()<>current_setting('kabipay.bootstrap.database') OR operation NOT IN ('company','operator') OR mode NOT IN ('empty','existing') OR generation NOT BETWEEN 1 AND 9007199254740991
@@ -21,7 +21,10 @@ BEGIN
  IF role_id IS NULL OR role_name=current_user THEN RAISE EXCEPTION 'Dedicated unprivileged preexisting runtime LOGIN role required';END IF;
  IF EXISTS(SELECT 1 FROM pg_auth_members WHERE member=role_id OR roleid=role_id) THEN RAISE EXCEPTION 'Private runtime role cannot inherit, assume or be granted to other roles';END IF;
  IF EXISTS(SELECT 1 FROM pg_database WHERE datdba=role_id) OR EXISTS(SELECT 1 FROM pg_namespace WHERE nspowner=role_id) OR EXISTS(SELECT 1 FROM pg_class WHERE relowner=role_id) THEN RAISE EXCEPTION 'Private runtime role cannot own databases, schemas or relations';END IF;
- IF EXISTS(SELECT 1 FROM pg_database WHERE datallowconn AND datname<>current_database() AND has_database_privilege(role_id,oid,'CONNECT')) THEN RAISE EXCEPTION 'Private runtime can CONNECT to another database; review PUBLIC and role grants';END IF;
+ SELECT COALESCE(array_agg(value),ARRAY[current_database()]::text[]) INTO runtime_databases
+ FROM jsonb_array_elements_text(current_setting('kabipay.bootstrap.runtime_databases')::jsonb);
+ IF EXISTS(SELECT 1 FROM unnest(runtime_databases)n WHERE NOT EXISTS(SELECT 1 FROM pg_database WHERE datname=n AND datallowconn AND NOT datistemplate)) THEN RAISE EXCEPTION 'Reviewed company database does not exist or is unavailable';END IF;
+ IF EXISTS(SELECT 1 FROM pg_database WHERE datallowconn AND NOT datname=ANY(runtime_databases) AND has_database_privilege(role_id,oid,'CONNECT')) THEN RAISE EXCEPTION 'Private runtime can CONNECT outside its approved databases; review PUBLIC and role grants';END IF;
  IF EXISTS(SELECT 1 FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND left(nspname,3)<>'pg_' AND has_schema_privilege(role_id,oid,'CREATE')) THEN RAISE EXCEPTION 'Private runtime cannot CREATE in user schemas';END IF;
  IF EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname<>source_schema AND n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_' AND c.relkind IN ('r','p','v','m','f') AND (has_table_privilege(role_id,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR has_any_column_privilege(role_id,c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) THEN RAISE EXCEPTION 'Private runtime has effective data privileges outside its source schema';END IF;
  source_outbox:=CASE WHEN operation='company' THEN 'company_event_outbox' ELSE 'organization_outbox' END;

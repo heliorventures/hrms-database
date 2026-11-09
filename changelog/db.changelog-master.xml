@@ -26,7 +26,7 @@
     <!-- Billing & payments -->
     <include file="migrations/0004_billing/billing.xml" relativeToChangelogFile="true"/>
 
-    <!-- Global integration connector catalog (tenant FKs via cross-schema reference) -->
+    <!-- Global integration catalog; historical tenant cross-schema FKs are replaced by tenant 0129. -->
     <include file="migrations/0005_integration_connector_catalog/integration_connector_catalog.xml" relativeToChangelogFile="true"/>
 
     <!-- One-time backfill across existing tenants; no tenant-schema changes. -->
@@ -40,4 +40,5 @@
     <include file="migrations/0120_organization_capture_lifecycle/organization_capture_lifecycle.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0123_organization_job_authority/organization_job_authority.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0124_private_event_control/private_event_control.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0128_integration_catalog_identity/integration_catalog_identity.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

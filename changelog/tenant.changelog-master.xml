@@ -134,4 +134,5 @@
     <include file="migrations/0119_organization_payroll_jobs/organization_payroll_jobs.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0121_organization_source_history/organization_source_history.xml" relativeToChangelogFile="true"/>
     <include file="migrations/0125_private_event_source/private_event_source.xml" relativeToChangelogFile="true"/>
+    <include file="migrations/0129_company_database_dependencies/company_database_dependencies.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

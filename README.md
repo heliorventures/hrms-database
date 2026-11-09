@@ -2,6 +2,10 @@
 
 Liquibase migration project for the KabiPay HRMS PostgreSQL schema.
 
+## Production company database deployment
+
+Use the [company release commands](../hrms-documentation/docs/deployment/company-release.md) for the guarded deployment workflow. Central updates now require `node migrate-ops.cjs --expected-database helior` (substitute the actual metadata database). Company updates use `scripts/reusable/migrations/update-tenant-liquibase.ps1 -TenantId ... -ExpectedMetadataDatabase ... -ExpectedDatabase ... -RuntimeHost ...`; the authoritative registry selects the schema. Existing schema-mode migration is retained for the colocated preparation phase. Moving existing tenant data and switching registry mappings require a separately reviewed cutover; the normal deployment commands do not perform that migration.
+
 ## Repository layout
 
 This is the only project README. Import and migration operation notes are collected below.
