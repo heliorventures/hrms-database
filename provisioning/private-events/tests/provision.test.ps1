@@ -12,6 +12,12 @@ try {
  Assert ($global:PrivateProvisionCalls[0]-contains 'service=metadata_dba dbname=Metadata sslmode=verify-full') 'Fixed registry TLS connection missing'
  $args=$global:PrivateProvisionCalls[1]
  foreach($item in @('service=source_dba dbname=Company_One sslmode=verify-full','--single-transaction','--set=ON_ERROR_STOP=1','--set=source_schema=Tenant_One','--set=producer_generation=1','--set=runtime_role=company_runtime')){Assert ($args-contains$item) "Missing native argument $item"}
+ Assert ($args-contains '--set=permission_mode=runtime') 'Default permission publication must preserve the runtime profile'
+ $authority=$company.Clone();$authority.PermissionMode='authority-only'
+ & $wrapper @authority
+ Assert ($global:PrivateProvisionCalls[-1]-contains '--set=permission_mode=authority-only') 'Explicit authority-only mode must reach source SQL'
+ Assert ($global:PrivateProvisionCalls[-1]-contains '--set=runtime_role=company_runtime') 'Authority-only must retain the dedicated runtime role validation binding'
+ $invalidMode=$company.Clone();$invalidMode.PermissionMode='unsafe';Reject {&$wrapper @invalidMode}
  $shared=$company.Clone();$shared.CompanyDatabases=@('Company_One','Company_Two')
  & $wrapper @shared
  $expectedList=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('["Company_One","Company_Two"]'))
@@ -25,6 +31,9 @@ try {
  $bad=$company.Clone();$bad.Remove('RegistryService');Reject {&$wrapper @bad}
  & $wrapper -Operation operator -Database Metadata -Service metadata_dba -ScopeId '22222222-2222-4222-8222-222222222222' -RuntimeRole metadata_runtime -BootstrapMode existing -ProducerGeneration 7
  Assert ($global:PrivateProvisionCalls[-1]-contains '--set=source_schema=kabipay_ops') 'Operator schema must be fixed'
+ & $wrapper -Operation operator -Database Metadata -Service metadata_dba -ScopeId '22222222-2222-4222-8222-222222222222' -RuntimeRole metadata_runtime -BootstrapMode existing -PermissionMode authority-only
+ Assert ($global:PrivateProvisionCalls[-1]-contains '--set=permission_mode=authority-only') 'Operator authority-only mode must remain explicit'
+ Assert ($global:PrivateProvisionCalls[-1]-contains '--set=source_schema=kabipay_ops') 'Operator authority-only schema must remain fixed'
  Reject {&$wrapper -Operation operator -Database Metadata -Service metadata_dba -ScopeId '22222222-2222-4222-8222-222222222222' -RuntimeRole metadata_runtime -BootstrapMode empty -SourceSchema tenant_wrong}
  Reject {&$wrapper -Operation operator -Database Metadata -Service metadata_dba -ScopeId '22222222-2222-4222-8222-222222222222' -RuntimeRole metadata_runtime -BootstrapMode empty -CompanyDatabases @('Metadata')}
  $before=$global:PrivateProvisionCalls.Count;$global:PrivateProvisionExit=1;$failed=$false;try{&$wrapper @company}catch{$failed=$true};Assert $failed 'psql failure ignored';Assert ($global:PrivateProvisionCalls.Count-eq$before+1) 'Registry failure still reached source database'

@@ -26,7 +26,7 @@ function readRelease(directory) {
     requireValue(fs.realpathSync(file)===file && !fs.lstatSync(file).isSymbolicLink(),'RELEASE_ARTIFACT_ALIAS');
     requireValue(hash(fs.readFileSync(file))===digest,'RELEASE_ARTIFACT_CHANGED');
   }
-  requireValue(names.has('release.json') && names.has('compose.json') && names.has('required-tenants.txt'),'INCOMPLETE_RELEASE_INDEX');
+  requireValue(['release.json','compose.json','compose-active.json','required-tenants.txt','startup-services.txt'].every(n=>names.has(n)),'INCOMPLETE_RELEASE_INDEX');
   const release=JSON.parse(fs.readFileSync(path.join(base,'release.json'),'utf8'));
   requireValue(release.version===1 && release.mode==='organization' && /^[a-zA-Z0-9_.-]+$/.test(release.tag??''),'INVALID_RELEASE');
   requireValue(Array.isArray(release.artifacts) && new Set(release.artifacts).size===release.artifacts.length &&

@@ -5,12 +5,14 @@ DECLARE
  operation text:=current_setting('kabipay.bootstrap.operation');source_schema text:=current_setting('kabipay.bootstrap.schema');
  role_name text:=current_setting('kabipay.bootstrap.role');scope_text text:=current_setting('kabipay.bootstrap.scope');scope uuid;
  generation bigint:=current_setting('kabipay.bootstrap.generation')::bigint;mode text:=current_setting('kabipay.bootstrap.mode');
+ permission_mode text:=COALESCE(current_setting('kabipay.bootstrap.permissions',true),'runtime');
  role_id oid;authority regclass;entry record;column_entry record;existing record;relation_oid oid;source_outbox text;
  allowed_select boolean;insert_columns text[];update_columns text[];legacy_tables text[];required_tables text[];
  protected_tables text[]:=ARRAY['private_source_cutover','private_delivery_receipt','private_domain_receipt','private_survey_execution_state','private_capture_source_marker','private_capture_evidence','private_legacy_export','private_pending_migration','private_pending_destination_owner','private_outbox_cleanup_receipt','private_capture_pulse','private_capture_compaction'];
  legacy_nonempty boolean:=false;found_rows boolean;sequence_name text;column_sql text;runtime_databases text[];
 BEGIN
  PERFORM set_config('lock_timeout','5s',true);PERFORM set_config('statement_timeout','30s',true);
+ IF permission_mode NOT IN ('runtime','authority-only') THEN RAISE EXCEPTION 'Invalid private source permission mode';END IF;
  IF current_database()<>current_setting('kabipay.bootstrap.database') OR operation NOT IN ('company','operator') OR mode NOT IN ('empty','existing') OR generation NOT BETWEEN 1 AND 9007199254740991
  OR scope_text !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN RAISE EXCEPTION 'Private source bootstrap identity invalid';END IF;
  scope:=scope_text::uuid;
@@ -67,9 +69,13 @@ BEGIN
   FOR column_entry IN SELECT attname FROM pg_attribute WHERE attrelid=entry.oid AND attnum>0 AND NOT attisdropped LOOP
    IF (NOT allowed_select AND has_column_privilege(role_id,entry.oid,column_entry.attname,'SELECT')) OR (NOT column_entry.attname=ANY(insert_columns) AND has_column_privilege(role_id,entry.oid,column_entry.attname,'INSERT')) OR (NOT column_entry.attname=ANY(update_columns) AND has_column_privilege(role_id,entry.oid,column_entry.attname,'UPDATE')) OR has_column_privilege(role_id,entry.oid,column_entry.attname,'REFERENCES,SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION,UPDATE WITH GRANT OPTION') THEN RAISE EXCEPTION 'Unexpected private runtime effective column privileges on %.%',entry.relname,column_entry.attname;END IF;
   END LOOP;
-  IF allowed_select THEN EXECUTE format('GRANT SELECT ON %s TO %I',entry.oid::regclass,role_name);END IF;
-  IF cardinality(insert_columns)>0 THEN SELECT string_agg(format('%I',x),',') INTO column_sql FROM unnest(insert_columns)x;EXECUTE format('GRANT INSERT(%s) ON %s TO %I',column_sql,entry.oid::regclass,role_name);END IF;
-  IF cardinality(update_columns)>0 THEN SELECT string_agg(format('%I',x),',') INTO column_sql FROM unnest(update_columns)x;EXECUTE format('GRANT UPDATE(%s) ON %s TO %I',column_sql,entry.oid::regclass,role_name);END IF;
+  -- Authority initialization and effective-privilege validation remain mandatory.
+  -- Publish the compatibility grant profile only when explicitly selected/defaulted.
+  IF permission_mode='runtime' THEN
+   IF allowed_select THEN EXECUTE format('GRANT SELECT ON %s TO %I',entry.oid::regclass,role_name);END IF;
+   IF cardinality(insert_columns)>0 THEN SELECT string_agg(format('%I',x),',') INTO column_sql FROM unnest(insert_columns)x;EXECUTE format('GRANT INSERT(%s) ON %s TO %I',column_sql,entry.oid::regclass,role_name);END IF;
+   IF cardinality(update_columns)>0 THEN SELECT string_agg(format('%I',x),',') INTO column_sql FROM unnest(update_columns)x;EXECUTE format('GRANT UPDATE(%s) ON %s TO %I',column_sql,entry.oid::regclass,role_name);END IF;
+  END IF;
  END LOOP;
  IF EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=source_schema AND (left(p.proname,16)='private_capture_' OR left(p.proname,22)='private_legacy_export_' OR p.proname IN ('private_fence_legacy','private_source_digest','private_dependency_digest','private_assert_pending_migration','private_assert_retirement','private_cleanup_outbox')) AND p.prorettype<>'trigger'::regtype AND has_function_privilege(role_id,p.oid,'EXECUTE')) THEN RAISE EXCEPTION 'Private runtime can execute operator evidence/capture/retirement functions';END IF;
  EXECUTE format('SELECT * FROM %s WHERE tenant_id=$1 FOR UPDATE',authority) INTO existing USING scope;
@@ -83,11 +89,13 @@ BEGIN
   IF (mode='empty' AND legacy_nonempty) OR (mode='existing' AND NOT legacy_nonempty) THEN RAISE EXCEPTION 'Explicit legacy inventory classification does not match source rows';END IF;
   EXECUTE format('INSERT INTO %s(tenant_id,source_database,source_schema,producer_generation) VALUES($1,current_database(),$2,$3)',authority) USING scope,source_schema,generation;
  END IF;
- EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I',current_database(),role_name);EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I',source_schema,role_name);
+ IF permission_mode='runtime' THEN
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I',current_database(),role_name);EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I',source_schema,role_name);
+ END IF;
  source_outbox:=CASE WHEN operation='company' THEN 'company_event_outbox' ELSE 'organization_outbox' END;
  sequence_name:=pg_get_serial_sequence(format('%I.%I',source_schema,source_outbox),'source_position');
  IF sequence_name IS NOT NULL THEN
   IF has_sequence_privilege(role_id,sequence_name,'UPDATE') THEN RAISE EXCEPTION 'Private runtime cannot reset source publication sequence';END IF;
-  EXECUTE format('GRANT USAGE ON SEQUENCE %s TO %I',sequence_name,role_name);
+  IF permission_mode='runtime' THEN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO %I',sequence_name,role_name);END IF;
  END IF;
 END $bootstrap$;

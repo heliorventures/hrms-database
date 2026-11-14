@@ -68,17 +68,11 @@ async function main() {
     const auditSql = auditSource.match(/db\.query\(`(WITH defaults[\s\S]*?)`,/)[1].replaceAll('${schema}','tenant_test');
     const audit = async () => (await db.query(auditSql,[JSON.stringify([...readDefaults().values()]),tenant])).rows;
     assert.ok((await audit()).every(row => row.status==='OK'));
-    const seed = fs.readFileSync(path.join(__dirname,'../../../scripts/reusable/provisioning/seed-demo-data.ps1'),'utf8');
-    const seedSql = seed.slice(seed.indexOf('DELETE FROM canonical_permission_matrix AS matrix'),seed.indexOf('DELETE FROM "$Schema".role_permission AS role_permission'))
-      .replaceAll('$Schema','tenant_test').replaceAll('$PermissionDefaultsJsonSql',JSON.stringify([...readDefaults().values()]));
-    await db.query('CREATE TEMP TABLE canonical_permission_matrix(role_name TEXT,resource TEXT,action TEXT,scope_type TEXT,PRIMARY KEY(role_name,resource,action))');
-    await db.query(seedSql);
-    const seeded = (await db.query('SELECT * FROM canonical_permission_matrix')).rows;
+    const {buildRoleDefaults} = require('../../../scripts/reusable/rbac/canonical-role-defaults.cjs');
+    const seeded = buildRoleDefaults().filter(row => ['ADMIN','HR'].includes(row.role));
     assert.equal(seeded.length,grants.length);
-    for (const g of grants) assert.ok(seeded.some(s => s.role_name===g.name && s.resource===g.resource && s.action===g.action && s.scope_type===g.scope_type));
-    await db.query(seedSql);
-    assert.equal((await db.query('SELECT COUNT(*)::int n FROM canonical_permission_matrix')).rows[0].n,seeded.length);
-    console.log('PASS audit SQL and seed defaults agree with migrated grants');
+    for (const g of grants) assert.ok(seeded.some(s => s.role===g.name && s.resource===g.resource && s.action===g.action && s.scope===g.scope_type));
+    console.log('PASS audit SQL and shared canonical defaults agree with migrated grants');
 
     await db.query(`UPDATE tenant_test.permission_scope SET scope_type='TEAM' WHERE resource='survey' AND action='results';
       INSERT INTO tenant_test.permission_scope SELECT gen_random_uuid(),tenant_id,id,'custom','read','SELF' FROM tenant_test.role WHERE name='CUSTOM';

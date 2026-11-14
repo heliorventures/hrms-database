@@ -47,8 +47,16 @@ PostgreSQL requires UPDATE permission on at least one column for `SELECT ... FOR
 
 The bootstrap grants do not replace existing business grants for users, employees, subscriptions and other domain tables. Source adapter requests remain fixed-purpose authenticated RPC references; granting the source runtime its local privileges never grants a shared broker or query service source access.
 
+## Authority initialization without permission publication
+
+For caller-specific runtime grant contracts, pass `-PermissionMode authority-only` to the same operator wrapper. It initializes or validates the source authority and retains all registration, runtime-role, database, schema, effective-privilege, tenant-content, legacy-inventory, generation and unchanged-state checks. `RuntimeRole` remains mandatory and must still be a dedicated pre-existing unprivileged login. This mode publishes no table, column, database, schema or sequence privileges; existing grants are preserved and forbidden effective rights still reject the transaction. It is not an alternative way to reset an advanced authority.
+
+Publish each role's exact reviewed permissions separately through the runtime-grants contract after authority initialization. The omitted/default `-PermissionMode runtime` retains the existing canonical compatibility grant profile, including direct psql template callers that omit `permission_mode`. Both company and operator sources support authority-only mode, with their original separate identity/schema rules. Do not use the default compatibility profile when a role must retain a narrower caller-specific private permission set.
+
 ## Checks
 
 `tests/provision.test.ps1` mocks native psql to verify argument binding, fixed service/database/TLS connections, canonical scope IDs, case preservation, role/schema negatives, generation bounds, registration-before-source ordering and stop-on-error. This is not database evidence. The native database fixture and its exact result are recorded in the provider report after execution. Live bootstrap/deployment is separate.
 
 `tests/shared-runtime.test.cjs` creates an owned, loopback-only native PostgreSQL cluster from `PRIVATE_TEST_PG_BIN`, without reading `.env`. It checks two real company databases, a shared role, registry negatives, PUBLIC CONNECT leakage, role membership and protected authority columns. Run with `node --experimental-test-isolation=none --test provisioning/private-events/tests/shared-runtime.test.cjs`. Native fixture results do not establish production TLS or PostgreSQL 16 acceptance when run with another server version.
+
+`tests/authority-only.test.cjs` compares complete synthetic database/schema/table/column/sequence ACL snapshots before and after authority initialization, checks company and operator sources, and retains the identity/state/privilege rejection cases. `tests/replay-concurrency.test.cjs` extracts the production replay SQL and loads the canonical cleanup and immutability functions into a disposable fixture. It exercises replay-first and cleanup-first receipt lock orderings using a runtime role with no outbox UPDATE permission. It checks actual PostgreSQL lock waits, zero deletion of pending payloads, exact missing-frame restoration and unchanged generation/immutability guards; it does not run the Rust encryption or HTTP stack.

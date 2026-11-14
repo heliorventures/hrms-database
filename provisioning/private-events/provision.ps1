@@ -6,6 +6,7 @@ param(
  [Parameter(Mandatory)][string]$ScopeId,
  [Parameter(Mandatory)][string]$RuntimeRole,
  [Parameter(Mandatory)][ValidateSet('empty','existing')][string]$BootstrapMode,
+ [ValidateSet('runtime','authority-only')][string]$PermissionMode='runtime',
  [ValidateRange(1,9007199254740991)][long]$ProducerGeneration=1,
  [string]$SourceSchema,
  [string]$RegistryService,
@@ -44,4 +45,4 @@ function InvokeFixedPsql([string]$connection,[string]$file,[string[]]$variables)
 if($Operation-eq'company'){
  InvokeFixedPsql "service=$RegistryService dbname=$RegistryDatabase sslmode=verify-full" 'registration.template.sql' @("--set=registry_database=$RegistryDatabase","--set=database=$Database","--set=scope_id=$ScopeId","--set=source_schema=$SourceSchema","--set=runtime_host=$RuntimeHost","--set=runtime_databases_b64=$runtimeDatabases")
 }
-InvokeFixedPsql "service=$Service dbname=$Database sslmode=verify-full" "$Operation.template.sql" @("--set=database=$Database","--set=scope_id=$ScopeId","--set=source_schema=$SourceSchema","--set=runtime_role=$RuntimeRole","--set=bootstrap_mode=$BootstrapMode","--set=producer_generation=$ProducerGeneration","--set=runtime_databases_b64=$runtimeDatabases")
+InvokeFixedPsql "service=$Service dbname=$Database sslmode=verify-full" "$Operation.template.sql" @("--set=database=$Database","--set=scope_id=$ScopeId","--set=source_schema=$SourceSchema","--set=runtime_role=$RuntimeRole","--set=bootstrap_mode=$BootstrapMode","--set=permission_mode=$($PermissionMode.ToLowerInvariant())","--set=producer_generation=$ProducerGeneration","--set=runtime_databases_b64=$runtimeDatabases")
