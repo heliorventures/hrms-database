@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import policy
-from test_policy import contract
+from test_policy import contract, payroll_function_contracts
 
 
 class BusinessRequirementsTests(unittest.TestCase):
@@ -58,7 +58,7 @@ class BusinessRequirementsTests(unittest.TestCase):
             candidate = contract()
             existing = copy.deepcopy(policy.REQUIRED_COMPANY_COLUMNS.get(role, {}))
             existing.update(copy.deepcopy(tables))
-            candidate['roles'][role] = {'tables': existing, 'sequences': [], 'functions': []}
+            candidate['roles'][role] = {'tables': existing, 'sequences': [], 'functions': payroll_function_contracts() if role=='hrms_company_payroll' else []}
             before = copy.deepcopy(candidate)
             policy.validate_policy(candidate)
             self.assertEqual(candidate, before)

@@ -6,8 +6,13 @@ Every identifier/column is supplied by a reviewed contract, never a wildcard.
 import hashlib
 import json
 import re
+from copy import deepcopy
 from business_columns import BUSINESS_COMPANY_COLUMNS
 from private_ownership_columns import PRIVATE_OWNERSHIP_COLUMNS
+from page_columns import PAGE_COMPANY_COLUMNS
+from presentation_columns import PRESENTATION_COMPANY_COLUMNS
+from calculation_columns import CALCULATION_COMPANY_COLUMNS
+from draft_columns import DRAFT_COMPANY_COLUMNS
 
 
 RESERVED_MAINTENANCE_DATABASES = frozenset({"postgres", "template0", "template1"})
@@ -19,6 +24,7 @@ RESERVED_MAINTENANCE_DATABASES = frozenset({"postgres", "template0", "template1"
 # receipt read and its initial broker-ownership write, without identity writes.
 REQUIRED_COMPANY_COLUMNS = {
     'hrms_company_employee': {
+        **PAGE_COMPANY_COLUMNS['hrms_company_employee'],
         **PRIVATE_OWNERSHIP_COLUMNS['hrms_company_employee'],
         'actor_ref': {'select': ['tenant_id', 'principal_id', 'display_name']},
         'permission': {'select': ['id', 'resource', 'action', 'module_id',
@@ -36,10 +42,26 @@ REQUIRED_COMPANY_COLUMNS = {
             'select': ['id', 'tenant_id', 'user_id', 'overview_dismissed_at'],
             'insert': ['id', 'tenant_id', 'user_id']},
     },
-    'hrms_company_performance': {
-        'review_cycle': {'select': ['current_stage']},
+    'hrms_company_payroll': {
+        **PAGE_COMPANY_COLUMNS['hrms_company_payroll'],
+        **PRESENTATION_COMPANY_COLUMNS['hrms_company_payroll'],
     },
+    'hrms_company_notification': PRESENTATION_COMPANY_COLUMNS['hrms_company_notification'],
+    'hrms_company_performance': PAGE_COMPANY_COLUMNS['hrms_company_performance'],
 }
+
+# Combine reviewed projections without mutating a separately approved compiler's
+# source contract. Operator policies must explicitly include every requirement;
+# validation never adds authority to a submitted policy.
+REQUIRED_COMPANY_COLUMNS = deepcopy(REQUIRED_COMPANY_COLUMNS)
+for _role, _tables in {**CALCULATION_COMPANY_COLUMNS, 'hrms_company_payroll': {
+        **CALCULATION_COMPANY_COLUMNS['hrms_company_payroll'],
+        **DRAFT_COMPANY_COLUMNS['hrms_company_payroll']}}.items():
+    for _table, _rights in _tables.items():
+        _target = REQUIRED_COMPANY_COLUMNS.setdefault(_role, {}).setdefault(_table, {})
+        for _operation, _columns in _rights.items():
+            _existing = _target.setdefault(_operation, [])
+            _existing.extend(column for column in _columns if column not in _existing)
 
 
 def require(condition, code):
@@ -133,6 +155,13 @@ def validate_policy(policy):
                 else:
                     require(set(columns) <= set(actual.get(table, {}).get(operation, [])),
                             'COMPANY_RUNTIME_COLUMNS_MISSING')
+    if payroll is not None:
+        for name in ('hrms_lock_payroll_inputs_v1','hrms_payroll_input_fingerprint_v1','hrms_lock_payroll_period_input_v1'):
+            require(any(function['name']==name and function['identityArguments']=='p_tenant uuid'
+                        and function['owner']==policy['database']+'_owner'
+                        and function['securityDefiner'] is True
+                        for function in payroll['functions']),
+                    'PAYROLL_INPUT_AUTHORITY_MISSING')
     validate_row_security(policy)
     return policy
 

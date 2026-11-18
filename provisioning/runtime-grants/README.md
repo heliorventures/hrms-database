@@ -216,3 +216,71 @@ writes/deletion, unrelated-service denial, grant-option denial and drift rollbac
 ```powershell
 node --experimental-test-isolation=none --test provisioning/runtime-grants/tests/private-ownership-columns-native.test.cjs
 ```
+
+### Calculation and imported details
+
+`calculation_columns.py` covers the actual imported-profile/bank extension,
+Payroll employment eligibility and exit dates, and conditional old-regime proof
+summary.
+
+`payroll_authority.py` compiles a separate company-bound installation and exact
+verification for `hrms_lock_payroll_inputs_v1(uuid)` and
+`hrms_payroll_input_fingerprint_v1(uuid)`. The existing NOLOGIN company owner
+receives internal USAGE plus SELECT on the fixed 30 input tables and UPDATE on
+the 31 lock tables. Payroll receives only EXECUTE. PUBLIC/other callers are
+denied; source, signature, owner, search path and tenant/database bindings are
+verified. The v2 digest bytes and SHARE ROW EXCLUSIVE locking semantics are
+preserved. Functions return no business rows and perform no financial writes.
+The fingerprint helper checks exact serialized UTF-8 input size before building
+any table array and refuses inputs above 32 MiB. This bounds its input contract;
+it is not a measured upper bound on PostgreSQL process memory.
+
+For fresh isolated companies, install and verify this authority after the real
+schema baseline and before preparing the runtime grant policy. Supply an
+explicit target with `systemId`, `database`, `schema`, `tenantId`, `owner` and
+`sourceOwner`; source ownership and membership-free NOLOGIN authority must match.
+The pure compiler performs no database I/O. Installation refuses existing helper
+names. An optional preserved-routine descriptor permits only the previously
+reviewed `organization_capture_admin_version()` trigger, bound to its exact
+definition hash, owner and owner-only execution ACL. Other owner routines and
+owner-owned relations are refused before internal privileges are granted.
+An uncertain/mixed result requires operator readback, not a rerun.
+Built-in Payroll policies require both exact reviewed function descriptors,
+including current definition and owner-authority digests. Validation refuses
+omissions rather than inventing grants. Adding an application role using existing
+permissions/scopes does not require a different service/database policy.
+
+### Page read and payslip visibility contracts
+
+`page_columns.py` records explicit caller requirements for Employee company
+documents and salary-bearing employment history, Payroll payslip visibility,
+and Performance cycle program/deadline reads. The validator rejects incomplete
+future policies. These are service database rights: salary-history API access
+still requires the resolver's exact payroll scope; no end-user role is changed.
+Unused entity models do not receive access automatically.
+
+`presentation_columns.py` additionally covers the populated payslip branch:
+tenant-scoped employee/department/designation projections, imported annual salary
+fields and immutable statement reads. The Notification marker contract includes
+eight INSERT columns, SELECT(id) for RETURNING, and SELECT on the five explicit
+ON CONFLICT arbiter columns. These reads are required even for DO NOTHING;
+granting only INSERT and RETURNING(id) is insufficient. No notification payload
+read, marker UPDATE/DELETE or payroll profile write is added.
+
+### Monthly Payroll writes and draft conflict updates
+
+After the two snapshot helpers are installed, `monthly_input_authority.py`
+installs `hrms_lock_payroll_period_input_v1(uuid)`. It preserves the monthly
+edit's ROW EXCLUSIVE lock without giving the runtime login table-wide UPDATE.
+The existing company NOLOGIN owner's internal rights are reused. Only Payroll
+receives EXECUTE; tenant/database binding, fixed relation, safe search path and
+timeout are verified. Rust callers require an explicit `DatabaseTransaction`.
+
+`draft_columns.py` declares the seven draft reads required by the existing
+UPSERT, including its four EXCLUDED-field reads.
+
+New Payroll
+policies require all three helpers. After installation use
+`monthly_input_authority.verify_sql`, or explicitly opt into
+`payroll_authority.verify_sql(..., include_period_lock=True)`; the original
+two-helper verifier deliberately rejects the additional owner routine.

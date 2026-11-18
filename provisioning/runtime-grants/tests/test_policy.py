@@ -20,6 +20,14 @@ def contract():
                 "sequences": [], "functions": []}}, "blockers": []}
 
 
+def payroll_function_contracts():
+    # Synthetic descriptors only. Live policies bind real source and owner-graph
+    # digests from the reviewed installed catalog; never reuse these fixtures.
+    return [dict(name=name,identityArguments='p_tenant uuid',definitionSha256='a'*64,
+                 owner='company_fixture_owner',securityDefiner=True,ownerAuthoritySha256='b'*64)
+            for name in ('hrms_lock_payroll_inputs_v1','hrms_payroll_input_fingerprint_v1','hrms_lock_payroll_period_input_v1')]
+
+
 class PolicyTests(unittest.TestCase):
     def test_builtin_employee_profile_requires_actual_reporting_label_projection(self):
         candidate = contract()
