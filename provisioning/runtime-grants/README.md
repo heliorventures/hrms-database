@@ -267,6 +267,14 @@ ON CONFLICT arbiter columns. These reads are required even for DO NOTHING;
 granting only INSERT and RETURNING(id) is insufficient. No notification payload
 read, marker UPDATE/DELETE or payroll profile write is added.
 
+The actual scheduled caller is `hrms_company_maintenance`; its policy now
+requires the same exact occurrence operation as Notification. Existing policies
+must be updated explicitly; validation never supplies missing rights silently.
+For an existing open company, `notification_operator.py` provides a separate
+`prepare/apply/verify` correction granting only the six SELECT columns. It does
+not invoke the admission-closing maintenance workflow or change application rows.
+See [the combined rollout runbook](../../../hrms-documentation/docs/runbooks/infrastructure-notification-rollout.md).
+
 ### Monthly Payroll writes and draft conflict updates
 
 After the two snapshot helpers are installed, `monthly_input_authority.py`

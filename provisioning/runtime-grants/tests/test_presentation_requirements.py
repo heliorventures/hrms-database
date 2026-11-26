@@ -40,6 +40,10 @@ class PresentationRequirementsTests(unittest.TestCase):
             'insert': ['id', 'tenant_id', 'event_type', 'employee_id', 'event_date', 'recipient_user_id', 'notification_id', 'created_at'],
             'select': ['id', 'tenant_id', 'event_type', 'employee_id', 'event_date', 'recipient_user_id']})
 
+    def test_maintenance_caller_owns_the_same_exact_occurrence_operation(self):
+        notification = policy.REQUIRED_COMPANY_COLUMNS['hrms_company_notification']['automated_notification_occurrence']
+        self.assertEqual(policy.REQUIRED_COMPANY_COLUMNS['hrms_company_maintenance'].get('automated_notification_occurrence'), notification)
+
 
 if __name__ == '__main__':
     unittest.main()

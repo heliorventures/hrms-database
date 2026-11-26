@@ -48,6 +48,7 @@ REQUIRED_COMPANY_COLUMNS = {
         **PRESENTATION_COMPANY_COLUMNS['hrms_company_payroll'],
     },
     'hrms_company_notification': PRESENTATION_COMPANY_COLUMNS['hrms_company_notification'],
+    'hrms_company_maintenance': PRESENTATION_COMPANY_COLUMNS['hrms_company_maintenance'],
     'hrms_company_performance': PAGE_COMPANY_COLUMNS['hrms_company_performance'],
 }
 

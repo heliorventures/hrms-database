@@ -7,6 +7,7 @@ The notification marker inserts eight fields. RETURNING needs UUID read access;
 the explicit ON CONFLICT arbiter needs its five key columns. The existing unique
 delivery key remains responsible for suppressing duplicates.
 """
+from copy import deepcopy
 
 PRESENTATION_COMPANY_COLUMNS = {
     'hrms_company_payroll': {
@@ -30,3 +31,8 @@ PRESENTATION_COMPANY_COLUMNS = {
                        'recipient_user_id']},
     },
 }
+
+# The automated sweep runs in tenant maintenance; the notification service can
+# still invoke the same operation. Keep their occurrence contract independent.
+PRESENTATION_COMPANY_COLUMNS['hrms_company_maintenance'] = deepcopy(
+    PRESENTATION_COMPANY_COLUMNS['hrms_company_notification'])
