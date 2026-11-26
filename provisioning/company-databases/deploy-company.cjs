@@ -14,6 +14,7 @@ async function resolveCompany(registry,{tenantId,expectedDatabase,runtimeHost}) 
 function liquibaseInvocation(config,target,command='update') {
  check(['update','validate','status'].includes(command),'INVALID_MIGRATION_COMMAND');
  check(identifier(target.database) && /^tenant_[a-z0-9_]{1,50}$/.test(target.schema),'INVALID_COMPANY_TARGET');
+ check(uuid(target.tenantId),'EXPLICIT_COMPANY_TENANT_ID_REQUIRED');
  const host=config.host.includes(':')?'['+config.host+']':config.host;
  const params=new URLSearchParams({sslmode:config.sslmode});
  if(config.rootcert)params.set('sslrootcert',config.rootcert);
@@ -21,7 +22,8 @@ function liquibaseInvocation(config,target,command='update') {
  Object.assign(env,{LIQUIBASE_COMMAND_URL:`jdbc:postgresql://${host}:${config.port}/${target.database}?${params}`,LIQUIBASE_COMMAND_USERNAME:config.user,LIQUIBASE_COMMAND_PASSWORD:config.password});
  const args=['--defaults-file=provisioning/company-databases/company.properties',
   '--default-schema-name='+target.schema,'--liquibase-schema-name='+target.schema,
-  '--database-changelog-table-name='+target.schema+'_databasechangelog',command,'-Dschema='+target.schema];
+  '--database-changelog-table-name='+target.schema+'_databasechangelog',command,'-Dschema='+target.schema,
+  '-DcompanyTenantId='+target.tenantId];
  return {args,env};
 }
 async function deploy(config,options,run=spawnSync) {

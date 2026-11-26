@@ -13,6 +13,7 @@ from page_columns import PAGE_COMPANY_COLUMNS
 from presentation_columns import PRESENTATION_COMPANY_COLUMNS
 from calculation_columns import CALCULATION_COMPANY_COLUMNS
 from draft_columns import DRAFT_COMPANY_COLUMNS
+from email_columns import EMAIL_COMPANY_COLUMNS, EMAIL_AUTHORITY_COLUMNS
 
 
 RESERVED_MAINTENANCE_DATABASES = frozenset({"postgres", "template0", "template1"})
@@ -54,6 +55,16 @@ REQUIRED_COMPANY_COLUMNS = {
 # source contract. Operator policies must explicitly include every requirement;
 # validation never adds authority to a submitted policy.
 REQUIRED_COMPANY_COLUMNS = deepcopy(REQUIRED_COMPANY_COLUMNS)
+for _contract in (EMAIL_COMPANY_COLUMNS, EMAIL_AUTHORITY_COLUMNS):
+    for _role, _tables in _contract.items():
+        for _table, _rights in _tables.items():
+            _target = REQUIRED_COMPANY_COLUMNS.setdefault(_role, {}).setdefault(_table, {})
+            for _operation, _columns in _rights.items():
+                if _columns is True:
+                    _target[_operation] = True
+                else:
+                    _existing = _target.setdefault(_operation, [])
+                    _existing.extend(column for column in _columns if column not in _existing)
 for _role, _tables in {**CALCULATION_COMPANY_COLUMNS, 'hrms_company_payroll': {
         **CALCULATION_COMPANY_COLUMNS['hrms_company_payroll'],
         **DRAFT_COMPANY_COLUMNS['hrms_company_payroll']}}.items():

@@ -7,7 +7,7 @@ import unittest
 
 DIRECTORY = Path(__file__).parents[1]
 sys.path.insert(0, str(DIRECTORY))
-from test_policy import contract, payroll_function_contracts
+from test_policy import contract, payroll_function_contracts, company_tables
 import policy
 
 
@@ -36,8 +36,7 @@ class CompanyRequirementsTests(unittest.TestCase):
         for role, tables in policy.REQUIRED_COMPANY_COLUMNS.items():
             candidate = contract()
             candidate['roles'][role] = {
-                'tables': {**copy.deepcopy(policy.BUSINESS_COMPANY_COLUMNS.get(role, {})),
-                           **copy.deepcopy(tables)}, 'sequences': [], 'functions': payroll_function_contracts() if role=='hrms_company_payroll' else []}
+                'tables': company_tables(role), 'sequences': [], 'functions': payroll_function_contracts() if role=='hrms_company_payroll' else []}
             policy.validate_policy(candidate)
             for table, rights in tables.items():
                 for operation, columns in rights.items():

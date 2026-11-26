@@ -14,8 +14,11 @@ class PresentationRequirementsTests(unittest.TestCase):
         self.assertEqual(rights, {'select': [
             'id', 'tenant_id', 'first_name', 'last_name', 'employee_code',
             'department_id', 'designation_id', 'date_of_joining', 'gender',
-            'marital_status', 'uan_number', 'esic_number', 'is_deleted', 'status',
+            'marital_status', 'uan_number', 'esic_number', 'is_deleted',
+            'user_id', 'reporting_manager_id', 'status',
             'payroll_excluded', 'imported_last_working_date', 'imported_exit_date']})
+        display = policy.PRESENTATION_COMPANY_COLUMNS['hrms_company_payroll']['employee']
+        self.assertLessEqual(set(display['select']), set(rights['select']))
 
     def test_tenant_scoped_display_joins_and_imported_annual_values_have_explicit_reads(self):
         required = policy.REQUIRED_COMPANY_COLUMNS['hrms_company_payroll']

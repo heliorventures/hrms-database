@@ -1,0 +1,12 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const {spawnSync}=require('node:child_process');
+const {fixture}=require('../../private-events/tests/local-postgres-fixture.cjs');const {python,services}=require('./email-native-support.cjs');
+const root=path.resolve(__dirname,'../../..');
+test('real fenced worker store uses DB concurrency, dedup, config fencing and 90-second crash recovery',async t=>{
+ const pg=await fixture();t.after(()=>pg.stop());
+ pg.query('postgres',['employee','leave','attendance','payroll','expense','tax','performance','notification','maintenance'].map(role=>`CREATE ROLE hrms_company_${role} LOGIN NOINHERIT;`).join('')+'CREATE DATABASE company_email_delivery_fixture;');
+ const schema=fs.readFileSync(path.join(root,'changelog/migrations/0132_tenant_email/schema.sql'),'utf8').replaceAll('${schema}','tenant_fixture').replaceAll('${companyTenantId}','00000000-0000-4000-8000-000000000001');
+ fs.writeFileSync(path.join(pg.directory,'owned-email-writers-setup.sql'),schema+python('print(e.grants_sql("tenant_fixture"))')+`SET search_path=tenant_fixture,pg_catalog;UPDATE tenant_email_settings SET enabled=true,enabled_after=clock_timestamp()-interval '1 day',categories='{"leave":true}',category_cutoffs=jsonb_build_object('leave',clock_timestamp()-interval '1 day'),credential_cipher=decode(repeat('aa',17),'hex'),credential_nonce=decode(repeat('bb',12),'hex'),credential_key_id='fixture',version=version+1;`,{flag:'wx',mode:0o600});
+ const config=path.join(pg.directory,'owned-email-writers-fixture.json');fs.writeFileSync(config,JSON.stringify({port:pg.connection('postgres').port,system_id:pg.query('postgres','SELECT system_identifier FROM pg_control_system()').trim(),data_directory:path.join(pg.directory,'data'),database:'company_email_delivery_fixture'}),{flag:'wx',mode:0o600});
+ const env=Object.fromEntries(Object.entries(process.env).filter(([name])=>!/^(PG|POSTGRES|DATABASE|KABIPAY|OUTBOX)/i.test(name)));env.KABIPAY_EMAIL_WRITERS_OWNED_FIXTURE=config;
+ const r=spawnSync('cargo',['test','--offline','--locked','-p','kabipay-notification','--test','email_delivery_owned','--','--ignored','--exact','owned_email_delivery_state_transitions','--test-threads=1'],{cwd:services,env,encoding:'utf8',windowsHide:true,timeout:900000});assert.equal(r.status,0,(r.stderr||'')+(r.stdout||''));assert.match(r.stdout,/test result: ok\. 1 passed/);
+});

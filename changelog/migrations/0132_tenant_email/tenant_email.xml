@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+ <changeSet id="0132-001-tenant-important-email" author="kabipay-dev" runInTransaction="true">
+  <sqlFile path="schema.sql" relativeToChangelogFile="true" splitStatements="false"/>
+  <rollback><sql>DO $$ BEGIN RAISE EXCEPTION 'Email recovery requires a reviewed forward correction preserving intents'; END $$;</sql></rollback>
+ </changeSet>
+ <changeSet id="0132-002-email-permission-catalog" author="kabipay-dev" runInTransaction="true">
+  <comment>Catalog only; no end-user role assignments.
+-- permission-defaults:start
+ ('email_settings','read','NONE','NONE'),
+ ('email_settings','manage','NONE','NONE'),
+ ('email_settings','test','NONE','NONE')
+-- permission-defaults:end
+  </comment>
+  <sql splitStatements="false"><![CDATA[
+DO $$ BEGIN
+ IF (SELECT count(*) FROM "${schema}".permission WHERE resource='notification' AND action='read')<>1 THEN
+  RAISE EXCEPTION 'EMAIL_NOTIFICATION_ENTITLEMENT_REQUIRED'; END IF;
+ IF EXISTS(SELECT 1 FROM "${schema}".permission p WHERE p.resource='email_settings'
+  AND p.module_id<>(SELECT module_id FROM "${schema}".permission WHERE resource='notification' AND action='read')) THEN
+  RAISE EXCEPTION 'EMAIL_PERMISSION_MODULE_CONFLICT'; END IF;
+END $$;
+INSERT INTO "${schema}".permission(id,resource,action,module_id,description)
+SELECT gen_random_uuid(),'email_settings',a.action,m.module_id,a.description
+FROM "${schema}".permission m CROSS JOIN (VALUES
+ ('read','View safe company email settings (ALL scope)'),
+ ('manage','Manage encrypted company email settings (read and ALL scope required)'),
+ ('test','Send fixed test to saved sending account (read and ALL scope required)')
+) a(action,description) WHERE m.resource='notification' AND m.action='read'
+AND NOT EXISTS(SELECT 1 FROM "${schema}".permission p WHERE p.resource='email_settings' AND p.action=a.action);
+  ]]></sql>
+  <rollback><sql>DO $$ BEGIN RAISE EXCEPTION 'Email catalog requires reviewed forward correction'; END $$;</sql></rollback>
+ </changeSet>
+</databaseChangeLog>

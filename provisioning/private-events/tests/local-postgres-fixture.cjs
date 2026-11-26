@@ -16,7 +16,7 @@ async function fixture() {
   const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>!/^PG/i.test(key)));
   function run(name,args,input) {
     const executable=path.join(bin,name+(process.platform==='win32'?'.exe':''));
-    const result=spawnSync(executable,args,{input,env,encoding:'utf8',windowsHide:true,timeout:60000,
+    const result=spawnSync(executable,args,{input,env,encoding:'utf8',windowsHide:true,timeout:['initdb','pg_ctl'].includes(name)?180000:60000,
       ...(name==='pg_ctl'?{stdio:'ignore'}:{})});
     assert(!result.error, String(result.error));return result;
   }
@@ -28,8 +28,13 @@ async function fixture() {
   try {
     const init=run('initdb',['-D',data,'-U','fixture_owner','--auth=trust','--encoding=UTF8','--no-locale','--no-sync']);
     assert.equal(init.status,0,init.stderr);
-    assert.equal(run('pg_ctl',['-D',data,'-l',path.join(directory,'postgres.log'),'-o',`-h 127.0.0.1 -p ${port}`,'-w','start']).status,0);
-  } catch(error) {stop();throw error;}
+    assert.equal(run('pg_ctl',['-D',data,'-l',path.join(directory,'postgres.log'),'-o',`-h 127.0.0.1 -p ${port}`,'-t','180','-w','start']).status,0);
+  } catch(error) {
+    try { stop(); } catch(cleanupError) {
+      throw new AggregateError([error,cleanupError], `Owned PostgreSQL initialization failed: ${error.message}; cleanup failed: ${cleanupError.message}`, {cause:error});
+    }
+    throw error;
+  }
   function psql(database,{sql,file,variables=[],role='fixture_owner'}={}) {
     const args=['-X','-qAt','-w','-h','127.0.0.1','-p',String(port),'-U',role,'-d',database,'-v','ON_ERROR_STOP=1'];
     for(const value of variables) args.push('-v',value);
@@ -44,6 +49,14 @@ async function fixture() {
   }
   const connection=(database,role='fixture_owner')=>({host:'127.0.0.1',port,user:role,
     password:'synthetic-unused-trust',database,ssl:false,connectionTimeoutMillis:5000});
-  return {query,psql,archive,connection,stop,directory};
+  function restart() {
+    // Only this function's freshly initialized, loopback-only data directory.
+    const resolved=fs.realpathSync(data);
+    assert.equal(path.dirname(resolved),fs.realpathSync(directory));
+    assert(path.basename(directory).startsWith('hrms-shared-grants-'));
+    stop();
+    assert.equal(run('pg_ctl',['-D',resolved,'-l',path.join(directory,'postgres.log'),'-o',`-h 127.0.0.1 -p ${port}`,'-t','180','-w','start']).status,0);
+  }
+  return {query,psql,archive,connection,stop,restart,directory};
 }
 module.exports={fixture};

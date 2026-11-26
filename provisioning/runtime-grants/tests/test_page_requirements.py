@@ -29,10 +29,14 @@ class PageRequirementsTests(unittest.TestCase):
                                   'update': ['show_on_payslip', 'updated_at']})
 
     def test_performance_detail_includes_raw_dates_and_program_filter(self):
-        self.assertEqual(set(policy.REQUIRED_COMPANY_COLUMNS['hrms_company_performance']['review_cycle']['select']), {
+        projection = policy.PAGE_COMPANY_COLUMNS['hrms_company_performance']['review_cycle']
+        self.assertEqual(set(projection['select']), {
             'id', 'tenant_id', 'performance_program_id', 'current_stage',
             'goal_setting_due_date', 'self_review_due_date', 'manager_review_due_date',
             'calibration_due_date', 'acknowledgement_due_date'})
+        combined = policy.REQUIRED_COMPANY_COLUMNS['hrms_company_performance']['review_cycle']
+        self.assertLessEqual(set(projection['select']), set(combined['select']))
+        self.assertEqual(set(combined), {'select'})
 
     def test_no_unused_entity_or_broad_authority_is_added(self):
         required = policy.REQUIRED_COMPANY_COLUMNS

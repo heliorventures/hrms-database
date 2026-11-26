@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import policy
-from test_policy import contract, payroll_function_contracts
+from test_policy import contract, payroll_function_contracts, company_tables
 
 
 class BusinessRequirementsTests(unittest.TestCase):
@@ -56,8 +56,7 @@ class BusinessRequirementsTests(unittest.TestCase):
     def test_missing_business_columns_are_rejected_and_never_inferred(self):
         for role, tables in getattr(policy, 'BUSINESS_COMPANY_COLUMNS', {}).items():
             candidate = contract()
-            existing = copy.deepcopy(policy.REQUIRED_COMPANY_COLUMNS.get(role, {}))
-            existing.update(copy.deepcopy(tables))
+            existing = company_tables(role)
             candidate['roles'][role] = {'tables': existing, 'sequences': [], 'functions': payroll_function_contracts() if role=='hrms_company_payroll' else []}
             before = copy.deepcopy(candidate)
             policy.validate_policy(candidate)

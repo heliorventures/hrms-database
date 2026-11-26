@@ -28,6 +28,21 @@ def payroll_function_contracts():
             for name in ('hrms_lock_payroll_inputs_v1','hrms_payroll_input_fingerprint_v1','hrms_lock_payroll_period_input_v1')]
 
 
+def company_tables(role):
+    """Complete synthetic fixture union; never infer a submitted policy's rights."""
+    tables = {}
+    for contract in (policy_module.REQUIRED_COMPANY_COLUMNS, policy_module.BUSINESS_COMPANY_COLUMNS):
+        for table, rights in contract.get(role, {}).items():
+            target = tables.setdefault(table, {})
+            for operation, columns in rights.items():
+                if columns is True:
+                    target[operation] = True
+                else:
+                    values = target.setdefault(operation, [])
+                    values.extend(column for column in columns if column not in values)
+    return tables
+
+
 class PolicyTests(unittest.TestCase):
     def test_builtin_employee_profile_requires_actual_reporting_label_projection(self):
         candidate = contract()
@@ -37,10 +52,7 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "EMPLOYEE_REPORTING_ACTOR_READ_MISSING"):
             policy_module.validate_policy(candidate)
         actor["select"].append("display_name")
-        candidate["roles"]["hrms_company_employee"]["tables"].update(
-            copy.deepcopy(policy_module.REQUIRED_COMPANY_COLUMNS['hrms_company_employee']))
-        candidate["roles"]["hrms_company_employee"]["tables"].update(
-            copy.deepcopy(policy_module.BUSINESS_COMPANY_COLUMNS['hrms_company_employee']))
+        candidate["roles"]["hrms_company_employee"]["tables"].update(company_tables('hrms_company_employee'))
         policy_module.validate_policy(candidate)
     def test_pinned_information_schema_includes_explicit_on_table_grants(self):
         baseline = json.loads((Path(__file__).parents[1] / "system-baseline.json").read_text())

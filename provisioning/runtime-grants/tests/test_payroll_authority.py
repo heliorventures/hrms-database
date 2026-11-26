@@ -41,10 +41,9 @@ class PayrollAuthorityTests(unittest.TestCase):
 
     def test_future_payroll_profile_refuses_missing_authority_without_inference(self):
         import policy
-        from test_policy import contract
+        from test_policy import contract, company_tables
         target=contract()
-        tables=copy.deepcopy(policy.REQUIRED_COMPANY_COLUMNS['hrms_company_payroll'])
-        tables.update(copy.deepcopy(policy.BUSINESS_COMPANY_COLUMNS['hrms_company_payroll']))
+        tables=company_tables('hrms_company_payroll')
         target['roles']['hrms_company_payroll']={'tables':tables,'sequences':[],'functions':[]}
         before=copy.deepcopy(target)
         with self.assertRaisesRegex(ValueError,'PAYROLL_INPUT_AUTHORITY_MISSING'):policy.validate_policy(target)
